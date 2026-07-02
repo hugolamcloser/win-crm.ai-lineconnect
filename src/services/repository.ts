@@ -1,4 +1,5 @@
-import { supabase } from "../config/supabase";
+import { env, requireEnvValue } from "../config/env";
+import { getSupabase } from "../config/supabase";
 
 export type LineProfileRecord = {
   id: string;
@@ -47,12 +48,13 @@ function requireSingle<T>(data: T | null, error: { message: string } | null): T 
 }
 
 export async function ensureDefaultTenant(): Promise<string> {
+  const supabase = getSupabase();
   const { data, error } = await supabase
     .from("tenants")
     .upsert(
       {
-        location_id: process.env.GHL_LOCATION_ID,
-        ghl_provider_id: process.env.GHL_CUSTOM_PROVIDER_ID,
+        location_id: requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID),
+        ghl_provider_id: requireEnvValue("GHL_CUSTOM_PROVIDER_ID", env.GHL_CUSTOM_PROVIDER_ID),
         line_channel_id: "default"
       },
       { onConflict: "location_id,ghl_provider_id,line_channel_id" }
@@ -64,6 +66,7 @@ export async function ensureDefaultTenant(): Promise<string> {
 }
 
 export async function upsertLineProfile(input: UpsertLineProfileInput): Promise<LineProfileRecord> {
+  const supabase = getSupabase();
   const { data, error } = await supabase
     .from("line_profiles")
     .upsert(
@@ -85,6 +88,7 @@ export async function upsertLineProfile(input: UpsertLineProfileInput): Promise<
 }
 
 export async function findLineProfileByLineUser(tenantId: string, lineUserId: string): Promise<LineProfileRecord | null> {
+  const supabase = getSupabase();
   const { data, error } = await supabase
     .from("line_profiles")
     .select("*")
@@ -103,6 +107,7 @@ export async function findLineProfileByGhlIds(
   tenantId: string,
   ids: { contactId?: string; conversationId?: string }
 ): Promise<LineProfileRecord | null> {
+  const supabase = getSupabase();
   let query = supabase.from("line_profiles").select("*").eq("tenant_id", tenantId);
 
   if (ids.conversationId) {
@@ -128,6 +133,7 @@ export async function linkGhlMapping(input: {
   ghlContactId?: string;
   ghlConversationId?: string;
 }): Promise<LineProfileRecord> {
+  const supabase = getSupabase();
   const patch: Record<string, string | null> = {
     updated_at: new Date().toISOString()
   };
@@ -152,6 +158,7 @@ export async function linkGhlMapping(input: {
 }
 
 export async function saveMessageEvent(input: SaveMessageEventInput): Promise<void> {
+  const supabase = getSupabase();
   const { error } = await supabase.from("message_events").insert({
     tenant_id: input.tenantId,
     provider: input.provider,
