@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
-import { env } from "../config/env";
+import { env, requireEnvValue } from "../config/env";
 import type { LineProfile } from "../types/line";
 
 const lineApiBaseUrl = "https://api.line.me";
 
 export function verifyLineSignature(rawBody: Buffer, signature: string | undefined): boolean {
-  if (!signature) {
+  if (!env.LINE_CHANNEL_SECRET || !signature) {
     return false;
   }
 
@@ -24,7 +24,7 @@ async function lineRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${lineApiBaseUrl}${path}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${env.LINE_CHANNEL_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${requireEnvValue("LINE_CHANNEL_ACCESS_TOKEN", env.LINE_CHANNEL_ACCESS_TOKEN)}`,
       "Content-Type": "application/json",
       ...(init?.headers ?? {})
     }
