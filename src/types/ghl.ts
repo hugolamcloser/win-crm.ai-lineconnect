@@ -1,3 +1,14 @@
+export type GhlCreateContactInput = {
+  lineUserId: string;
+  displayName?: string;
+  pictureUrl?: string;
+};
+
+export type GhlContactResponse = {
+  id: string;
+  raw: Record<string, unknown>;
+};
+
 export type GhlInboundMessageInput = {
   contactId: string;
   conversationId?: string;
