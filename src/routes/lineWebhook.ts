@@ -13,7 +13,7 @@ const lineWebhookSchema = z.object({
 
 export const lineWebhookRouter = Router();
 
-lineWebhookRouter.post("/webhooks/line", async (req: RawBodyRequest, res, next) => {
+lineWebhookRouter.post(["/webhooks/line", "/webhooks/line/inbound"], async (req: RawBodyRequest, res, next) => {
   try {
     const signature = req.header("x-line-signature");
 
