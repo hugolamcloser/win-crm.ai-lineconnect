@@ -1,10 +1,13 @@
 import { Router } from "express";
 import { z } from "zod";
+import { logger } from "../config/logger";
 import { HttpError } from "../middleware/errors";
 import type { RawBodyRequest } from "../types/http";
 import type { LineWebhookPayload } from "../types/line";
 import { verifyLineSignature } from "../integrations/lineClient";
 import { processLineWebhookEvent } from "../services/lineSyncService";
+import { serializeError } from "../utils/errors";
+import { redactSecrets } from "../utils/redaction";
 
 const lineWebhookSchema = z.object({
   destination: z.string(),
@@ -13,7 +16,24 @@ const lineWebhookSchema = z.object({
 
 export const lineWebhookRouter = Router();
 
-lineWebhookRouter.post(["/webhooks/line", "/webhooks/line/inbound"], async (req: RawBodyRequest, res, next) => {
+async function processLineEventsInBackground(payload: LineWebhookPayload): Promise<void> {
+  for (const event of payload.events) {
+    try {
+      await processLineWebhookEvent(event);
+    } catch (error) {
+      logger.error(
+        {
+          lineUserId: "userId" in event.source ? event.source.userId : undefined,
+          lineMessageId: event.message?.id,
+          error: redactSecrets(serializeError(error))
+        },
+        "Unhandled LINE background processing error"
+      );
+    }
+  }
+}
+
+lineWebhookRouter.post(["/webhooks/line", "/webhooks/line/inbound"], (req: RawBodyRequest, res, next) => {
   try {
     const signature = req.header("x-line-signature");
 
@@ -22,13 +42,8 @@ lineWebhookRouter.post(["/webhooks/line", "/webhooks/line/inbound"], async (req:
     }
 
     const payload = lineWebhookSchema.parse(req.body) as LineWebhookPayload;
-    const results = [];
-
-    for (const event of payload.events) {
-      results.push(await processLineWebhookEvent(event));
-    }
-
-    res.json({ ok: true, results });
+    res.json({ ok: true, accepted: true });
+    void processLineEventsInBackground(payload);
   } catch (error) {
     next(error);
   }
