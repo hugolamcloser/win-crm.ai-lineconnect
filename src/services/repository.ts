@@ -35,6 +35,21 @@ export type SaveMessageEventInput = {
   errorMessage?: string;
 };
 
+export type SaveWebhookEventInput = {
+  source: "line" | "ghl";
+  eventId?: string;
+  payload: unknown;
+};
+
+export type WebhookEventRecord = {
+  id: string;
+  source: "line" | "ghl";
+  event_id: string | null;
+  payload: unknown;
+  processed_at: string | null;
+  created_at: string;
+};
+
 function requireSingle<T>(data: T | null, error: { message: string } | null): T {
   if (error) {
     throw new Error(error.message);
@@ -45,6 +60,46 @@ function requireSingle<T>(data: T | null, error: { message: string } | null): T 
   }
 
   return data;
+}
+
+export async function saveWebhookEvent(input: SaveWebhookEventInput): Promise<WebhookEventRecord> {
+  const supabase = getSupabase();
+  const insertPayload = {
+    source: input.source,
+    event_id: input.eventId ?? null,
+    payload: input.payload
+  };
+
+  const { data, error } = await supabase.from("webhook_events").insert(insertPayload).select("*").single();
+
+  if (!error) {
+    return requireSingle<WebhookEventRecord>(data, null);
+  }
+
+  if (error.code === "23505" && input.eventId) {
+    const { data: existing, error: existingError } = await supabase
+      .from("webhook_events")
+      .select("*")
+      .eq("source", input.source)
+      .eq("event_id", input.eventId)
+      .single();
+
+    return requireSingle<WebhookEventRecord>(existing, existingError);
+  }
+
+  throw new Error(error.message);
+}
+
+export async function markWebhookEventProcessed(id: string): Promise<void> {
+  const supabase = getSupabase();
+  const { error } = await supabase
+    .from("webhook_events")
+    .update({ processed_at: new Date().toISOString() })
+    .eq("id", id);
+
+  if (error) {
+    throw new Error(error.message);
+  }
 }
 
 export async function ensureDefaultTenant(): Promise<string> {
@@ -175,4 +230,35 @@ export async function saveMessageEvent(input: SaveMessageEventInput): Promise<vo
   if (error && error.code !== "23505") {
     throw new Error(error.message);
   }
+}
+
+export async function getRecentDebugEvents(): Promise<{
+  lineProfiles: LineProfileRecord[];
+  messageEvents: unknown[];
+  webhookEvents: WebhookEventRecord[];
+}> {
+  const supabase = getSupabase();
+  const [lineProfiles, messageEvents, webhookEvents] = await Promise.all([
+    supabase.from("line_profiles").select("*").order("updated_at", { ascending: false }).limit(10),
+    supabase.from("message_events").select("*").order("created_at", { ascending: false }).limit(10),
+    supabase.from("webhook_events").select("*").order("created_at", { ascending: false }).limit(10)
+  ]);
+
+  if (lineProfiles.error) {
+    throw new Error(lineProfiles.error.message);
+  }
+
+  if (messageEvents.error) {
+    throw new Error(messageEvents.error.message);
+  }
+
+  if (webhookEvents.error) {
+    throw new Error(webhookEvents.error.message);
+  }
+
+  return {
+    lineProfiles: (lineProfiles.data ?? []) as LineProfileRecord[],
+    messageEvents: messageEvents.data ?? [],
+    webhookEvents: (webhookEvents.data ?? []) as WebhookEventRecord[]
+  };
 }
