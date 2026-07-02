@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { getEnvPresenceReport } from "../config/env";
 import { getRecentDebugEvents } from "../services/repository";
+import { redactSecrets } from "../utils/redaction";
 
 export const debugRouter = Router();
 
@@ -13,7 +14,7 @@ debugRouter.get("/debug/env-check", (_req, res) => {
 
 debugRouter.get("/debug/recent-events", async (_req, res, next) => {
   try {
-    const events = await getRecentDebugEvents();
+    const events = redactSecrets(await getRecentDebugEvents());
     res.json({
       ok: true,
       ...events
