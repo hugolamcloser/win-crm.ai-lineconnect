@@ -1,5 +1,5 @@
 import { logger } from "../config/logger";
-import { sendInboundMessageToGhl } from "../integrations/ghlClient";
+import { createGhlContact, sendInboundMessageToGhl } from "../integrations/ghlClient";
 import { getLineProfile } from "../integrations/lineClient";
 import type { LineMessage, LineSource, LineWebhookEvent } from "../types/line";
 import {
@@ -40,7 +40,7 @@ function messageToText(message: LineMessage): { text: string; attachments: strin
 }
 
 export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<{
-  status: "processed" | "skipped" | "needs_mapping";
+  status: "processed" | "skipped";
   reason?: string;
 }> {
   const tenantId = await ensureDefaultTenant();
@@ -64,7 +64,7 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
   }
 
   const profile = event.source.type === "user" ? await getLineProfile(lineUserId) : null;
-  const record = await upsertLineProfile({
+  let record = await upsertLineProfile({
     tenantId,
     lineUserId,
     lineSourceType: event.source.type,
@@ -76,19 +76,23 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
   const { text, attachments } = messageToText(event.message);
 
   if (!record.ghl_contact_id) {
-    await saveMessageEvent({
-      tenantId,
-      provider: "line",
-      direction: "inbound",
-      externalMessageId: event.message.id,
+    const contact = await createGhlContact({
       lineUserId,
-      payload: event,
-      status: "skipped",
-      errorMessage: "LINE user is not linked to a GHL contact"
+      displayName: profile?.displayName ?? undefined,
+      pictureUrl: profile?.pictureUrl ?? undefined
     });
 
-    logger.warn({ lineUserId }, "LINE user needs a GHL contact mapping before inbound sync");
-    return { status: "needs_mapping", reason: "Missing GHL contact mapping" };
+    record = await linkGhlMapping({
+      tenantId,
+      lineUserId,
+      ghlContactId: contact.id
+    });
+
+    logger.info({ lineUserId, ghlContactId: contact.id }, "Created GHL contact for LINE user");
+  }
+
+  if (!record.ghl_contact_id) {
+    throw new Error("LINE user could not be linked to a GHL contact");
   }
 
   const response = await sendInboundMessageToGhl({
