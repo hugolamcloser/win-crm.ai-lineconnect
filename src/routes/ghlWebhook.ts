@@ -15,17 +15,20 @@ function validateProviderSecret(headerValue: string | undefined): void {
   }
 }
 
-ghlWebhookRouter.post(["/webhooks/ghl", "/webhooks/ghl/outbound"], async (req, res, next) => {
-  try {
-    validateProviderSecret(req.header("x-provider-secret") ?? req.header("x-ghl-secret"));
+ghlWebhookRouter.post(
+  ["/webhooks/ghl", "/webhooks/ghl/outbound", "/webhooks/ghl/line/outbound"],
+  async (req, res, next) => {
+    try {
+      validateProviderSecret(req.header("x-provider-secret") ?? req.header("x-ghl-secret"));
 
-    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
-      throw new HttpError(400, "Invalid outbound webhook payload");
+      if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+        throw new HttpError(400, "Invalid outbound webhook payload");
+      }
+
+      const result = await processGhlOutboundWebhook(req.body as Record<string, unknown>);
+      res.json({ ok: true, result });
+    } catch (error) {
+      next(error);
     }
-
-    const result = await processGhlOutboundWebhook(req.body as Record<string, unknown>);
-    res.json({ ok: true, result });
-  } catch (error) {
-    next(error);
   }
-});
+);
