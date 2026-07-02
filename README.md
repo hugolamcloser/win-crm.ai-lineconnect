@@ -71,7 +71,7 @@ supabase db push
 
 Or paste the SQL migration into the Supabase SQL editor.
 
-The backend uses the service role key, so row level security policies are not required for this server-only integration. Do not expose the service role key to browsers or mobile clients.
+Seeing `Success. No rows returned` after running the migration is normal because the SQL creates schema objects and does not return table rows. RLS can be enabled on the tables; this backend uses `SUPABASE_SERVICE_ROLE_KEY`, which bypasses RLS for server-side operations. Do not expose `SUPABASE_SERVICE_ROLE_KEY` publicly, in browser code, or in mobile apps.
 
 ## Install And Build
 
@@ -194,9 +194,21 @@ Links a LINE user to a HighLevel contact/conversation. Requires `WEBHOOK_SHARED_
 
 This is the shortest path for deploying Hugo's `api.win-crm.ai` middleware from a fresh account setup.
 
+### Production Launch Checklist
+
+1. Deploy this repository to Railway from the `main` branch.
+2. Add all Railway environment variables from `.env.example` using real values in Railway only.
+3. Open the Railway public URL and test `GET /health`.
+4. Test `GET /debug/env-check` and confirm every required variable is `present`.
+5. Connect the custom domain `api.win-crm.ai` in Railway.
+6. Set the LINE Developers webhook URL to `https://api.win-crm.ai/webhooks/line/inbound`.
+7. Set the GHL Conversation Provider Delivery URL to `https://api.win-crm.ai/webhooks/ghl/line/outbound`.
+8. Send a real LINE message and confirm it creates or maps a GHL contact.
+9. Reply from GHL and confirm the message is pushed back to LINE.
+
 ### 1. Deploy To Railway
 
-1. Merge or deploy this GitHub branch in Railway.
+1. Deploy the `main` branch in Railway.
 2. In Railway, choose **New Project**.
 3. Choose **Deploy from GitHub repo**.
 4. Select `hugolamcloser/line-ghl-connect-middleware`.
@@ -228,7 +240,10 @@ The service role key is powerful. Put it only in Railway environment variables, 
 3. Open `supabase/migrations/202607020001_initial_schema.sql` from this repo.
 4. Paste the full SQL into Supabase.
 5. Click **Run**.
-6. Confirm these tables exist: `tenants`, `line_profiles`, `message_events`, and `webhook_events`.
+6. `Success. No rows returned` is the expected result.
+7. If you clicked **Run and enable RLS**, that is okay for this backend because it uses `SUPABASE_SERVICE_ROLE_KEY`.
+8. Confirm these tables exist: `tenants`, `line_profiles`, `message_events`, and `webhook_events`.
+9. Keep `SUPABASE_SERVICE_ROLE_KEY` only in Railway service variables. Never paste it into public docs, frontend code, or client apps.
 
 ### 4. Add Railway Environment Variables
 
