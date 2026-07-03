@@ -5,6 +5,9 @@ export type SerializedError = {
   statusCode?: number;
   responseBody?: string;
   requestPayload?: unknown;
+  path?: string;
+  method?: string;
+  authMode?: string;
 };
 
 export function getErrorMessage(error: unknown): string {
@@ -21,6 +24,9 @@ export function serializeError(error: unknown): SerializedError {
       statusCode?: number;
       responseBody?: string;
       requestPayload?: unknown;
+      path?: string;
+      method?: string;
+      authMode?: string;
     };
 
     return {
@@ -29,7 +35,10 @@ export function serializeError(error: unknown): SerializedError {
       stack: error.stack,
       statusCode: details.statusCode,
       responseBody: details.responseBody,
-      requestPayload: details.requestPayload
+      requestPayload: details.requestPayload,
+      path: details.path,
+      method: details.method,
+      authMode: details.authMode
     };
   }
 
