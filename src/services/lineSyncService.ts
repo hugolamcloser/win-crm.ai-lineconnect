@@ -197,6 +197,18 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
         errorMessage: appendMessage(metadataWarnings, undefined)
       });
 
+      logger.info(
+        {
+          lineUserId,
+          lineMessageId,
+          ghlContactId: record.ghl_contact_id,
+          ghlConversationId,
+          ghlMessageId: typeof response.messageId === "string" ? response.messageId : response.id,
+          messageEventStatus: "success"
+        },
+        "Saved successful LINE inbound message event"
+      );
+
       return { status: "processed" };
     } catch (error) {
       const serializedError = redactSecrets(serializeError(error));
@@ -206,7 +218,13 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
         {
           lineUserId,
           lineMessageId,
-          error: serializedError
+          error: serializedError,
+          ghlStatusCode: serializedError.statusCode,
+          canonicalCode: serializedError.canonicalCode,
+          ghlPath: serializedError.path,
+          ghlMethod: serializedError.method,
+          authMode: serializedError.authMode,
+          messageEventStatus: "failed"
         },
         "Failed to sync LINE inbound message to HighLevel"
       );
@@ -227,6 +245,20 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
         ghlResponseBody: serializedError.responseBody,
         requestPayload: serializedError.requestPayload
       });
+
+      logger.error(
+        {
+          lineUserId,
+          lineMessageId,
+          ghlStatusCode: serializedError.statusCode,
+          canonicalCode: serializedError.canonicalCode,
+          ghlPath: serializedError.path,
+          ghlMethod: serializedError.method,
+          authMode: serializedError.authMode,
+          messageEventStatus: "failed"
+        },
+        "Saved failed LINE inbound message event"
+      );
 
       return { status: "failed", reason: errorMessage };
     }
