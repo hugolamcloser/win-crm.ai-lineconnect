@@ -1,7 +1,9 @@
 import { Router } from "express";
 import { getEnvPresenceReport } from "../config/env";
 import {
+  getGhlInboundSendAuthConfigDebug,
   getGhlProviderConfigDebug,
+  testConfiguredGhlInboundSendAuth,
   testGhlInboundMessageEndpoint,
   testGhlConversationProviderAccess,
   testGhlOAuthToken
@@ -61,6 +63,13 @@ debugRouter.get("/debug/provider-config", async (_req, res, next) => {
   }
 });
 
+debugRouter.get("/debug/inbound-send-auth-config", (_req, res) => {
+  res.json({
+    ok: true,
+    config: redactSecrets(getGhlInboundSendAuthConfigDebug())
+  });
+});
+
 debugRouter.get("/debug/ghl-token-test", async (_req, res, next) => {
   try {
     res.json({
@@ -88,6 +97,17 @@ debugRouter.get("/debug/ghl-inbound-message-endpoint-test", async (_req, res, ne
     res.json({
       ok: true,
       result: redactSecrets(await testGhlInboundMessageEndpoint())
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+debugRouter.get("/debug/ghl-inbound-send-auth-test", async (_req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      result: redactSecrets(await testConfiguredGhlInboundSendAuth())
     });
   } catch (error) {
     next(error);

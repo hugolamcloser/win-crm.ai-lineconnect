@@ -8,6 +8,7 @@ export type SerializedError = {
   path?: string;
   method?: string;
   authMode?: string;
+  canonicalCode?: string;
   publicErrorCode?: string;
 };
 
@@ -28,6 +29,7 @@ export function serializeError(error: unknown): SerializedError {
       path?: string;
       method?: string;
       authMode?: string;
+      canonicalCode?: string;
       publicErrorCode?: string;
     };
 
@@ -41,6 +43,7 @@ export function serializeError(error: unknown): SerializedError {
       path: details.path,
       method: details.method,
       authMode: details.authMode,
+      canonicalCode: details.canonicalCode,
       publicErrorCode: details.publicErrorCode
     };
   }

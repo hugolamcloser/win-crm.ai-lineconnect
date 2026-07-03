@@ -16,6 +16,7 @@ export class GhlApiError extends Error {
   public readonly path: string;
   public readonly method: string;
   public readonly authMode: string;
+  public readonly canonicalCode?: string;
 
   constructor(input: {
     message: string;
@@ -25,6 +26,7 @@ export class GhlApiError extends Error {
     path: string;
     method: string;
     authMode: string;
+    canonicalCode?: string;
   }) {
     super(input.message);
     this.name = "GhlApiError";
@@ -34,11 +36,13 @@ export class GhlApiError extends Error {
     this.path = input.path;
     this.method = input.method;
     this.authMode = input.authMode;
+    this.canonicalCode = input.canonicalCode;
   }
 }
 
 const providerNoAccessCanonicalCode = "CONVERSATIONS_MSG_PROVIDER_NO_ACCESS";
 let providerConfigWarningLogged = false;
+type GhlInboundSendAuthMode = "oauth" | "private_integration";
 
 type InboundEndpointDiagnosis = {
   diagnosis: string;
@@ -112,6 +116,26 @@ function getConfiguredInboundMessageType(): string {
   }
 
   return configuredType;
+}
+
+function getConfiguredInboundSendAuthMode(): GhlInboundSendAuthMode {
+  return env.GHL_INBOUND_SEND_AUTH_MODE;
+}
+
+function getPrivateIntegrationAuthContext(locationId: string): GhlAuthContext {
+  return {
+    mode: "private_integration",
+    accessToken: requireEnvValue("GHL_PRIVATE_INTEGRATION_TOKEN", env.GHL_PRIVATE_INTEGRATION_TOKEN),
+    locationId
+  };
+}
+
+async function getInboundSendAuthContext(locationId: string): Promise<GhlAuthContext> {
+  if (getConfiguredInboundSendAuthMode() === "private_integration") {
+    return getPrivateIntegrationAuthContext(locationId);
+  }
+
+  return getGhlAuthContext(locationId, { allowPrivateFallback: false });
 }
 
 function splitDisplayName(displayName: string): { firstName: string; lastName?: string } {
@@ -374,6 +398,8 @@ async function ghlRequestWithResult<T>(
   const redactedResponseBody = redactSecrets(parseResponseBody(redactedResponseText));
 
   if (!response.ok) {
+    const { canonicalCode } = getGhlErrorDetails(redactedResponseBody);
+
     throw new GhlApiError({
       message: `HighLevel API ${response.status} ${response.statusText}: ${redactedResponseText}`,
       statusCode: response.status,
@@ -381,7 +407,8 @@ async function ghlRequestWithResult<T>(
       requestPayload,
       path,
       method,
-      authMode: auth.mode
+      authMode: auth.mode,
+      canonicalCode
     });
   }
 
@@ -464,57 +491,144 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
   const path = "/conversations/messages/inbound";
   const method = "POST";
   const payload = buildInboundMessagePayload(input);
+  const configuredAuthMode = getConfiguredInboundSendAuthMode();
 
   logger.info(
     {
       method,
       path,
+      configuredAuthMode,
       conversationProviderId: payload.conversationProviderId,
       providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
       locationId: payload.locationId,
+      contactId: payload.contactId,
       inboundMessageType: payload.type,
       requestBody: redactSecrets(payload)
     },
-    "Sending HighLevel inbound conversation provider message"
+    "Preparing HighLevel inbound conversation provider message"
   );
 
   try {
-    const response = await ghlRequestWithResult<GhlInboundMessageResponse>(path, {
-      method,
-      body: JSON.stringify(payload)
-    }, payload);
+    let auth = await getInboundSendAuthContext(payload.locationId);
 
     logger.info(
       {
         method,
         path,
+        authMode: auth.mode,
+        configuredAuthMode,
+        conversationProviderId: payload.conversationProviderId,
+        providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
+        locationId: payload.locationId,
+        contactId: payload.contactId,
+        inboundMessageType: payload.type,
+        requestBody: redactSecrets(payload)
+      },
+      "Sending HighLevel inbound conversation provider message"
+    );
+
+    let response = await performGhlRequest(path, {
+      method,
+      body: JSON.stringify(payload)
+    }, auth);
+
+    if (response.status === 401 && auth.mode === "oauth") {
+      logger.warn(
+        {
+          method,
+          path,
+          authMode: auth.mode,
+          conversationProviderId: payload.conversationProviderId,
+          locationId: payload.locationId,
+          contactId: payload.contactId,
+          inboundMessageType: payload.type,
+          statusCode: response.status
+        },
+        "HighLevel inbound message send returned 401 with OAuth; refreshing token and retrying once"
+      );
+
+      auth = await forceRefreshGhlAuthContext(payload.locationId);
+      response = await performGhlRequest(path, {
+        method,
+        body: JSON.stringify(payload)
+      }, auth);
+    }
+
+    const responseText = redactSensitiveText(await response.text());
+    const responseBody = redactSecrets(parseResponseBody(responseText));
+    const { canonicalCode, message } = getGhlErrorDetails(responseBody);
+
+    if (!response.ok) {
+      throw new GhlApiError({
+        message: `HighLevel API ${response.status} ${response.statusText}: ${responseText}`,
+        statusCode: response.status,
+        responseBody: responseText,
+        requestPayload: payload,
+        path,
+        method,
+        authMode: auth.mode,
+        canonicalCode
+      });
+    }
+
+    const data = responseText ? (JSON.parse(responseText) as GhlInboundMessageResponse) : {};
+
+    logger.info(
+      {
+        method,
+        path,
+        authMode: auth.mode,
         conversationProviderId: payload.conversationProviderId,
         locationId: payload.locationId,
+        contactId: payload.contactId,
         inboundMessageType: payload.type,
-        statusCode: response.statusCode,
-        responseBody: response.responseBody,
-        authMode: response.authMode
+        statusCode: response.status,
+        canonicalCode,
+        message,
+        responseBody,
+        messageEventStatus: "success"
       },
       "HighLevel inbound conversation provider message accepted"
     );
 
-    return response.data;
+    return data;
   } catch (error) {
     if (error instanceof GhlApiError) {
       logger.error(
         {
           method,
           path,
+          authMode: error.authMode,
+          configuredAuthMode,
           conversationProviderId: payload.conversationProviderId,
           providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
           locationId: payload.locationId,
+          contactId: payload.contactId,
           inboundMessageType: payload.type,
           requestBody: redactSecrets(payload),
           statusCode: error.statusCode,
+          canonicalCode: error.canonicalCode,
           responseBody: error.responseBody,
-          authMode: error.authMode
+          messageEventStatus: "failed"
         },
         "HighLevel inbound conversation provider message failed"
+      );
+    } else {
+      logger.error(
+        {
+          method,
+          path,
+          configuredAuthMode,
+          conversationProviderId: payload.conversationProviderId,
+          providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
+          locationId: payload.locationId,
+          contactId: payload.contactId,
+          inboundMessageType: payload.type,
+          requestBody: redactSecrets(payload),
+          error: error instanceof Error ? error.message : String(error),
+          messageEventStatus: "failed"
+        },
+        "HighLevel inbound conversation provider message failed before receiving an API response"
       );
     }
 
@@ -573,6 +687,7 @@ export async function getGhlProviderConfigDebug(): Promise<{
   provider_id_equals_oauth_client_id: boolean;
   GHL_LOCATION_ID: string;
   GHL_INBOUND_MESSAGE_TYPE: string;
+  GHL_INBOUND_SEND_AUTH_MODE: GhlInboundSendAuthMode;
   oauth_token_present: boolean;
   selected_auth_mode: "oauth" | "private_integration" | "none";
 }> {
@@ -599,8 +714,27 @@ export async function getGhlProviderConfigDebug(): Promise<{
     provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
     GHL_LOCATION_ID: locationId,
     GHL_INBOUND_MESSAGE_TYPE: getConfiguredInboundMessageType(),
+    GHL_INBOUND_SEND_AUTH_MODE: getConfiguredInboundSendAuthMode(),
     oauth_token_present: oauthTokenPresent,
     selected_auth_mode: selectedAuthMode
+  };
+}
+
+export function getGhlInboundSendAuthConfigDebug(): {
+  GHL_INBOUND_SEND_AUTH_MODE: GhlInboundSendAuthMode;
+  private_token_present: boolean;
+  provider_id_used: string;
+  provider_id_equals_oauth_client_id: boolean;
+  inbound_message_type: string;
+  location_id: string;
+} {
+  return {
+    GHL_INBOUND_SEND_AUTH_MODE: getConfiguredInboundSendAuthMode(),
+    private_token_present: Boolean(env.GHL_PRIVATE_INTEGRATION_TOKEN.trim()),
+    provider_id_used: getConfiguredConversationProviderId(),
+    provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
+    inbound_message_type: getConfiguredInboundMessageType(),
+    location_id: requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID)
   };
 }
 
@@ -837,6 +971,160 @@ export async function testGhlInboundMessageEndpoint(): Promise<{
       request_payload: redactSecrets(payload),
       diagnosis:
         "The inbound endpoint probe failed before receiving a HighLevel HTTP response. Check server logs for network, token lookup, or configuration errors.",
+      likely_failure_class: "unknown",
+      error: errorMessage
+    };
+  }
+}
+
+export async function testConfiguredGhlInboundSendAuth(): Promise<{
+  endpoint_path: string;
+  method: string;
+  auth_mode: string;
+  configured_auth_mode: GhlInboundSendAuthMode;
+  provider_id_used: string;
+  provider_id_equals_oauth_client_id: boolean;
+  location_id: string;
+  inbound_message_type: string;
+  request_payload: unknown;
+  statusCode?: number;
+  canonicalCode?: string;
+  message?: string;
+  ghl_response_body?: unknown;
+  diagnosis: string;
+  likely_failure_class: InboundEndpointDiagnosis["likelyFailureClass"];
+  error?: string;
+}> {
+  const locationId = requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
+  const conversationProviderId = getConfiguredConversationProviderId();
+  const endpoint = "/conversations/messages/inbound";
+  const method = "POST";
+  const configuredAuthMode = getConfiguredInboundSendAuthMode();
+  const payload = buildProviderProbePayload(conversationProviderId, locationId);
+  let authMode: string = configuredAuthMode;
+
+  logger.info(
+    {
+      method,
+      endpoint,
+      configuredAuthMode,
+      conversationProviderId,
+      providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
+      locationId,
+      contactId: payload.contactId,
+      inboundMessageType: payload.type,
+      requestBody: redactSecrets(payload),
+      privateIntegrationTokenPresent: Boolean(env.GHL_PRIVATE_INTEGRATION_TOKEN.trim())
+    },
+    "Testing configured HighLevel inbound send auth mode"
+  );
+
+  try {
+    let auth = await getInboundSendAuthContext(locationId);
+    authMode = auth.mode;
+    let response = await performGhlRequest(endpoint, { method, body: JSON.stringify(payload) }, auth);
+
+    if (response.status === 401 && auth.mode === "oauth") {
+      logger.warn(
+        {
+          method,
+          endpoint,
+          authMode: auth.mode,
+          conversationProviderId,
+          locationId,
+          contactId: payload.contactId,
+          inboundMessageType: payload.type,
+          statusCode: response.status
+        },
+        "Configured inbound send auth test returned 401 with OAuth; refreshing token and retrying once"
+      );
+
+      auth = await forceRefreshGhlAuthContext(locationId);
+      authMode = auth.mode;
+      response = await performGhlRequest(endpoint, { method, body: JSON.stringify(payload) }, auth);
+    }
+
+    const responseText = redactSensitiveText(await response.text());
+    const responseBody = redactSecrets(parseResponseBody(responseText));
+    const { canonicalCode, message } = getGhlErrorDetails(responseBody);
+    const diagnosis = diagnoseInboundEndpointResponse({
+      ok: response.ok,
+      statusCode: response.status,
+      canonicalCode,
+      message,
+      responseBody
+    });
+
+    logger.info(
+      {
+        method,
+        endpoint,
+        authMode,
+        configuredAuthMode,
+        conversationProviderId,
+        providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
+        locationId,
+        contactId: payload.contactId,
+        inboundMessageType: payload.type,
+        requestBody: redactSecrets(payload),
+        statusCode: response.status,
+        canonicalCode,
+        message,
+        responseBody,
+        diagnosis
+      },
+      "Configured HighLevel inbound send auth test completed"
+    );
+
+    return {
+      endpoint_path: endpoint,
+      method,
+      auth_mode: authMode,
+      configured_auth_mode: configuredAuthMode,
+      provider_id_used: conversationProviderId,
+      provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
+      location_id: locationId,
+      inbound_message_type: payload.type,
+      request_payload: redactSecrets(payload),
+      statusCode: response.status,
+      canonicalCode,
+      message,
+      ghl_response_body: responseBody,
+      diagnosis: diagnosis.diagnosis,
+      likely_failure_class: diagnosis.likelyFailureClass
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    logger.error(
+      {
+        method,
+        endpoint,
+        authMode,
+        configuredAuthMode,
+        conversationProviderId,
+        providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
+        locationId,
+        contactId: payload.contactId,
+        inboundMessageType: payload.type,
+        requestBody: redactSecrets(payload),
+        error: errorMessage
+      },
+      "Configured HighLevel inbound send auth test failed before receiving a response"
+    );
+
+    return {
+      endpoint_path: endpoint,
+      method,
+      auth_mode: authMode,
+      configured_auth_mode: configuredAuthMode,
+      provider_id_used: conversationProviderId,
+      provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
+      location_id: locationId,
+      inbound_message_type: payload.type,
+      request_payload: redactSecrets(payload),
+      diagnosis:
+        "The configured inbound send auth probe failed before receiving a HighLevel HTTP response. Check server logs for token lookup, private-token configuration, network, or provider settings.",
       likely_failure_class: "unknown",
       error: errorMessage
     };
