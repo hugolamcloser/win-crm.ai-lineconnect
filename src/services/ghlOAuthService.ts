@@ -1,6 +1,6 @@
 import { env, requireEnvValue } from "../config/env";
 import { logger } from "../config/logger";
-import { redactSecrets } from "../utils/redaction";
+import { redactSensitiveText } from "../utils/redaction";
 import {
   ensureDefaultTenant,
   getGhlOAuthToken,
@@ -10,6 +10,13 @@ import {
 } from "./repository";
 
 const tokenRefreshSkewMs = 5 * 60 * 1000;
+const tokenExchangeTimeoutMs = 15000;
+
+export type GhlOAuthErrorCode =
+  | "token_exchange_failed"
+  | "token_response_parse_failed"
+  | "oauth_storage_failed"
+  | "oauth_missing_location_id";
 
 type GhlOAuthTokenPayload = {
   access_token?: string;
@@ -33,21 +40,51 @@ export type GhlAuthContext = {
 };
 
 export class GhlOAuthError extends Error {
+  public readonly publicErrorCode: GhlOAuthErrorCode;
   public readonly statusCode?: number;
   public readonly responseBody?: string;
   public readonly requestPayload?: unknown;
 
-  constructor(message: string, statusCode?: number, responseBody?: string, requestPayload?: unknown) {
-    super(message);
+  constructor(input: {
+    publicErrorCode: GhlOAuthErrorCode;
+    message: string;
+    statusCode?: number;
+    responseBody?: string;
+    requestPayload?: unknown;
+  }) {
+    super(input.message);
     this.name = "GhlOAuthError";
-    this.statusCode = statusCode;
-    this.responseBody = responseBody;
-    this.requestPayload = requestPayload;
+    this.publicErrorCode = input.publicErrorCode;
+    this.statusCode = input.statusCode;
+    this.responseBody = input.responseBody;
+    this.requestPayload = input.requestPayload;
   }
 }
 
 function getString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function getRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function getNestedString(payload: Record<string, unknown>, ...path: string[]): string | undefined {
+  let current: unknown = payload;
+
+  for (const key of path) {
+    const record = getRecord(current);
+
+    if (!record || !(key in record)) {
+      return undefined;
+    }
+
+    current = record[key];
+  }
+
+  return getString(current);
 }
 
 function getNumber(value: unknown): number | undefined {
@@ -99,40 +136,154 @@ function buildTokenRequestBody(entries: Record<string, string>): URLSearchParams
   return body;
 }
 
+function getSafeTokenRequestDiagnostics(entries: Record<string, string>) {
+  return {
+    bodyKeys: Object.keys(entries).filter((key) => Boolean(entries[key])),
+    grantType: entries.grant_type,
+    codePresent: Boolean(entries.code),
+    clientIdPresent: Boolean(entries.client_id),
+    clientSecretPresent: Boolean(entries.client_secret),
+    redirectUri: entries.redirect_uri
+  };
+}
+
+function redactTokenExchangeText(value: string, entries: Record<string, string>): string {
+  let redacted = redactSensitiveText(value);
+
+  for (const sensitiveValue of [entries.code, entries.client_secret]) {
+    if (sensitiveValue) {
+      redacted = redacted.split(sensitiveValue).join("[redacted]");
+    }
+  }
+
+  return redacted;
+}
+
+function parseTokenResponse(responseText: string): GhlOAuthTokenPayload {
+  try {
+    return responseText ? (JSON.parse(responseText) as GhlOAuthTokenPayload) : {};
+  } catch (error) {
+    logger.error(
+      {
+        error: error instanceof Error ? error.message : String(error),
+        redactedResponseText: redactSensitiveText(responseText)
+      },
+      "Failed to parse HighLevel OAuth token response"
+    );
+    throw new GhlOAuthError({
+      publicErrorCode: "token_response_parse_failed",
+      message: "HighLevel OAuth token response was not valid JSON",
+      responseBody: redactSensitiveText(responseText)
+    });
+  }
+}
+
+function getTokenPayloadKeys(payload: GhlOAuthTokenPayload): string[] {
+  return Object.keys(payload);
+}
+
+function resolveTokenLocationId(payload: GhlOAuthTokenPayload): string | undefined {
+  return (
+    getString(payload.locationId) ??
+    getString(payload.location_id) ??
+    getNestedString(payload, "location", "id") ??
+    getNestedString(payload, "location", "locationId") ??
+    getNestedString(payload, "location", "_id") ??
+    getNestedString(payload, "activeLocation", "id") ??
+    getNestedString(payload, "activeLocation", "locationId") ??
+    getString(env.GHL_LOCATION_ID)
+  );
+}
+
+function resolveTokenCompanyId(payload: GhlOAuthTokenPayload): string | undefined {
+  return (
+    getString(payload.companyId) ??
+    getString(payload.company_id) ??
+    getNestedString(payload, "company", "id") ??
+    getNestedString(payload, "company", "companyId")
+  );
+}
+
 async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOAuthTokenPayload> {
   const body = buildTokenRequestBody(entries);
-  const requestPayload = Object.fromEntries(body.entries());
+  const requestDiagnostics = getSafeTokenRequestDiagnostics(Object.fromEntries(body.entries()));
 
   logger.info(
     {
       tokenUrl: env.GHL_OAUTH_TOKEN_URL,
-      grantType: entries.grant_type,
-      payload: redactSecrets(requestPayload)
+      redirectUri: entries.redirect_uri,
+      clientIdPresent: Boolean(entries.client_id),
+      clientSecretPresent: Boolean(entries.client_secret),
+      tokenRequestBodyKeys: requestDiagnostics.bodyKeys
     },
     "Requesting HighLevel OAuth token"
   );
 
-  const response = await fetch(env.GHL_OAUTH_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json"
-    },
-    body
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), tokenExchangeTimeoutMs);
+  let response: Response;
 
-  const responseBody = await response.text();
+  try {
+    response = await fetch(env.GHL_OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json"
+      },
+      body,
+      signal: controller.signal
+    });
+  } catch (error) {
+    const timedOut = error instanceof Error && error.name === "AbortError";
+    const message = timedOut
+      ? `HighLevel OAuth token exchange timed out after ${tokenExchangeTimeoutMs}ms`
+      : `HighLevel OAuth token exchange request failed: ${error instanceof Error ? error.message : String(error)}`;
 
-  if (!response.ok) {
-    throw new GhlOAuthError(
-      `HighLevel OAuth ${response.status} ${response.statusText}: ${responseBody}`,
-      response.status,
-      responseBody,
-      requestPayload
+    logger.error(
+      {
+        error: error instanceof Error ? error.message : String(error),
+        timedOut,
+        tokenUrl: env.GHL_OAUTH_TOKEN_URL,
+        tokenRequestBodyKeys: requestDiagnostics.bodyKeys
+      },
+      "HighLevel OAuth token exchange request failed"
     );
+
+    throw new GhlOAuthError({
+      publicErrorCode: "token_exchange_failed",
+      message,
+      requestPayload: requestDiagnostics
+    });
+  } finally {
+    clearTimeout(timeout);
   }
 
-  return responseBody ? (JSON.parse(responseBody) as GhlOAuthTokenPayload) : {};
+  const responseText = await response.text();
+  const redactedResponseText = redactTokenExchangeText(responseText, entries);
+
+  logger.info(
+    {
+      status: response.status,
+      ok: response.ok,
+      redactedResponseText
+    },
+    "HighLevel OAuth token exchange response received"
+  );
+
+  if (!response.ok) {
+    throw new GhlOAuthError({
+      publicErrorCode: "token_exchange_failed",
+      message: `HighLevel OAuth token exchange failed with status ${response.status}`,
+      statusCode: response.status,
+      responseBody: redactedResponseText,
+      requestPayload: requestDiagnostics
+    });
+  }
+
+  const payload = parseTokenResponse(responseText);
+  logger.info({ tokenResponseKeys: getTokenPayloadKeys(payload) }, "Parsed HighLevel OAuth token response");
+
+  return payload;
 }
 
 async function saveTokenPayload(
@@ -142,37 +293,96 @@ async function saveTokenPayload(
 ): Promise<GhlOAuthTokenRecord> {
   const accessToken = getString(payload.access_token);
   const refreshToken = getString(payload.refresh_token) ?? fallbackRefreshToken;
-  const locationId = getString(payload.locationId) ?? getString(payload.location_id) ?? fallbackLocationId;
+  const locationId = resolveTokenLocationId(payload) ?? fallbackLocationId;
+  const companyId = resolveTokenCompanyId(payload);
+
+  logger.info(
+    {
+      tokenResponseKeys: getTokenPayloadKeys(payload),
+      locationIdPresent: Boolean(locationId),
+      resolvedLocationId: locationId,
+      companyIdPresent: Boolean(companyId),
+      resolvedCompanyId: companyId
+    },
+    "Resolved HighLevel OAuth token install context"
+  );
 
   if (!accessToken) {
-    throw new GhlOAuthError("HighLevel OAuth response did not include access_token");
+    throw new GhlOAuthError({
+      publicErrorCode: "token_response_parse_failed",
+      message: "HighLevel OAuth response did not include access_token"
+    });
   }
 
   if (!refreshToken) {
-    throw new GhlOAuthError("HighLevel OAuth response did not include refresh_token");
+    throw new GhlOAuthError({
+      publicErrorCode: "token_response_parse_failed",
+      message: "HighLevel OAuth response did not include refresh_token"
+    });
   }
 
   if (!locationId) {
-    throw new GhlOAuthError("HighLevel OAuth response did not include locationId");
+    throw new GhlOAuthError({
+      publicErrorCode: "oauth_missing_location_id",
+      message: "HighLevel OAuth response did not include a location ID and GHL_LOCATION_ID is missing"
+    });
   }
 
-  const tenantId = locationId === env.GHL_LOCATION_ID ? await ensureDefaultTenant() : undefined;
+  let tenantId: string | undefined;
 
-  return upsertGhlOAuthToken({
-    tenantId,
-    locationId,
-    companyId: getString(payload.companyId) ?? getString(payload.company_id),
-    accessToken,
-    refreshToken,
-    expiresAt: getExpiresAt(payload),
-    scopes: parseScopes(payload),
-    tokenType: getString(payload.token_type)
-  });
+  try {
+    tenantId = locationId === env.GHL_LOCATION_ID ? await ensureDefaultTenant() : undefined;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error({ locationId, companyId, error: message }, "Failed to resolve default tenant before OAuth token upsert");
+    throw new GhlOAuthError({
+      publicErrorCode: "oauth_storage_failed",
+      message: `Supabase tenant lookup failed before OAuth token storage: ${message}`
+    });
+  }
+
+  logger.info({ locationId, companyId, tenantLinked: Boolean(tenantId) }, "Starting Supabase OAuth token upsert");
+
+  try {
+    const token = await upsertGhlOAuthToken({
+      tenantId,
+      locationId,
+      companyId,
+      accessToken,
+      refreshToken,
+      expiresAt: getExpiresAt(payload),
+      scopes: parseScopes(payload),
+      tokenType: getString(payload.token_type)
+    });
+
+    logger.info({ locationId: token.location_id, companyId: token.company_id, tokenRowId: token.id }, "Supabase OAuth token upsert succeeded");
+    return token;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error({ locationId, companyId, error: message }, "Supabase OAuth token upsert failed");
+    throw new GhlOAuthError({
+      publicErrorCode: "oauth_storage_failed",
+      message: `Supabase OAuth token storage failed: ${message}`
+    });
+  }
 }
 
 export async function exchangeGhlAuthorizationCode(
   code: string
 ): Promise<Awaited<ReturnType<typeof getGhlOAuthTokenStatus>>> {
+  logger.info(
+    {
+      codePresent: Boolean(code),
+      codeLength: code.length,
+      tokenUrl: env.GHL_OAUTH_TOKEN_URL,
+      redirectUri: env.GHL_OAUTH_REDIRECT_URI,
+      clientIdPresent: Boolean(env.GHL_OAUTH_CLIENT_ID),
+      clientSecretPresent: Boolean(env.GHL_OAUTH_CLIENT_SECRET),
+      tokenRequestBodyKeys: ["grant_type", "code", "client_id", "client_secret", "redirect_uri"]
+    },
+    "Preparing HighLevel OAuth authorization code exchange"
+  );
+
   const payload = await requestOAuthToken({
     grant_type: "authorization_code",
     code,
@@ -189,7 +399,10 @@ export async function refreshGhlOAuthToken(locationId = env.GHL_LOCATION_ID): Pr
   const token = await getGhlOAuthToken(locationId);
 
   if (!token) {
-    throw new GhlOAuthError(`No HighLevel OAuth token is stored for location ${locationId}`);
+    throw new GhlOAuthError({
+      publicErrorCode: "token_exchange_failed",
+      message: `No HighLevel OAuth token is stored for location ${locationId}`
+    });
   }
 
   const payload = await requestOAuthToken({
@@ -232,9 +445,10 @@ export async function getGhlAuthContext(
     };
   }
 
-  throw new GhlOAuthError(
-    `No HighLevel OAuth token is stored for location ${locationId}. Install the marketplace app and complete /oauth/callback first.`
-  );
+  throw new GhlOAuthError({
+    publicErrorCode: "token_exchange_failed",
+    message: `No HighLevel OAuth token is stored for location ${locationId}. Install the marketplace app and complete /oauth/callback first.`
+  });
 }
 
 export async function forceRefreshGhlAuthContext(locationId = env.GHL_LOCATION_ID): Promise<GhlAuthContext> {
@@ -249,4 +463,15 @@ export async function forceRefreshGhlAuthContext(locationId = env.GHL_LOCATION_I
 
 export async function getConfiguredGhlOAuthStatus() {
   return getGhlOAuthTokenStatus(requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID));
+}
+
+export function getOAuthCallbackConfig() {
+  return {
+    token_url: env.GHL_OAUTH_TOKEN_URL,
+    redirect_uri: env.GHL_OAUTH_REDIRECT_URI,
+    client_id_present: Boolean(env.GHL_OAUTH_CLIENT_ID),
+    client_secret_present: Boolean(env.GHL_OAUTH_CLIENT_SECRET),
+    location_id_present: Boolean(env.GHL_LOCATION_ID),
+    supabase_present: Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY)
+  };
 }
