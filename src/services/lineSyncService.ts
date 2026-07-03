@@ -1,5 +1,6 @@
 import { logger } from "../config/logger";
-import { createGhlContact, ensureGhlContactLineMetadata, sendInboundMessageToGhl } from "../integrations/ghlClient";
+import { createGhlContact, ensureGhlContactLineMetadata } from "../integrations/ghlClient";
+import { sendInboundMessageToGhl } from "../integrations/ghlInboundMessageClient";
 import { getLineProfile } from "../integrations/lineClient";
 import type { LineMessage, LineSource, LineWebhookEvent } from "../types/line";
 import { getErrorMessage, serializeError } from "../utils/errors";
