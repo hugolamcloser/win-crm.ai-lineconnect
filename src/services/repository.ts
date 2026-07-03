@@ -31,8 +31,11 @@ export type SaveMessageEventInput = {
   ghlMessageId?: string;
   ghlConversationId?: string;
   payload: unknown;
-  status: "received" | "sent" | "skipped" | "failed";
+  status: "received" | "sent" | "success" | "skipped" | "failed";
   errorMessage?: string;
+  ghlStatusCode?: number;
+  ghlResponseBody?: string;
+  requestPayload?: unknown;
 };
 
 export type SaveWebhookEventInput = {
@@ -50,6 +53,31 @@ export type WebhookEventRecord = {
   created_at: string;
 };
 
+export type GhlOAuthTokenRecord = {
+  id: string;
+  tenant_id: string | null;
+  location_id: string;
+  company_id: string | null;
+  access_token: string;
+  refresh_token: string;
+  expires_at: string;
+  scopes: string[];
+  token_type: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type UpsertGhlOAuthTokenInput = {
+  tenantId?: string;
+  locationId: string;
+  companyId?: string;
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: string;
+  scopes?: string[];
+  tokenType?: string;
+};
+
 function requireSingle<T>(data: T | null, error: { message: string } | null): T {
   if (error) {
     throw new Error(error.message);
@@ -60,6 +88,79 @@ function requireSingle<T>(data: T | null, error: { message: string } | null): T 
   }
 
   return data;
+}
+
+export async function upsertGhlOAuthToken(input: UpsertGhlOAuthTokenInput): Promise<GhlOAuthTokenRecord> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("ghl_oauth_tokens")
+    .upsert(
+      {
+        tenant_id: input.tenantId ?? null,
+        location_id: input.locationId,
+        company_id: input.companyId ?? null,
+        access_token: input.accessToken,
+        refresh_token: input.refreshToken,
+        expires_at: input.expiresAt,
+        scopes: input.scopes ?? [],
+        token_type: input.tokenType ?? null,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: "location_id" }
+    )
+    .select("*")
+    .single();
+
+  return requireSingle<GhlOAuthTokenRecord>(data, error);
+}
+
+export async function getGhlOAuthToken(locationId: string): Promise<GhlOAuthTokenRecord | null> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("ghl_oauth_tokens")
+    .select("*")
+    .eq("location_id", locationId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as GhlOAuthTokenRecord | null;
+}
+
+export async function getGhlOAuthTokenStatus(locationId: string): Promise<{
+  location_id: string;
+  token_present: boolean;
+  refresh_token_present: boolean;
+  expires_at: string | null;
+  expired: boolean;
+  scopes: string[];
+  company_id: string | null;
+}> {
+  const token = await getGhlOAuthToken(locationId);
+
+  if (!token) {
+    return {
+      location_id: locationId,
+      token_present: false,
+      refresh_token_present: false,
+      expires_at: null,
+      expired: true,
+      scopes: [],
+      company_id: null
+    };
+  }
+
+  return {
+    location_id: token.location_id,
+    token_present: Boolean(token.access_token),
+    refresh_token_present: Boolean(token.refresh_token),
+    expires_at: token.expires_at,
+    expired: new Date(token.expires_at).getTime() <= Date.now(),
+    scopes: token.scopes ?? [],
+    company_id: token.company_id
+  };
 }
 
 export async function saveWebhookEvent(input: SaveWebhookEventInput): Promise<WebhookEventRecord> {
@@ -224,7 +325,10 @@ export async function saveMessageEvent(input: SaveMessageEventInput): Promise<vo
     ghl_conversation_id: input.ghlConversationId ?? null,
     payload: input.payload,
     status: input.status,
-    error_message: input.errorMessage ?? null
+    error_message: input.errorMessage ?? null,
+    ghl_status_code: input.ghlStatusCode ?? null,
+    ghl_response_body: input.ghlResponseBody ?? null,
+    request_payload: input.requestPayload ?? null
   });
 
   if (error && error.code !== "23505") {
