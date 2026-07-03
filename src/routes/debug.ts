@@ -3,12 +3,12 @@ import { getEnvPresenceReport } from "../config/env";
 import {
   getGhlInboundSendAuthConfigDebug,
   getGhlProviderConfigDebug,
-  testConfiguredGhlInboundSendAuth,
   testGhlInboundMessageEndpoint,
   testGhlConversationProviderAccess,
   testGhlOAuthToken
 } from "../integrations/ghlClient";
 import { testGhlInboundMessageAuthMatrix } from "../integrations/ghlInboundAuthMatrix";
+import { testConfiguredGhlInboundSendAuth } from "../integrations/ghlInboundMessageClient";
 import { getConfiguredGhlOAuthStatus, getOAuthCallbackConfig } from "../services/ghlOAuthService";
 import { getRecentDebugEvents } from "../services/repository";
 import { redactSecrets } from "../utils/redaction";
