@@ -2,6 +2,7 @@ import { Router } from "express";
 import { getEnvPresenceReport } from "../config/env";
 import {
   getGhlProviderConfigDebug,
+  testGhlInboundMessageEndpoint,
   testGhlConversationProviderAccess,
   testGhlOAuthToken
 } from "../integrations/ghlClient";
@@ -75,6 +76,17 @@ debugRouter.get("/debug/ghl-provider-test", async (_req, res, next) => {
     res.json({
       ok: true,
       result: redactSecrets(await testGhlConversationProviderAccess())
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+debugRouter.get("/debug/ghl-inbound-message-endpoint-test", async (_req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      result: redactSecrets(await testGhlInboundMessageEndpoint())
     });
   } catch (error) {
     next(error);
