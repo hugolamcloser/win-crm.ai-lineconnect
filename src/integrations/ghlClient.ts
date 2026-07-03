@@ -40,6 +40,11 @@ export class GhlApiError extends Error {
 const providerNoAccessCanonicalCode = "CONVERSATIONS_MSG_PROVIDER_NO_ACCESS";
 let providerConfigWarningLogged = false;
 
+type InboundEndpointDiagnosis = {
+  diagnosis: string;
+  likelyFailureClass: "A" | "B" | "C" | "D" | "E" | "F" | "payload_validation_reached" | "none" | "unknown";
+};
+
 function getString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
@@ -84,6 +89,29 @@ function getConfiguredConversationProviderId(): string {
   }
 
   return conversationProviderId;
+}
+
+function getConfiguredInboundMessageType(): string {
+  const configuredType = env.GHL_INBOUND_MESSAGE_TYPE.trim() || "SMS";
+  const normalizedType = configuredType.toLowerCase();
+
+  if (normalizedType === "sms") {
+    return "SMS";
+  }
+
+  if (normalizedType === "email") {
+    return "Email";
+  }
+
+  if (normalizedType === "custom") {
+    return "Custom";
+  }
+
+  if (normalizedType === "call") {
+    return "Call";
+  }
+
+  return configuredType;
 }
 
 function splitDisplayName(displayName: string): { firstName: string; lastName?: string } {
@@ -203,11 +231,9 @@ function buildInboundMessagePayload(input: GhlInboundMessageInput) {
     contactId: input.contactId,
     conversationId: input.conversationId,
     conversationProviderId,
-    providerId: conversationProviderId,
     externalConversationId: input.externalConversationId,
     externalMessageId: input.externalMessageId,
-    direction: "inbound",
-    type: "CUSTOM",
+    type: getConfiguredInboundMessageType(),
     message: input.message,
     attachments: input.attachments ?? []
   };
@@ -218,13 +244,84 @@ function buildProviderProbePayload(conversationProviderId: string, locationId: s
     locationId,
     contactId: "debug-provider-access-test-contact",
     conversationProviderId,
-    providerId: conversationProviderId,
     externalConversationId: `debug-provider-test:${locationId}:${conversationProviderId}`,
     externalMessageId: `debug-provider-test:${Date.now()}`,
-    direction: "inbound",
-    type: "CUSTOM",
+    type: getConfiguredInboundMessageType(),
     message: "Provider access probe. This should fail before creating a real message.",
     attachments: []
+  };
+}
+
+function diagnoseInboundEndpointResponse(input: {
+  ok: boolean;
+  statusCode: number;
+  canonicalCode?: string;
+  message?: string;
+  responseBody?: unknown;
+}): InboundEndpointDiagnosis {
+  const message = input.message?.toLowerCase() ?? "";
+  const bodyText =
+    typeof input.responseBody === "string" ? input.responseBody.toLowerCase() : JSON.stringify(input.responseBody ?? {}).toLowerCase();
+
+  if (input.ok) {
+    return {
+      likelyFailureClass: "none",
+      diagnosis: "HighLevel accepted the inbound message request with the configured endpoint, OAuth token, provider id, and payload."
+    };
+  }
+
+  if (input.statusCode === 400) {
+    return {
+      likelyFailureClass: "payload_validation_reached",
+      diagnosis:
+        "HighLevel reached request validation. This usually means the endpoint, auth class, and provider binding were accepted; inspect the response body for the payload/contact validation problem."
+    };
+  }
+
+  if (input.statusCode === 401 && message.includes("authclass")) {
+    return {
+      likelyFailureClass: "B",
+      diagnosis:
+        "Likely B: wrong auth class, or the Marketplace Conversation Provider module is not permitted to call this inbound-message API for the installed app/location."
+    };
+  }
+
+  if (input.canonicalCode === providerNoAccessCanonicalCode) {
+    return {
+      likelyFailureClass: "C",
+      diagnosis:
+        "Likely C or D: the configured conversationProviderId is not accessible for this installed location, or the installed location provider binding is missing/stale."
+    };
+  }
+
+  if (input.statusCode === 401 || input.statusCode === 403) {
+    return {
+      likelyFailureClass: "E",
+      diagnosis:
+        "Likely E: missing Marketplace module permission, missing scope, stale app install, or provider setup not connected to this Marketplace app version."
+    };
+  }
+
+  if (input.statusCode === 404) {
+    return {
+      likelyFailureClass: "A",
+      diagnosis:
+        "Likely A or F: the endpoint path is wrong for this account/API version, or this API path is not supported for the current app/provider configuration."
+    };
+  }
+
+  if (bodyText.includes("conversationprovider") && bodyText.includes("access")) {
+    return {
+      likelyFailureClass: "D",
+      diagnosis:
+        "Likely D: HighLevel recognized the provider field but rejected access to the installed provider binding for this location."
+    };
+  }
+
+  return {
+    likelyFailureClass: "unknown",
+    diagnosis:
+      "HighLevel returned a response that does not cleanly map to endpoint, auth class, provider id, provider binding, module configuration, or unsupported-path failures. Inspect statusCode and response body."
   };
 }
 
@@ -375,6 +472,7 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
       conversationProviderId: payload.conversationProviderId,
       providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
       locationId: payload.locationId,
+      inboundMessageType: payload.type,
       requestBody: redactSecrets(payload)
     },
     "Sending HighLevel inbound conversation provider message"
@@ -392,6 +490,7 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
         path,
         conversationProviderId: payload.conversationProviderId,
         locationId: payload.locationId,
+        inboundMessageType: payload.type,
         statusCode: response.statusCode,
         responseBody: response.responseBody,
         authMode: response.authMode
@@ -409,6 +508,7 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
           conversationProviderId: payload.conversationProviderId,
           providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
           locationId: payload.locationId,
+          inboundMessageType: payload.type,
           requestBody: redactSecrets(payload),
           statusCode: error.statusCode,
           responseBody: error.responseBody,
@@ -472,6 +572,7 @@ export async function getGhlProviderConfigDebug(): Promise<{
   GHL_CUSTOM_PROVIDER_ID: string;
   provider_id_equals_oauth_client_id: boolean;
   GHL_LOCATION_ID: string;
+  GHL_INBOUND_MESSAGE_TYPE: string;
   oauth_token_present: boolean;
   selected_auth_mode: "oauth" | "private_integration" | "none";
 }> {
@@ -497,6 +598,7 @@ export async function getGhlProviderConfigDebug(): Promise<{
     GHL_CUSTOM_PROVIDER_ID: providerId,
     provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
     GHL_LOCATION_ID: locationId,
+    GHL_INBOUND_MESSAGE_TYPE: getConfiguredInboundMessageType(),
     oauth_token_present: oauthTokenPresent,
     selected_auth_mode: selectedAuthMode
   };
@@ -514,6 +616,9 @@ export async function testGhlConversationProviderAccess(): Promise<{
   canonicalCode?: string;
   message?: string;
   responseBody?: unknown;
+  inbound_message_type?: string;
+  diagnosis?: string;
+  likely_failure_class?: InboundEndpointDiagnosis["likelyFailureClass"];
   error?: string;
 }> {
   const locationId = requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
@@ -534,10 +639,21 @@ export async function testGhlConversationProviderAccess(): Promise<{
     const responseText = redactSensitiveText(await response.text());
     const responseBody = redactSecrets(parseResponseBody(responseText));
     const { canonicalCode, message } = getGhlErrorDetails(responseBody);
+    const diagnosis = diagnoseInboundEndpointResponse({
+      ok: response.ok,
+      statusCode: response.status,
+      canonicalCode,
+      message,
+      responseBody
+    });
     const lowerMessage = message?.toLowerCase();
     const providerAccessDenied =
       canonicalCode === providerNoAccessCanonicalCode ||
-      Boolean(lowerMessage?.includes("conversationprovider") && lowerMessage.includes("access"));
+      Boolean(lowerMessage?.includes("conversationprovider") && lowerMessage.includes("access")) ||
+      diagnosis.likelyFailureClass === "B" ||
+      diagnosis.likelyFailureClass === "C" ||
+      diagnosis.likelyFailureClass === "D" ||
+      diagnosis.likelyFailureClass === "E";
 
     logger.info(
       {
@@ -546,10 +662,13 @@ export async function testGhlConversationProviderAccess(): Promise<{
         conversationProviderId,
         providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
         locationId,
+        inboundMessageType: payload.type,
+        requestBody: redactSecrets(payload),
         statusCode: response.status,
         responseBody,
         canonicalCode,
-        message
+        message,
+        diagnosis
       },
       "HighLevel conversation provider access test completed"
     );
@@ -566,7 +685,10 @@ export async function testGhlConversationProviderAccess(): Promise<{
       statusCode: response.status,
       canonicalCode,
       message,
-      responseBody
+      responseBody,
+      inbound_message_type: payload.type,
+      diagnosis: diagnosis.diagnosis,
+      likely_failure_class: diagnosis.likelyFailureClass
     };
   } catch (error) {
     return {
@@ -577,7 +699,146 @@ export async function testGhlConversationProviderAccess(): Promise<{
       GHL_CUSTOM_PROVIDER_ID: conversationProviderId,
       provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
       GHL_LOCATION_ID: locationId,
+      inbound_message_type: getConfiguredInboundMessageType(),
+      diagnosis:
+        "The provider access probe could not complete locally before receiving a HighLevel HTTP response. Inspect the error field and server logs.",
+      likely_failure_class: "unknown",
       error: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+export async function testGhlInboundMessageEndpoint(): Promise<{
+  endpoint_path: string;
+  method: string;
+  auth_mode: string;
+  provider_id_used: string;
+  provider_id_equals_oauth_client_id: boolean;
+  location_id: string;
+  inbound_message_type: string;
+  request_payload: unknown;
+  statusCode?: number;
+  canonicalCode?: string;
+  message?: string;
+  ghl_response_body?: unknown;
+  diagnosis: string;
+  likely_failure_class: InboundEndpointDiagnosis["likelyFailureClass"];
+  error?: string;
+}> {
+  const locationId = requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
+  const conversationProviderId = getConfiguredConversationProviderId();
+  const endpoint = "/conversations/messages/inbound";
+  const method = "POST";
+  const payload = buildProviderProbePayload(conversationProviderId, locationId);
+
+  logger.info(
+    {
+      method,
+      endpoint,
+      conversationProviderId,
+      providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
+      locationId,
+      inboundMessageType: payload.type,
+      requestBody: redactSecrets(payload)
+    },
+    "Testing HighLevel inbound message endpoint"
+  );
+
+  try {
+    let auth = await getGhlAuthContext(locationId, { allowPrivateFallback: false });
+    let response = await performGhlRequest(endpoint, { method, body: JSON.stringify(payload) }, auth);
+
+    if (response.status === 401 && auth.mode === "oauth") {
+      logger.warn(
+        {
+          method,
+          endpoint,
+          conversationProviderId,
+          locationId,
+          statusCode: response.status
+        },
+        "HighLevel inbound endpoint test returned 401; refreshing OAuth token and retrying once"
+      );
+      auth = await forceRefreshGhlAuthContext(locationId);
+      response = await performGhlRequest(endpoint, { method, body: JSON.stringify(payload) }, auth);
+    }
+
+    const responseText = redactSensitiveText(await response.text());
+    const responseBody = redactSecrets(parseResponseBody(responseText));
+    const { canonicalCode, message } = getGhlErrorDetails(responseBody);
+    const diagnosis = diagnoseInboundEndpointResponse({
+      ok: response.ok,
+      statusCode: response.status,
+      canonicalCode,
+      message,
+      responseBody
+    });
+
+    logger.info(
+      {
+        method,
+        endpoint,
+        authMode: auth.mode,
+        conversationProviderId,
+        providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
+        locationId,
+        inboundMessageType: payload.type,
+        requestBody: redactSecrets(payload),
+        statusCode: response.status,
+        canonicalCode,
+        message,
+        responseBody,
+        diagnosis
+      },
+      "HighLevel inbound message endpoint test completed"
+    );
+
+    return {
+      endpoint_path: endpoint,
+      method,
+      auth_mode: auth.mode,
+      provider_id_used: conversationProviderId,
+      provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
+      location_id: locationId,
+      inbound_message_type: payload.type,
+      request_payload: redactSecrets(payload),
+      statusCode: response.status,
+      canonicalCode,
+      message,
+      ghl_response_body: responseBody,
+      diagnosis: diagnosis.diagnosis,
+      likely_failure_class: diagnosis.likelyFailureClass
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    logger.error(
+      {
+        method,
+        endpoint,
+        conversationProviderId,
+        providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
+        locationId,
+        inboundMessageType: payload.type,
+        requestBody: redactSecrets(payload),
+        error: errorMessage
+      },
+      "HighLevel inbound message endpoint test failed before receiving a response"
+    );
+
+    return {
+      endpoint_path: endpoint,
+      method,
+      auth_mode: "oauth",
+      provider_id_used: conversationProviderId,
+      provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
+      location_id: locationId,
+      inbound_message_type: payload.type,
+      request_payload: redactSecrets(payload),
+      diagnosis:
+        "The inbound endpoint probe failed before receiving a HighLevel HTTP response. Check server logs for network, token lookup, or configuration errors.",
+      likely_failure_class: "unknown",
+      error: errorMessage
     };
   }
 }
