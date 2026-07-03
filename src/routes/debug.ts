@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { getEnvPresenceReport } from "../config/env";
 import { testGhlOAuthToken } from "../integrations/ghlClient";
-import { getConfiguredGhlOAuthStatus } from "../services/ghlOAuthService";
+import { getConfiguredGhlOAuthStatus, getOAuthCallbackConfig } from "../services/ghlOAuthService";
 import { getRecentDebugEvents } from "../services/repository";
 import { redactSecrets } from "../utils/redaction";
 
@@ -35,6 +35,13 @@ debugRouter.get("/debug/oauth-status", async (_req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+debugRouter.get("/debug/oauth-callback-config", (_req, res) => {
+  res.json({
+    ok: true,
+    config: getOAuthCallbackConfig()
+  });
 });
 
 debugRouter.get("/debug/ghl-token-test", async (_req, res, next) => {
