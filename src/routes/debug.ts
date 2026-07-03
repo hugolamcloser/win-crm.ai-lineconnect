@@ -2,11 +2,11 @@ import { Router } from "express";
 import { getEnvPresenceReport } from "../config/env";
 import {
   getGhlProviderConfigDebug,
-  testGhlInboundMessageAuthMatrix,
   testGhlInboundMessageEndpoint,
   testGhlConversationProviderAccess,
   testGhlOAuthToken
 } from "../integrations/ghlClient";
+import { testGhlInboundMessageAuthMatrix } from "../integrations/ghlInboundAuthMatrix";
 import { getConfiguredGhlOAuthStatus, getOAuthCallbackConfig } from "../services/ghlOAuthService";
 import { getRecentDebugEvents } from "../services/repository";
 import { redactSecrets } from "../utils/redaction";
