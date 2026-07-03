@@ -1,6 +1,8 @@
 import type { ErrorRequestHandler, RequestHandler } from "express";
 import { ZodError } from "zod";
 import { logger } from "../config/logger";
+import { serializeError } from "../utils/errors";
+import { redactSecrets } from "../utils/redaction";
 
 export class HttpError extends Error {
   public readonly statusCode: number;
@@ -34,6 +36,6 @@ export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     return;
   }
 
-  logger.error({ error }, "Unhandled request error");
+  logger.error({ error: redactSecrets(serializeError(error)) }, "Unhandled request error");
   res.status(500).json({ error: "internal_server_error" });
 };

@@ -56,6 +56,8 @@ Important values:
 - `GHL_PRIVATE_INTEGRATION_TOKEN`: HighLevel / LeadConnector private integration token.
 - `GHL_LOCATION_ID`: HighLevel location ID.
 - `GHL_CUSTOM_PROVIDER_ID`: Your HighLevel custom Conversation Provider ID.
+- `GHL_LINE_USER_ID_FIELD_ID`: Optional GHL custom field ID for storing the LINE user ID.
+- `GHL_LINE_DISPLAY_NAME_FIELD_ID`: Optional GHL custom field ID for storing the LINE display name.
 - `GHL_CUSTOM_PROVIDER_SECRET`: Optional shared secret for outbound webhooks from HighLevel.
 - `WEBHOOK_SHARED_SECRET`: Optional shared secret for the admin mapping endpoint.
 
@@ -162,9 +164,13 @@ Returns service health.
 
 Returns whether required environment variables are `present` or `missing`. Secret values are never returned.
 
+### `GET /debug/recent-events`
+
+Returns the latest 10 `line_profiles`, latest 10 `message_events`, and latest 10 `webhook_events` rows. Secret values are not returned.
+
 ### `POST /webhooks/line`
 
-Receives LINE webhook events. Requires a valid `x-line-signature` header.
+Receives LINE webhook events. Requires a valid `x-line-signature` header. The route validates the payload, immediately returns `{ "ok": true, "accepted": true }`, then syncs events to HighLevel in the background.
 
 ### `POST /webhooks/line/inbound`
 
@@ -263,6 +269,8 @@ GHL_PRIVATE_INTEGRATION_TOKEN=...
 GHL_API_VERSION=2021-07-28
 GHL_LOCATION_ID=...
 GHL_CUSTOM_PROVIDER_ID=...
+GHL_LINE_USER_ID_FIELD_ID=
+GHL_LINE_DISPLAY_NAME_FIELD_ID=
 GHL_CUSTOM_PROVIDER_SECRET=...
 WEBHOOK_SHARED_SECRET=...
 ```
@@ -289,6 +297,7 @@ https://api.win-crm.ai/webhooks/line/inbound
 
 6. Enable **Use webhook**.
 7. Disable LINE auto-reply if HighLevel should handle the replies.
+8. In LINE Official Account Manager, disable auto-response messages so test replies are not confused with HighLevel replies.
 
 ### 6. Get GHL Credentials
 
@@ -298,8 +307,9 @@ https://api.win-crm.ai/webhooks/line/inbound
 4. Find the location ID in the location settings, business profile, or the HighLevel URL. Put it in `GHL_LOCATION_ID`.
 5. Create or open your custom Conversation Provider for that location.
 6. Copy the custom provider ID into `GHL_CUSTOM_PROVIDER_ID`.
-7. If the provider lets you set a delivery secret, use the same value as `GHL_CUSTOM_PROVIDER_SECRET`.
-8. Set the custom provider delivery URL to:
+7. Optionally create GHL custom fields for LINE user ID and LINE display name, then put their field IDs into `GHL_LINE_USER_ID_FIELD_ID` and `GHL_LINE_DISPLAY_NAME_FIELD_ID`.
+8. If the provider lets you set a delivery secret, use the same value as `GHL_CUSTOM_PROVIDER_SECRET`.
+9. Set the custom provider delivery URL to:
 
 ```text
 https://api.win-crm.ai/webhooks/ghl/line/outbound
@@ -310,9 +320,10 @@ https://api.win-crm.ai/webhooks/ghl/line/outbound
 1. Confirm `/debug/env-check` shows all required variables as `present`.
 2. Send a text message to the LINE Official Account from a real LINE user.
 3. In Supabase, check that `line_profiles` has a row for that `line_user_id`.
-4. If no GHL mapping existed, the middleware should create a new GHL contact with the LINE display name.
+4. If no GHL mapping existed, the middleware should create a new GHL contact with the LINE display name, source `LINE Official Account`, and tags `line` plus `LINE Official Account`.
 5. Confirm the same Supabase row now has `ghl_contact_id`.
 6. Confirm the LINE message appears in the GHL conversation.
+7. If the message does not appear, open `/debug/recent-events` and inspect `message_events` for a `failed` row with the HighLevel error details.
 
 ### 8. Test GHL To LINE
 
@@ -331,6 +342,7 @@ https://api.win-crm.ai/webhooks/ghl/line/outbound
 - `GHL_LOCATION_ID is required` or `GHL_CUSTOM_PROVIDER_ID is required`: Add the missing Railway variable and redeploy.
 - GHL replies do not reach LINE: Confirm the GHL provider delivery URL is `/webhooks/ghl/line/outbound`, confirm `GHL_CUSTOM_PROVIDER_SECRET` matches if you use one, and confirm the GHL contact or conversation exists in `line_profiles`.
 - Railway deploy is live but webhooks fail: Open `/health`, then `/debug/env-check`, then Railway logs. Fix missing variables first.
+- `webhook_events` is empty: Older versions did not write incoming LINE events there. After this update, every incoming LINE event should create or update a `webhook_events` row.
 
 ## Deployment Notes
 
@@ -339,6 +351,9 @@ https://api.win-crm.ai/webhooks/ghl/line/outbound
 - Preserve raw request bodies for LINE signature validation.
 - Review message attachment handling before enabling binary media sync. This starter records non-text LINE messages as text placeholders.
 - For multi-location deployments, extend `tenants` and route selection so each provider/channel pair can use distinct LINE and GHL credentials.
+- `line_profiles` stores the LINE user ID to GHL contact ID mapping.
+- `message_events` stores sent, skipped, and failed message sync attempts.
+- `webhook_events` stores incoming LINE/GHL webhook payloads and when background processing finished.
 
 ## Troubleshooting
 
@@ -346,3 +361,4 @@ https://api.win-crm.ai/webhooks/ghl/line/outbound
 - GHL contact was created for the wrong person: Link the LINE user to the correct existing contact through `/admin/mappings`.
 - Outbound messages skipped: Confirm the GHL webhook payload includes a `contactId` or `conversationId` that exists in `line_profiles`.
 - HighLevel API errors: Check `GHL_API_VERSION`, provider ID, location ID, token scopes, and the payload in `src/integrations/ghlClient.ts`.
+- Confusing LINE test replies: Disable LINE auto-response in LINE Official Account Manager.
