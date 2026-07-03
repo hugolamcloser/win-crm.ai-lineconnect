@@ -1,5 +1,5 @@
 import { logger } from "../config/logger";
-import { createGhlContact, sendInboundMessageToGhl, updateGhlContactLineFields } from "../integrations/ghlClient";
+import { createGhlContact, ensureGhlContactLineMetadata, sendInboundMessageToGhl } from "../integrations/ghlClient";
 import { getLineProfile } from "../integrations/lineClient";
 import type { LineMessage, LineSource, LineWebhookEvent } from "../types/line";
 import { getErrorMessage, serializeError } from "../utils/errors";
@@ -51,6 +51,11 @@ function getWebhookEventId(event: LineWebhookEvent): string | undefined {
   return event.webhookEventId ?? getLineMessageId(event);
 }
 
+function appendMessage(parts: string[], message: string | undefined): string | undefined {
+  const cleanParts = [...parts, message].filter((part): part is string => Boolean(part?.trim()));
+  return cleanParts.length > 0 ? cleanParts.join("; ") : undefined;
+}
+
 export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<{
   status: "processed" | "skipped" | "failed";
   reason?: string;
@@ -94,6 +99,7 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
     });
 
     const { text, attachments } = messageToText(event.message);
+    const metadataWarnings: string[] = [];
 
     try {
       if (!record.ghl_contact_id) {
@@ -110,22 +116,44 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
         });
 
         logger.info({ lineUserId, lineMessageId, ghlContactId: contact.id }, "Created GHL contact for LINE user");
-      } else {
+
         try {
-          await updateGhlContactLineFields(record.ghl_contact_id, {
+          await ensureGhlContactLineMetadata(contact.id, {
             lineUserId,
             displayName: profile?.displayName ?? undefined,
             pictureUrl: profile?.pictureUrl ?? undefined
           });
         } catch (error) {
+          const warning = redactSecrets(serializeError(error));
+          metadataWarnings.push(`Failed to ensure LINE tags/custom fields on new GHL contact: ${warning.message}`);
+          logger.warn(
+            {
+              lineUserId,
+              lineMessageId,
+              ghlContactId: contact.id,
+              error: warning
+            },
+            "Failed to ensure LINE tags/custom fields on new GHL contact"
+          );
+        }
+      } else {
+        try {
+          await ensureGhlContactLineMetadata(record.ghl_contact_id, {
+            lineUserId,
+            displayName: profile?.displayName ?? undefined,
+            pictureUrl: profile?.pictureUrl ?? undefined
+          });
+        } catch (error) {
+          const warning = redactSecrets(serializeError(error));
+          metadataWarnings.push(`Failed to ensure LINE tags/custom fields on existing GHL contact: ${warning.message}`);
           logger.warn(
             {
               lineUserId,
               lineMessageId,
               ghlContactId: record.ghl_contact_id,
-              error: redactSecrets(serializeError(error))
+              error: warning
             },
-            "Failed to update optional LINE custom fields on existing GHL contact"
+            "Failed to ensure LINE tags/custom fields on existing GHL contact"
           );
         }
       }
@@ -165,12 +193,14 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
           lineEvent: event,
           ghlResponse: response
         },
-        status: "sent"
+        status: "success",
+        errorMessage: appendMessage(metadataWarnings, undefined)
       });
 
       return { status: "processed" };
     } catch (error) {
       const serializedError = redactSecrets(serializeError(error));
+      const errorMessage = appendMessage(metadataWarnings, getErrorMessage(error));
 
       logger.error(
         {
@@ -187,12 +217,18 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
         direction: "inbound",
         externalMessageId: event.message.id,
         lineUserId,
-        payload: event,
+        payload: {
+          lineEvent: event,
+          ghlError: serializedError
+        },
         status: "failed",
-        errorMessage: getErrorMessage(error)
+        errorMessage,
+        ghlStatusCode: serializedError.statusCode,
+        ghlResponseBody: serializedError.responseBody,
+        requestPayload: serializedError.requestPayload
       });
 
-      return { status: "failed", reason: getErrorMessage(error) };
+      return { status: "failed", reason: errorMessage };
     }
   } finally {
     await markWebhookEventProcessed(webhookEvent.id);
