@@ -9,6 +9,7 @@ import { debugRouter } from "./routes/debug";
 import { ghlWebhookRouter } from "./routes/ghlWebhook";
 import { healthRouter } from "./routes/health";
 import { lineWebhookRouter } from "./routes/lineWebhook";
+import { oauthRouter } from "./routes/oauth";
 
 export function createApp() {
   const app = express();
@@ -20,6 +21,7 @@ export function createApp() {
 
   app.use(healthRouter);
   app.use(debugRouter);
+  app.use(oauthRouter);
   app.use(lineWebhookRouter);
   app.use(ghlWebhookRouter);
   app.use(adminRouter);
