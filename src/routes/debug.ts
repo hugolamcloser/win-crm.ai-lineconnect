@@ -6,6 +6,7 @@ import {
   testGhlConversationProviderAccess,
   testGhlOAuthToken
 } from "../integrations/ghlClient";
+import { testGhlInboundMessageAuthMatrix } from "../integrations/ghlInboundAuthMatrix";
 import { getConfiguredGhlOAuthStatus, getOAuthCallbackConfig } from "../services/ghlOAuthService";
 import { getRecentDebugEvents } from "../services/repository";
 import { redactSecrets } from "../utils/redaction";
@@ -87,6 +88,17 @@ debugRouter.get("/debug/ghl-inbound-message-endpoint-test", async (_req, res, ne
     res.json({
       ok: true,
       result: redactSecrets(await testGhlInboundMessageEndpoint())
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+debugRouter.get("/debug/ghl-inbound-message-auth-matrix-test", async (_req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      result: redactSecrets(await testGhlInboundMessageAuthMatrix())
     });
   } catch (error) {
     next(error);
