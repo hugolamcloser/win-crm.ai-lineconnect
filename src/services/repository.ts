@@ -300,6 +300,44 @@ export async function findLatestLineProfileWithGhlContact(): Promise<LineProfile
   return data as LineProfileRecord | null;
 }
 
+export async function findLatestLineProfileWithGhlContactForLocation(locationId: string): Promise<LineProfileRecord | null> {
+  const supabase = getSupabase();
+  const { data: tenants, error: tenantsError } = await supabase
+    .from("tenants")
+    .select("id")
+    .eq("location_id", locationId);
+
+  if (tenantsError) {
+    throw new Error(tenantsError.message);
+  }
+
+  const tenantIds = (tenants ?? [])
+    .map((tenant) => (typeof tenant.id === "string" ? tenant.id : undefined))
+    .filter((tenantId): tenantId is string => Boolean(tenantId));
+
+  if (tenantIds.length === 0) {
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from("line_profiles")
+    .select("*")
+    .in("tenant_id", tenantIds)
+    .not("line_user_id", "is", null)
+    .neq("line_user_id", "")
+    .not("ghl_contact_id", "is", null)
+    .neq("ghl_contact_id", "")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as LineProfileRecord | null;
+}
+
 export async function linkGhlMapping(input: {
   tenantId: string;
   lineUserId: string;
