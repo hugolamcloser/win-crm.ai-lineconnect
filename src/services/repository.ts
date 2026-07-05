@@ -283,6 +283,23 @@ export async function findLineProfileByGhlIds(
   return data as LineProfileRecord | null;
 }
 
+export async function findLatestLineProfileWithGhlContact(): Promise<LineProfileRecord | null> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("line_profiles")
+    .select("*")
+    .not("ghl_contact_id", "is", null)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as LineProfileRecord | null;
+}
+
 export async function linkGhlMapping(input: {
   tenantId: string;
   lineUserId: string;
