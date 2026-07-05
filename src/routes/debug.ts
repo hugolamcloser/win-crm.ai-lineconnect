@@ -84,12 +84,20 @@ debugRouter.get("/debug/provider-config", async (_req, res, next) => {
 });
 
 debugRouter.get("/debug/inbound-send-auth-config", (_req, res) => {
+  const inboundSendConfig = getGhlInboundSendAuthConfigDebug();
+  const effectiveInboundSendAuthMode = getEffectiveInboundSendAuthMode();
+  const contactAuthMode = getConfiguredLocationApiAuthMode();
+
   res.json({
     ok: true,
     config: redactSecrets({
-      ...getGhlInboundSendAuthConfigDebug(),
-      GHL_LOCATION_API_AUTH_MODE: getConfiguredLocationApiAuthMode(),
-      effective_inbound_send_auth_mode: getEffectiveInboundSendAuthMode()
+      ...inboundSendConfig,
+      configured_inbound_send_auth_mode: inboundSendConfig.GHL_INBOUND_SEND_AUTH_MODE,
+      effective_inbound_send_auth_mode: effectiveInboundSendAuthMode,
+      contact_auth_mode: contactAuthMode,
+      token_source_selected_for_inbound_send:
+        effectiveInboundSendAuthMode === "private_integration" ? "private_integration_token" : "stored_oauth_access_token",
+      GHL_LOCATION_API_AUTH_MODE: contactAuthMode
     })
   });
 });

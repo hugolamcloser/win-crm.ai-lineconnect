@@ -170,10 +170,6 @@ export function getConfiguredLocationApiAuthMode(): GhlLocationApiAuthMode {
 }
 
 export function getEffectiveInboundSendAuthMode(): GhlLocationApiAuthMode {
-  if (getConfiguredLocationApiAuthMode() === "private_integration") {
-    return "private_integration";
-  }
-
   return env.GHL_INBOUND_SEND_AUTH_MODE;
 }
 

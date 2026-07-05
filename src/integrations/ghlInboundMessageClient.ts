@@ -29,8 +29,10 @@ type InboundSendDiagnostics = {
   actual_auth_mode_used: GhlResolvedAuthMode;
   used_private_integration_token_for_contact: boolean;
   used_private_integration_token_for_inbound_send: boolean;
+  used_oauth_token_for_inbound_send: boolean;
   used_private_integration_token: boolean;
   used_oauth_token: boolean;
+  token_source_selected_for_inbound_send: "stored_oauth_access_token" | "private_integration_token";
   contact_step: "send_message";
   endpoint: string;
   method: string;
@@ -173,6 +175,10 @@ function getPrivateIntegrationAuthContext(locationId: string): GhlAuthContext {
   };
 }
 
+function getInboundSendTokenSource(authMode: GhlInboundSendAuthMode | GhlResolvedAuthMode): "stored_oauth_access_token" | "private_integration_token" {
+  return authMode === "private_integration" ? "private_integration_token" : "stored_oauth_access_token";
+}
+
 async function getInboundSendAuthContext(locationId: string): Promise<GhlAuthContext> {
   if (getEffectiveInboundSendAuthMode() === "private_integration") {
     return getPrivateIntegrationAuthContext(locationId);
@@ -310,8 +316,10 @@ function buildInboundSendDiagnostics(input: {
     actual_auth_mode_used: input.authMode,
     used_private_integration_token_for_contact: getConfiguredLocationApiAuthMode() === "private_integration",
     used_private_integration_token_for_inbound_send: input.authMode === "private_integration",
+    used_oauth_token_for_inbound_send: input.authMode === "oauth",
     used_private_integration_token: input.authMode === "private_integration",
     used_oauth_token: input.authMode === "oauth",
+    token_source_selected_for_inbound_send: getInboundSendTokenSource(input.authMode),
     contact_step: "send_message",
     endpoint: input.path,
     method: input.method,
@@ -333,9 +341,9 @@ function assertConfiguredInboundSendAuth(input: {
   method: string;
   payload: InboundMessagePayload;
 }): void {
-  if (input.configuredAuthMode === "private_integration" && input.auth.mode === "oauth") {
+  if (input.configuredAuthMode !== input.auth.mode) {
     throw new GhlInboundSendAuthModeError({
-      message: "Misconfigured real inbound send path: expected private_integration but selected oauth",
+      message: `Misconfigured real inbound send path: expected ${input.configuredAuthMode} but selected ${input.auth.mode}`,
       path: input.path,
       method: input.method,
       authMode: input.auth.mode,
@@ -360,7 +368,7 @@ async function executeConfiguredInboundMessageRequest(input: {
   let auth = await getInboundSendAuthContext(input.payload.locationId);
 
   assertConfiguredInboundSendAuth({
-    configuredAuthMode: effectiveAuthMode,
+    configuredAuthMode,
     auth,
     path: input.path,
     method: input.method,
@@ -392,7 +400,7 @@ async function executeConfiguredInboundMessageRequest(input: {
 
     auth = await forceRefreshGhlAuthContext(input.payload.locationId);
     assertConfiguredInboundSendAuth({
-      configuredAuthMode: effectiveAuthMode,
+      configuredAuthMode,
       auth,
       path: input.path,
       method: input.method,
@@ -598,6 +606,10 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
   diagnosis: string;
   likely_failure_class: FailureClass;
   error?: string;
+  actual_auth_mode_used?: string;
+  used_oauth_token_for_inbound_send: boolean;
+  used_private_integration_token_for_inbound_send: boolean;
+  token_source_selected_for_inbound_send: "stored_oauth_access_token" | "private_integration_token";
 }> {
   const locationId = requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
   const conversationProviderId = getConfiguredConversationProviderId();
@@ -665,7 +677,11 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
       endpoint_path: endpoint,
       method,
       auth_mode: authMode,
+      actual_auth_mode_used: result.diagnostics.actual_auth_mode_used,
       configured_auth_mode: configuredAuthMode,
+      used_oauth_token_for_inbound_send: result.diagnostics.used_oauth_token_for_inbound_send,
+      used_private_integration_token_for_inbound_send: result.diagnostics.used_private_integration_token_for_inbound_send,
+      token_source_selected_for_inbound_send: result.diagnostics.token_source_selected_for_inbound_send,
       provider_id_used: conversationProviderId,
       provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
       location_id: locationId,
@@ -705,7 +721,11 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
       endpoint_path: endpoint,
       method,
       auth_mode: authMode,
+      actual_auth_mode_used: authMode,
       configured_auth_mode: configuredAuthMode,
+      used_oauth_token_for_inbound_send: authMode === "oauth",
+      used_private_integration_token_for_inbound_send: authMode === "private_integration",
+      token_source_selected_for_inbound_send: getInboundSendTokenSource(authMode as GhlInboundSendAuthMode),
       provider_id_used: conversationProviderId,
       provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
       location_id: locationId,
