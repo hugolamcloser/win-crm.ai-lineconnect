@@ -8,7 +8,7 @@ import {
   testGhlOAuthToken
 } from "../integrations/ghlClient";
 import { testGhlInboundMessageAuthMatrix } from "../integrations/ghlInboundAuthMatrix";
-import { testConfiguredGhlInboundSendAuth } from "../integrations/ghlInboundMessageClient";
+import { getGhlInboundSendPayloadDebug, testConfiguredGhlInboundSendAuth } from "../integrations/ghlInboundMessageClient";
 import {
   getConfiguredLocationApiAuthMode,
   getEffectiveInboundSendAuthMode,
@@ -85,6 +85,7 @@ debugRouter.get("/debug/provider-config", async (_req, res, next) => {
 
 debugRouter.get("/debug/inbound-send-auth-config", (_req, res) => {
   const inboundSendConfig = getGhlInboundSendAuthConfigDebug();
+  const inboundSendPayloadConfig = getGhlInboundSendPayloadDebug();
   const effectiveInboundSendAuthMode = getEffectiveInboundSendAuthMode();
   const contactAuthMode = getConfiguredLocationApiAuthMode();
 
@@ -92,6 +93,7 @@ debugRouter.get("/debug/inbound-send-auth-config", (_req, res) => {
     ok: true,
     config: redactSecrets({
       ...inboundSendConfig,
+      ...inboundSendPayloadConfig,
       configured_inbound_send_auth_mode: inboundSendConfig.GHL_INBOUND_SEND_AUTH_MODE,
       effective_inbound_send_auth_mode: effectiveInboundSendAuthMode,
       contact_auth_mode: contactAuthMode,
