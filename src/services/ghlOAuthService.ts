@@ -87,6 +87,22 @@ function getNestedString(payload: Record<string, unknown>, ...path: string[]): s
   return getString(current);
 }
 
+function getNestedRecord(payload: Record<string, unknown>, ...path: string[]): Record<string, unknown> | undefined {
+  let current: unknown = payload;
+
+  for (const key of path) {
+    const record = getRecord(current);
+
+    if (!record || !(key in record)) {
+      return undefined;
+    }
+
+    current = record[key];
+  }
+
+  return getRecord(current);
+}
+
 function getNumber(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
@@ -107,6 +123,42 @@ function parseScopes(payload: GhlOAuthTokenPayload): string[] {
 
   const scopes = getString(payload.scopes) ?? getString(payload.scope);
   return scopes ? scopes.split(/\s+/).filter(Boolean) : [];
+}
+
+function parseClaimScopes(value: unknown): string[] | undefined {
+  if (Array.isArray(value)) {
+    return value.filter((scope): scope is string => typeof scope === "string" && scope.trim().length > 0);
+  }
+
+  const scopes = getString(value);
+  return scopes ? scopes.split(/\s+/).filter(Boolean) : undefined;
+}
+
+function decodeBase64UrlJson(part: string): Record<string, unknown> {
+  const normalized = part.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+  const decoded = Buffer.from(padded, "base64").toString("utf8");
+  const parsed = JSON.parse(decoded) as unknown;
+  const record = getRecord(parsed);
+
+  if (!record) {
+    throw new Error("JWT part did not decode to an object");
+  }
+
+  return record;
+}
+
+function decodeJwtHeaderAndPayload(token: string): { header: Record<string, unknown>; payload: Record<string, unknown> } {
+  const [headerPart, payloadPart] = token.split(".");
+
+  if (!headerPart || !payloadPart) {
+    throw new Error("Stored access token is not a JWT");
+  }
+
+  return {
+    header: decodeBase64UrlJson(headerPart),
+    payload: decodeBase64UrlJson(payloadPart)
+  };
 }
 
 function getExpiresAt(payload: GhlOAuthTokenPayload): string {
@@ -473,5 +525,66 @@ export function getOAuthCallbackConfig() {
     client_secret_present: Boolean(env.GHL_OAUTH_CLIENT_SECRET),
     location_id_present: Boolean(env.GHL_LOCATION_ID),
     supabase_present: Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY)
+  };
+}
+
+export async function getConfiguredGhlOAuthTokenClaims(): Promise<{
+  authClass: string | null;
+  authClassId: string | null;
+  primaryAuthClassId: string | null;
+  source: string | null;
+  channel: string | null;
+  oauthMeta: {
+    scopes: string[];
+  };
+  location_id: string | null;
+  company_id: string | null;
+  expires_at: string | null;
+}> {
+  const locationId = requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
+  const token = await getGhlOAuthToken(locationId);
+
+  if (!token?.access_token) {
+    return {
+      authClass: null,
+      authClassId: null,
+      primaryAuthClassId: null,
+      source: null,
+      channel: null,
+      oauthMeta: {
+        scopes: []
+      },
+      location_id: locationId,
+      company_id: null,
+      expires_at: null
+    };
+  }
+
+  const { payload } = decodeJwtHeaderAndPayload(token.access_token);
+  const oauthMeta = getNestedRecord(payload, "oauthMeta");
+  const scopes = parseClaimScopes(oauthMeta?.scopes) ?? parseClaimScopes(payload.scopes) ?? token.scopes ?? [];
+
+  return {
+    authClass: getString(payload.authClass) ?? getString(oauthMeta?.authClass) ?? null,
+    authClassId: getString(payload.authClassId) ?? getString(oauthMeta?.authClassId) ?? null,
+    primaryAuthClassId: getString(payload.primaryAuthClassId) ?? getString(oauthMeta?.primaryAuthClassId) ?? null,
+    source: getString(payload.source) ?? getString(oauthMeta?.source) ?? null,
+    channel: getString(payload.channel) ?? getString(oauthMeta?.channel) ?? null,
+    oauthMeta: {
+      scopes
+    },
+    location_id:
+      getString(payload.location_id) ??
+      getString(payload.locationId) ??
+      getString(oauthMeta?.location_id) ??
+      getString(oauthMeta?.locationId) ??
+      token.location_id,
+    company_id:
+      getString(payload.company_id) ??
+      getString(payload.companyId) ??
+      getString(oauthMeta?.company_id) ??
+      getString(oauthMeta?.companyId) ??
+      token.company_id,
+    expires_at: token.expires_at
   };
 }

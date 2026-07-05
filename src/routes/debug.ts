@@ -14,7 +14,11 @@ import {
   getEffectiveInboundSendAuthMode,
   testGhlContactAuth
 } from "../integrations/ghlLocationClient";
-import { getConfiguredGhlOAuthStatus, getOAuthCallbackConfig } from "../services/ghlOAuthService";
+import {
+  getConfiguredGhlOAuthStatus,
+  getConfiguredGhlOAuthTokenClaims,
+  getOAuthCallbackConfig
+} from "../services/ghlOAuthService";
 import { getRecentDebugEvents } from "../services/repository";
 import { redactSecrets } from "../utils/redaction";
 
@@ -44,6 +48,17 @@ debugRouter.get("/debug/oauth-status", async (_req, res, next) => {
     res.json({
       ok: true,
       oauth: await getConfiguredGhlOAuthStatus()
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+debugRouter.get("/debug/oauth-token-claims", async (_req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      claims: await getConfiguredGhlOAuthTokenClaims()
     });
   } catch (error) {
     next(error);
