@@ -14,7 +14,7 @@ type InboundMessagePayload = {
   locationId: string;
   contactId: string;
   conversationId?: string;
-  conversationProviderId: string;
+  conversationProviderId?: string;
   externalConversationId: string;
   externalMessageId: string;
   type: string;
@@ -37,6 +37,8 @@ type InboundSendDiagnostics = {
   endpoint: string;
   method: string;
   providerId: string;
+  send_conversation_provider_id: boolean;
+  provider_id_will_be_sent: boolean;
   locationId: string;
   contactId: string;
   inbound_message_type: string;
@@ -140,6 +142,10 @@ function getConfiguredConversationProviderId(): string {
   return requireEnvValue("GHL_CUSTOM_PROVIDER_ID", env.GHL_CUSTOM_PROVIDER_ID);
 }
 
+function shouldSendConversationProviderId(): boolean {
+  return env.GHL_SEND_CONVERSATION_PROVIDER_ID;
+}
+
 function getConfiguredInboundMessageType(): string {
   const configuredType = env.GHL_INBOUND_MESSAGE_TYPE.trim() || "SMS";
   const normalizedType = configuredType.toLowerCase();
@@ -188,11 +194,13 @@ async function getInboundSendAuthContext(locationId: string): Promise<GhlAuthCon
 }
 
 function buildInboundMessagePayload(input: GhlInboundMessageInput): InboundMessagePayload {
+  const conversationProviderId = getConfiguredConversationProviderId();
+
   return {
     locationId: requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID),
     contactId: input.contactId,
     conversationId: input.conversationId,
-    conversationProviderId: getConfiguredConversationProviderId(),
+    ...(shouldSendConversationProviderId() ? { conversationProviderId } : {}),
     externalConversationId: input.externalConversationId,
     externalMessageId: input.externalMessageId,
     type: getConfiguredInboundMessageType(),
@@ -205,12 +213,28 @@ function buildProviderProbePayload(conversationProviderId: string, locationId: s
   return {
     locationId,
     contactId: "debug-provider-access-test-contact",
-    conversationProviderId,
+    ...(shouldSendConversationProviderId() ? { conversationProviderId } : {}),
     externalConversationId: `debug-provider-test:${locationId}:${conversationProviderId}`,
     externalMessageId: `debug-provider-test:${Date.now()}`,
     type: getConfiguredInboundMessageType(),
     message: "Provider access probe. This should fail before creating a real message.",
     attachments: []
+  };
+}
+
+export function getGhlInboundSendPayloadDebug(): {
+  send_conversation_provider_id: boolean;
+  provider_id_will_be_sent: boolean;
+  request_body: unknown;
+} {
+  const locationId = requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
+  const conversationProviderId = getConfiguredConversationProviderId();
+  const payload = buildProviderProbePayload(conversationProviderId, locationId);
+
+  return {
+    send_conversation_provider_id: shouldSendConversationProviderId(),
+    provider_id_will_be_sent: "conversationProviderId" in payload,
+    request_body: redactSecrets(payload)
   };
 }
 
@@ -323,7 +347,9 @@ function buildInboundSendDiagnostics(input: {
     contact_step: "send_message",
     endpoint: input.path,
     method: input.method,
-    providerId: input.payload.conversationProviderId,
+    providerId: getConfiguredConversationProviderId(),
+    send_conversation_provider_id: shouldSendConversationProviderId(),
+    provider_id_will_be_sent: "conversationProviderId" in input.payload,
     locationId: input.payload.locationId,
     contactId: input.payload.contactId,
     inbound_message_type: input.payload.type,
@@ -389,7 +415,9 @@ async function executeConfiguredInboundMessageRequest(input: {
         configuredAuthMode,
         effectiveAuthMode,
         locationApiAuthMode: getConfiguredLocationApiAuthMode(),
-        conversationProviderId: input.payload.conversationProviderId,
+        conversationProviderId: getConfiguredConversationProviderId(),
+        sendConversationProviderId: shouldSendConversationProviderId(),
+        providerIdWillBeSent: "conversationProviderId" in input.payload,
         locationId: input.payload.locationId,
         contactId: input.payload.contactId,
         inboundMessageType: input.payload.type,
@@ -456,6 +484,9 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
       effectiveAuthMode,
       locationApiAuthMode: getConfiguredLocationApiAuthMode(),
       conversationProviderId: payload.conversationProviderId,
+      configuredConversationProviderId: getConfiguredConversationProviderId(),
+      sendConversationProviderId: shouldSendConversationProviderId(),
+      providerIdWillBeSent: "conversationProviderId" in payload,
       providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
       locationId: payload.locationId,
       contactId: payload.contactId,
@@ -477,6 +508,9 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
         effectiveAuthMode,
         locationApiAuthMode: getConfiguredLocationApiAuthMode(),
         conversationProviderId: payload.conversationProviderId,
+        configuredConversationProviderId: getConfiguredConversationProviderId(),
+        sendConversationProviderId: shouldSendConversationProviderId(),
+        providerIdWillBeSent: "conversationProviderId" in payload,
         providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
         locationId: payload.locationId,
         contactId: payload.contactId,
@@ -508,6 +542,9 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
         authMode: result.authMode,
         configuredAuthMode: result.configuredAuthMode,
         conversationProviderId: payload.conversationProviderId,
+        configuredConversationProviderId: getConfiguredConversationProviderId(),
+        sendConversationProviderId: shouldSendConversationProviderId(),
+        providerIdWillBeSent: "conversationProviderId" in payload,
         locationId: payload.locationId,
         contactId: payload.contactId,
         inboundMessageType: payload.type,
@@ -532,6 +569,9 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
           effectiveAuthMode,
           locationApiAuthMode: getConfiguredLocationApiAuthMode(),
           conversationProviderId: payload.conversationProviderId,
+          configuredConversationProviderId: getConfiguredConversationProviderId(),
+          sendConversationProviderId: shouldSendConversationProviderId(),
+          providerIdWillBeSent: "conversationProviderId" in payload,
           providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
           locationId: payload.locationId,
           contactId: payload.contactId,
@@ -554,6 +594,9 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
           effectiveAuthMode,
           locationApiAuthMode: getConfiguredLocationApiAuthMode(),
           conversationProviderId: payload.conversationProviderId,
+          configuredConversationProviderId: getConfiguredConversationProviderId(),
+          sendConversationProviderId: shouldSendConversationProviderId(),
+          providerIdWillBeSent: "conversationProviderId" in payload,
           providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
           locationId: payload.locationId,
           contactId: payload.contactId,
@@ -573,6 +616,9 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
           effectiveAuthMode,
           locationApiAuthMode: getConfiguredLocationApiAuthMode(),
           conversationProviderId: payload.conversationProviderId,
+          configuredConversationProviderId: getConfiguredConversationProviderId(),
+          sendConversationProviderId: shouldSendConversationProviderId(),
+          providerIdWillBeSent: "conversationProviderId" in payload,
           providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
           locationId: payload.locationId,
           contactId: payload.contactId,
@@ -595,10 +641,13 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
   auth_mode: string;
   configured_auth_mode: GhlInboundSendAuthMode;
   provider_id_used: string;
+  send_conversation_provider_id: boolean;
+  provider_id_will_be_sent: boolean;
   provider_id_equals_oauth_client_id: boolean;
   location_id: string;
   inbound_message_type: string;
   request_payload: unknown;
+  request_body: unknown;
   statusCode?: number;
   canonicalCode?: string;
   message?: string;
@@ -628,6 +677,8 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
       effectiveAuthMode,
       locationApiAuthMode: getConfiguredLocationApiAuthMode(),
       conversationProviderId,
+      sendConversationProviderId: shouldSendConversationProviderId(),
+      providerIdWillBeSent: "conversationProviderId" in payload,
       providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
       locationId,
       contactId: payload.contactId,
@@ -658,6 +709,8 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
         effectiveAuthMode,
         locationApiAuthMode: getConfiguredLocationApiAuthMode(),
         conversationProviderId,
+        sendConversationProviderId: shouldSendConversationProviderId(),
+        providerIdWillBeSent: "conversationProviderId" in payload,
         providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
         locationId,
         contactId: payload.contactId,
@@ -683,10 +736,13 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
       used_private_integration_token_for_inbound_send: result.diagnostics.used_private_integration_token_for_inbound_send,
       token_source_selected_for_inbound_send: result.diagnostics.token_source_selected_for_inbound_send,
       provider_id_used: conversationProviderId,
+      send_conversation_provider_id: shouldSendConversationProviderId(),
+      provider_id_will_be_sent: result.diagnostics.provider_id_will_be_sent,
       provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
       location_id: locationId,
       inbound_message_type: payload.type,
       request_payload: result.diagnostics,
+      request_body: result.diagnostics.request_body,
       statusCode: result.statusCode,
       canonicalCode: result.canonicalCode,
       message: result.message,
@@ -707,6 +763,8 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
         effectiveAuthMode,
         locationApiAuthMode: getConfiguredLocationApiAuthMode(),
         conversationProviderId,
+        sendConversationProviderId: shouldSendConversationProviderId(),
+        providerIdWillBeSent: "conversationProviderId" in payload,
         providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
         locationId,
         contactId: payload.contactId,
@@ -727,10 +785,19 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
       used_private_integration_token_for_inbound_send: authMode === "private_integration",
       token_source_selected_for_inbound_send: getInboundSendTokenSource(authMode as GhlInboundSendAuthMode),
       provider_id_used: conversationProviderId,
+      send_conversation_provider_id: shouldSendConversationProviderId(),
+      provider_id_will_be_sent:
+        requestPayload && typeof requestPayload === "object" && !Array.isArray(requestPayload)
+          ? Boolean((requestPayload as Record<string, unknown>).provider_id_will_be_sent)
+          : "conversationProviderId" in payload,
       provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
       location_id: locationId,
       inbound_message_type: payload.type,
       request_payload: requestPayload,
+      request_body:
+        requestPayload && typeof requestPayload === "object" && !Array.isArray(requestPayload)
+          ? ((requestPayload as Record<string, unknown>).request_body ?? redactSecrets(payload))
+          : redactSecrets(payload),
       diagnosis:
         "The configured inbound send auth probe failed before receiving a HighLevel HTTP response. Check server logs for token lookup, private-token configuration, network, or provider settings.",
       likely_failure_class: "unknown",
