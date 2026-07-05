@@ -14,6 +14,7 @@ import {
   getEffectiveInboundSendAuthMode,
   testGhlContactAuth
 } from "../integrations/ghlLocationClient";
+import { testGhlConversationPermissions } from "../integrations/ghlConversationPermissionTest";
 import {
   getConfiguredGhlOAuthStatus,
   getConfiguredGhlOAuthTokenClaims,
@@ -164,6 +165,17 @@ debugRouter.get("/debug/ghl-inbound-message-auth-matrix-test", async (_req, res,
     res.json({
       ok: true,
       result: redactSecrets(await testGhlInboundMessageAuthMatrix())
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+debugRouter.get("/debug/ghl-conversation-permission-test", async (_req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      result: redactSecrets(await testGhlConversationPermissions())
     });
   } catch (error) {
     next(error);
