@@ -14,7 +14,11 @@ import {
   getEffectiveInboundSendAuthMode,
   testGhlContactAuth
 } from "../integrations/ghlLocationClient";
-import { testGhlConversationPermissions } from "../integrations/ghlConversationPermissionTest";
+import {
+  getGhlTokenInstallSummary,
+  testGhlInboundPayloadMatrix,
+  testGhlConversationPermissions
+} from "../integrations/ghlConversationPermissionTest";
 import {
   getConfiguredGhlOAuthStatus,
   getConfiguredGhlOAuthTokenClaims,
@@ -176,6 +180,28 @@ debugRouter.get("/debug/ghl-conversation-permission-test", async (_req, res, nex
     res.json({
       ok: true,
       result: redactSecrets(await testGhlConversationPermissions())
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+debugRouter.get("/debug/ghl-inbound-payload-matrix", async (_req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      result: redactSecrets(await testGhlInboundPayloadMatrix())
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+debugRouter.get("/debug/ghl-token-install-summary", async (_req, res, next) => {
+  try {
+    res.json({
+      ok: true,
+      result: redactSecrets(await getGhlTokenInstallSummary())
     });
   } catch (error) {
     next(error);
