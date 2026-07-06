@@ -85,6 +85,40 @@ function getGhlErrorDetails(responseBody: unknown): { canonicalCode?: string; me
   };
 }
 
+export function isStaleGhlContactError(error: unknown): boolean {
+  const details = error as {
+    statusCode?: number;
+    responseBody?: unknown;
+    canonicalCode?: string;
+    message?: string;
+  };
+  const responseBody =
+    typeof details.responseBody === "string" ? parseResponseBody(details.responseBody) : details.responseBody;
+  const canonicalCode =
+    details.canonicalCode ??
+    getNestedString(responseBody, "canonicalCode") ??
+    getNestedString(responseBody, "error", "canonicalCode") ??
+    getNestedString(responseBody, "meta", "canonicalCode");
+  const message = [details.message, typeof details.responseBody === "string" ? details.responseBody : JSON.stringify(responseBody ?? {})]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (canonicalCode === "CONVERSATIONS_CONTACT_DELETED") {
+    return true;
+  }
+
+  if (details.statusCode !== 400 && details.statusCode !== 404) {
+    return false;
+  }
+
+  return (
+    message.includes("contact not found") ||
+    message.includes("not found/deleted") ||
+    (message.includes("contact") && message.includes("deleted"))
+  );
+}
+
 function normalizeDisplayName(input: GhlCreateContactInput): string {
   const displayName = input.displayName?.trim();
 
@@ -397,6 +431,10 @@ export async function ensureGhlContactLineMetadata(contactId: string, input: Ghl
   try {
     existingTags = getTagsFromContactPayload(await getGhlContact(contactId));
   } catch (error) {
+    if (isStaleGhlContactError(error)) {
+      throw error;
+    }
+
     logger.warn(
       {
         contactId,
