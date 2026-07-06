@@ -37,7 +37,7 @@ create table if not exists public.line_profiles (
   ghl_conversation_id text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (tenant_id, line_source_id, line_user_id)
+  constraint line_profiles_tenant_line_user_key unique (tenant_id, line_user_id)
 );
 
 drop trigger if exists set_line_profiles_updated_at on public.line_profiles;
