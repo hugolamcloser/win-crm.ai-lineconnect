@@ -34,17 +34,15 @@ function getLineSourceId(source: LineSource): string {
   return source.userId;
 }
 
-function messageToText(message: LineMessage): { text?: string; attachments: string[]; supported: boolean; skipReason?: string } {
+function messageToText(message: LineMessage): { text?: string; attachments?: string[]; supported: boolean; skipReason?: string } {
   if (message.type === "text") {
     return {
       text: message.text,
-      attachments: [],
       supported: true
     };
   }
 
   return {
-    attachments: [],
     supported: false,
     skipReason: `Unsupported LINE message type for GHL inbound send: ${message.type}`
   };
@@ -234,7 +232,7 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
         externalConversationId: buildLineExternalConversationId(lineUserId),
         externalMessageId: event.message.id,
         message: text,
-        attachments
+        ...(attachments && attachments.length > 0 ? { attachments } : {})
       });
       const response = inboundSendResult.response;
       const requestPayload = redactSecrets(inboundSendResult.diagnostics);
