@@ -1,4 +1,5 @@
 import { env, requireEnvValue } from "../config/env";
+import { logger } from "../config/logger";
 import { getSupabase } from "../config/supabase";
 
 export type LineProfileRecord = {
@@ -11,6 +12,8 @@ export type LineProfileRecord = {
   picture_url: string | null;
   ghl_contact_id: string | null;
   ghl_conversation_id: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 export type UpsertLineProfileInput = {
@@ -90,6 +93,80 @@ function requireSingle<T>(data: T | null, error: { message: string } | null): T 
   return data;
 }
 
+function getProfileTimeValue(value: string | null | undefined): number {
+  if (!value) {
+    return 0;
+  }
+
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function sortCanonicalLineProfiles(records: LineProfileRecord[]): LineProfileRecord[] {
+  return [...records].sort((left, right) => {
+    const leftHasContact = left.ghl_contact_id ? 1 : 0;
+    const rightHasContact = right.ghl_contact_id ? 1 : 0;
+
+    if (leftHasContact !== rightHasContact) {
+      return rightHasContact - leftHasContact;
+    }
+
+    const leftHasConversation = left.ghl_conversation_id ? 1 : 0;
+    const rightHasConversation = right.ghl_conversation_id ? 1 : 0;
+
+    if (leftHasConversation !== rightHasConversation) {
+      return rightHasConversation - leftHasConversation;
+    }
+
+    const leftUpdatedAt = getProfileTimeValue(left.updated_at ?? left.created_at);
+    const rightUpdatedAt = getProfileTimeValue(right.updated_at ?? right.created_at);
+
+    if (leftUpdatedAt !== rightUpdatedAt) {
+      return rightUpdatedAt - leftUpdatedAt;
+    }
+
+    return getProfileTimeValue(right.created_at) - getProfileTimeValue(left.created_at);
+  });
+}
+
+async function findCanonicalLineProfileByLineUser(
+  tenantId: string,
+  lineUserId: string
+): Promise<LineProfileRecord | null> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("line_profiles")
+    .select("*")
+    .eq("tenant_id", tenantId)
+    .eq("line_user_id", lineUserId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const records = (data ?? []) as LineProfileRecord[];
+
+  if (records.length === 0) {
+    return null;
+  }
+
+  const [canonical] = sortCanonicalLineProfiles(records);
+
+  if (records.length > 1) {
+    logger.warn(
+      {
+        tenantId,
+        lineUserId,
+        duplicateCount: records.length,
+        canonicalLineProfileId: canonical.id
+      },
+      "Duplicate line_profiles rows detected; using canonical row"
+    );
+  }
+
+  return canonical;
+}
+
 export async function upsertGhlOAuthToken(input: UpsertGhlOAuthTokenInput): Promise<GhlOAuthTokenRecord> {
   const supabase = getSupabase();
   const { data, error } = await supabase
@@ -100,7 +177,7 @@ export async function upsertGhlOAuthToken(input: UpsertGhlOAuthTokenInput): Prom
         location_id: input.locationId,
         company_id: input.companyId ?? null,
         access_token: input.accessToken,
-        refresh_token: input.refreshToken,
+        refresh_token: input.RefreshToken,
         expires_at: input.expiresAt,
         scopes: input.scopes ?? [],
         token_type: input.tokenType ?? null,
@@ -235,7 +312,7 @@ export async function upsertLineProfile(input: UpsertLineProfileInput): Promise<
         picture_url: input.pictureUrl ?? null,
         updated_at: new Date().toISOString()
       },
-      { onConflict: "tenant_id,line_source_id,line_user_id" }
+      { onConflict: "tenant_id,line_user_id" }
     )
     .select("*")
     .single();
@@ -244,19 +321,7 @@ export async function upsertLineProfile(input: UpsertLineProfileInput): Promise<
 }
 
 export async function findLineProfileByLineUser(tenantId: string, lineUserId: string): Promise<LineProfileRecord | null> {
-  const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("line_profiles")
-    .select("*")
-    .eq("tenant_id", tenantId)
-    .eq("line_user_id", lineUserId)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return data as LineProfileRecord | null;
+  return findCanonicalLineProfileByLineUser(tenantId, lineUserId);
 }
 
 export async function findLineProfileByGhlIds(
@@ -345,6 +410,12 @@ export async function linkGhlMapping(input: {
   ghlConversationId?: string;
 }): Promise<LineProfileRecord> {
   const supabase = getSupabase();
+  const existing = await findCanonicalLineProfileByLineUser(input.tenantId, input.lineUserId);
+
+  if (!existing) {
+    throw new Error("LINE profile does not exist for GHL mapping update");
+  }
+
   const patch: Record<string, string | null> = {
     updated_at: new Date().toISOString()
   };
@@ -360,16 +431,34 @@ export async function linkGhlMapping(input: {
   const { data, error } = await supabase
     .from("line_profiles")
     .update(patch)
-    .eq("tenant_id", input.tenantId)
-    .eq("line_user_id", input.lineUserId)
+    .eq("id", existing.id)
     .select("*")
     .single();
+
+  if (!error) {
+    logger.info(
+      {
+        tenantId: input.tenantId,
+        lineUserId: input.lineUserId,
+        lineProfileId: existing.id,
+        ghlContactId: input.ghlContactId,
+        ghlConversationId: input.ghlConversationId
+      },
+      "Updated LINE profile GHL mapping"
+    );
+  }
 
   return requireSingle<LineProfileRecord>(data, error);
 }
 
 export async function clearGhlMapping(input: { tenantId: string; lineUserId: string }): Promise<LineProfileRecord> {
   const supabase = getSupabase();
+  const existing = await findCanonicalLineProfileByLineUser(input.tenantId, input.lineUserId);
+
+  if (!existing) {
+    throw new Error("LINE profile does not exist for GHL mapping clear");
+  }
+
   const { data, error } = await supabase
     .from("line_profiles")
     .update({
@@ -377,10 +466,22 @@ export async function clearGhlMapping(input: { tenantId: string; lineUserId: str
       ghl_conversation_id: null,
       updated_at: new Date().toISOString()
     })
-    .eq("tenant_id", input.tenantId)
-    .eq("line_user_id", input.lineUserId)
+    .eq("id", existing.id)
     .select("*")
     .single();
+
+  if (!error) {
+    logger.info(
+      {
+        tenantId: input.tenantId,
+        lineUserId: input.lineUserId,
+        lineProfileId: existing.id,
+        oldGhlContactId: existing.ghl_contact_id,
+        oldGhlConversationId: existing.ghl_conversation_id
+      },
+      "Cleared LINE profile GHL mapping"
+    );
+  }
 
   return requireSingle<LineProfileRecord>(data, error);
 }
