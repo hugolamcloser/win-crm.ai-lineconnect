@@ -73,7 +73,7 @@ Use these values for the confirmed production LINE to GHL setup:
 ```text
 NODE_ENV=production
 LOG_LEVEL=info
-PUBLIC_BASE_URL=https://api.win-crm.ai
+PUBLIC_BASE_URL=https://win-line-connect-production.up.railway.app
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 LINE_CHANNEL_SECRET=...
@@ -84,7 +84,7 @@ GHL_LOCATION_ID=...
 GHL_CUSTOM_PROVIDER_ID=...
 GHL_OAUTH_CLIENT_ID=...
 GHL_OAUTH_CLIENT_SECRET=...
-GHL_OAUTH_REDIRECT_URI=https://api.win-crm.ai/oauth/callback
+GHL_OAUTH_REDIRECT_URI=https://win-line-connect-production.up.railway.app/oauth/callback
 GHL_OAUTH_TOKEN_URL=https://services.leadconnectorhq.com/oauth/token
 GHL_INBOUND_MESSAGE_TYPE=Custom
 GHL_SEND_CONVERSATION_PROVIDER_ID=true
@@ -119,8 +119,24 @@ These settings are part of the confirmed working production wiring. Keep them un
 - `GHL_SEND_CONVERSATION_PROVIDER_ID=true`: The working inbound message payload includes `conversationProviderId`.
 - `GHL_INBOUND_SEND_AUTH_MODE=oauth`: The working inbound message send uses the installed Location OAuth token.
 - `GHL_LOCATION_API_AUTH_MODE=private_integration`: The working contact create/update/tag/custom-field path uses the Private Integration token.
-- LINE webhook URL: `https://api.win-crm.ai/webhooks/line/inbound`
-- GHL Conversation Provider Delivery URL: `https://api.win-crm.ai/webhooks/ghl/line/outbound`
+- LINE webhook URL: `https://win-line-connect-production.up.railway.app/webhooks/line/inbound`
+- GHL Conversation Provider Delivery URL: `https://win-line-connect-production.up.railway.app/webhooks/ghl/line/outbound`
+
+## Future Custom Domain Migration
+
+`api.win-crm.ai` is not active for the current production setup yet. The current working production base URL is:
+
+```text
+https://win-line-connect-production.up.railway.app
+```
+
+Only switch to `api.win-crm.ai` after the custom domain is connected in Railway and tested end to end. When switching, update these values and external settings together:
+
+- `PUBLIC_BASE_URL`
+- `GHL_OAUTH_REDIRECT_URI`
+- GHL Marketplace OAuth callback URL
+- LINE Developers webhook URL
+- GHL Conversation Provider Delivery URL
 
 ## Production Smoke Test Checklist
 
@@ -173,28 +189,28 @@ npm start
 
 ## Webhook URLs
 
-Assuming `PUBLIC_BASE_URL=https://api.win-crm.ai`:
+Assuming `PUBLIC_BASE_URL=https://win-line-connect-production.up.railway.app`:
 
-- LINE webhook URL: `https://api.win-crm.ai/webhooks/line/inbound`
-- HighLevel outbound provider webhook URL: `https://api.win-crm.ai/webhooks/ghl/line/outbound`
-- HighLevel Marketplace OAuth callback URL: `https://api.win-crm.ai/oauth/callback`
-- Health check: `https://api.win-crm.ai/health`
-- Safe environment check: `https://api.win-crm.ai/debug/env-check`
-- OAuth token status: `https://api.win-crm.ai/debug/oauth-status`
-- OAuth callback config: `https://api.win-crm.ai/debug/oauth-callback-config`
-- OAuth token test: `https://api.win-crm.ai/debug/ghl-token-test`
-- Provider config check: `https://api.win-crm.ai/debug/provider-config`
-- Provider access test: `https://api.win-crm.ai/debug/ghl-provider-test`
-- Inbound message endpoint test: `https://api.win-crm.ai/debug/ghl-inbound-message-endpoint-test`
-- Inbound send auth config: `https://api.win-crm.ai/debug/inbound-send-auth-config`
-- Configured inbound send auth test: `https://api.win-crm.ai/debug/ghl-inbound-send-auth-test`
-- Contact auth test: `https://api.win-crm.ai/debug/ghl-contact-auth-test`
-- Inbound auth matrix test: `https://api.win-crm.ai/debug/ghl-inbound-message-auth-matrix-test`
+- LINE webhook URL: `https://win-line-connect-production.up.railway.app/webhooks/line/inbound`
+- HighLevel outbound provider webhook URL: `https://win-line-connect-production.up.railway.app/webhooks/ghl/line/outbound`
+- HighLevel Marketplace OAuth callback URL: `https://win-line-connect-production.up.railway.app/oauth/callback`
+- Health check: `https://win-line-connect-production.up.railway.app/health`
+- Safe environment check: `https://win-line-connect-production.up.railway.app/debug/env-check`
+- OAuth token status: `https://win-line-connect-production.up.railway.app/debug/oauth-status`
+- OAuth callback config: `https://win-line-connect-production.up.railway.app/debug/oauth-callback-config`
+- OAuth token test: `https://win-line-connect-production.up.railway.app/debug/ghl-token-test`
+- Provider config check: `https://win-line-connect-production.up.railway.app/debug/provider-config`
+- Provider access test: `https://win-line-connect-production.up.railway.app/debug/ghl-provider-test`
+- Inbound message endpoint test: `https://win-line-connect-production.up.railway.app/debug/ghl-inbound-message-endpoint-test`
+- Inbound send auth config: `https://win-line-connect-production.up.railway.app/debug/inbound-send-auth-config`
+- Configured inbound send auth test: `https://win-line-connect-production.up.railway.app/debug/ghl-inbound-send-auth-test`
+- Contact auth test: `https://win-line-connect-production.up.railway.app/debug/ghl-contact-auth-test`
+- Inbound auth matrix test: `https://win-line-connect-production.up.railway.app/debug/ghl-inbound-message-auth-matrix-test`
 
 Protected support-only diagnostics:
 
-- Inbound payload matrix test: `https://api.win-crm.ai/debug/ghl-inbound-payload-matrix`
-- Token install summary: `https://api.win-crm.ai/debug/ghl-token-install-summary`
+- Inbound payload matrix test: `https://win-line-connect-production.up.railway.app/debug/ghl-inbound-payload-matrix`
+- Token install summary: `https://win-line-connect-production.up.railway.app/debug/ghl-token-install-summary`
 
 In production, these protected diagnostics require `WEBHOOK_SHARED_SECRET` in `x-webhook-secret` or `Authorization: Bearer ...`. The payload matrix can create diagnostic messages in GHL if a payload variant succeeds, so use these only during support or migration work.
 
@@ -207,7 +223,7 @@ The original route names still work:
 
 1. Open the LINE Developers Console.
 2. Select your Messaging API channel.
-3. Set the webhook URL to `https://api.win-crm.ai/webhooks/line/inbound`.
+3. Set the webhook URL to `https://win-line-connect-production.up.railway.app/webhooks/line/inbound`.
 4. Enable webhooks.
 5. Disable auto-reply settings if HighLevel should own replies.
 6. Copy the channel secret and long-lived channel access token into `.env`.
@@ -217,14 +233,14 @@ LINE signatures are verified against the exact raw UTF-8 body, so do not put mid
 ## HighLevel Configuration
 
 1. Create or open the HighLevel Marketplace app for this middleware.
-2. Set the Marketplace app OAuth callback URL to `https://api.win-crm.ai/oauth/callback`.
+2. Set the Marketplace app OAuth callback URL to `https://win-line-connect-production.up.railway.app/oauth/callback`.
 3. Add the Marketplace app client ID and client secret to Railway as `GHL_OAUTH_CLIENT_ID` and `GHL_OAUTH_CLIENT_SECRET`.
 4. Install the Marketplace app into the target GHL location so HighLevel redirects to `/oauth/callback?code=...`.
 5. Confirm `GET /debug/oauth-status` shows `token_present: true` for your `GHL_LOCATION_ID`.
 6. Configure a custom Conversation Provider for the target location.
 7. Put the actual custom Conversation Provider ID into `GHL_CUSTOM_PROVIDER_ID`. This is not the Marketplace OAuth client ID.
 8. For the confirmed production LINE provider, set `GHL_INBOUND_MESSAGE_TYPE=Custom` and `GHL_SEND_CONVERSATION_PROVIDER_ID=true`.
-9. Set the provider Delivery URL to `https://api.win-crm.ai/webhooks/ghl/line/outbound`.
+9. Set the provider Delivery URL to `https://win-line-connect-production.up.railway.app/webhooks/ghl/line/outbound`.
 10. If the provider supports a custom header or secret field, set it to `GHL_CUSTOM_PROVIDER_SECRET`.
 11. Put the provider ID, location ID, OAuth client settings, inbound message type, and API version into `.env`.
 12. Open `/debug/provider-config`; if `provider_id_equals_oauth_client_id` is `true`, `GHL_CUSTOM_PROVIDER_ID` is almost certainly wrong.
@@ -262,7 +278,7 @@ For example: `line:U93ebe957edac218bfa9b204bc8060446`. The contact source stays 
 The admin endpoint remains available as an override tool. Use it when you want to attach a LINE user to an existing GHL contact or conversation:
 
 ```bash
-curl -X POST https://api.win-crm.ai/admin/mappings \
+curl -X POST https://win-line-connect-production.up.railway.app/admin/mappings \
   -H "Content-Type: application/json" \
   -H "x-webhook-secret: $WEBHOOK_SHARED_SECRET" \
   -d '{
@@ -370,20 +386,20 @@ Links a LINE user to a HighLevel contact/conversation. Requires `WEBHOOK_SHARED_
 
 ## Hugo Setup Guide
 
-This is the shortest path for deploying Hugo's `api.win-crm.ai` middleware from a fresh account setup.
+This is the shortest path for deploying Hugo's current Railway production middleware.
 
 ### Production Launch Checklist
 
 1. Run all Supabase migrations.
 2. Deploy this repository to Railway from the `main` branch.
 3. Add all Railway environment variables from `.env.example` using real values in Railway only.
-4. Connect the custom domain `api.win-crm.ai` in Railway.
-5. Set the GHL Marketplace OAuth callback URL to `https://api.win-crm.ai/oauth/callback`.
+4. Use the current Railway production URL: `https://win-line-connect-production.up.railway.app`.
+5. Set the GHL Marketplace OAuth callback URL to `https://win-line-connect-production.up.railway.app/oauth/callback`.
 6. Install the GHL Marketplace app into the target location.
 7. Test `GET /health`, `GET /debug/env-check`, and `GET /debug/oauth-status`.
 8. Confirm `/debug/provider-config` shows the expected provider ID and production auth settings.
-9. Set the LINE Developers webhook URL to `https://api.win-crm.ai/webhooks/line/inbound`.
-10. Set the GHL Conversation Provider Delivery URL to `https://api.win-crm.ai/webhooks/ghl/line/outbound`.
+9. Set the LINE Developers webhook URL to `https://win-line-connect-production.up.railway.app/webhooks/line/inbound`.
+10. Set the GHL Conversation Provider Delivery URL to `https://win-line-connect-production.up.railway.app/webhooks/ghl/line/outbound`.
 11. Run the Production Smoke Test Checklist.
 
 ### Smoke Test
@@ -397,15 +413,15 @@ After deploy, run the top-level Production Smoke Test Checklist in this README.
 3. Choose **Deploy from GitHub repo**.
 4. Select `hugolamcloser/line-ghl-connect-middleware`.
 5. Let Railway detect the Node.js app. The project builds with `npm install` and starts with `npm start`.
-6. Open the Railway service settings and add your custom domain `api.win-crm.ai`.
-7. Keep the generated Railway domain too. It is useful for testing before DNS is ready.
+6. Use the current production Railway domain: `https://win-line-connect-production.up.railway.app`.
+7. Leave custom domain setup for the Future Custom Domain Migration section.
 
 After deployment, test:
 
 ```text
-GET https://api.win-crm.ai/health
-GET https://api.win-crm.ai/debug/env-check
-GET https://api.win-crm.ai/debug/oauth-status
+GET https://win-line-connect-production.up.railway.app/health
+GET https://win-line-connect-production.up.railway.app/debug/env-check
+GET https://win-line-connect-production.up.railway.app/debug/oauth-status
 ```
 
 ### 2. Create The Supabase Project
@@ -441,7 +457,7 @@ Add these variables in Railway under your service's **Variables** tab:
 NODE_ENV=production
 PORT=3000
 LOG_LEVEL=info
-PUBLIC_BASE_URL=https://api.win-crm.ai
+PUBLIC_BASE_URL=https://win-line-connect-production.up.railway.app
 SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 LINE_CHANNEL_SECRET=...
@@ -452,7 +468,7 @@ GHL_LOCATION_ID=...
 GHL_CUSTOM_PROVIDER_ID=...
 GHL_OAUTH_CLIENT_ID=...
 GHL_OAUTH_CLIENT_SECRET=...
-GHL_OAUTH_REDIRECT_URI=https://api.win-crm.ai/oauth/callback
+GHL_OAUTH_REDIRECT_URI=https://win-line-connect-production.up.railway.app/oauth/callback
 GHL_OAUTH_TOKEN_URL=https://services.leadconnectorhq.com/oauth/token
 GHL_INBOUND_MESSAGE_TYPE=Custom
 GHL_SEND_CONVERSATION_PROVIDER_ID=true
@@ -470,7 +486,7 @@ WEBHOOK_SHARED_SECRET=...
 Then open:
 
 ```text
-https://api.win-crm.ai/debug/env-check
+https://win-line-connect-production.up.railway.app/debug/env-check
 ```
 
 Every required variable should show `present`. Optional variables may be `missing`. This endpoint never shows the actual secret values.
@@ -484,7 +500,7 @@ Every required variable should show `present`. Optional variables may be `missin
 5. In **Messaging API**, set the webhook URL to:
 
 ```text
-https://api.win-crm.ai/webhooks/line/inbound
+https://win-line-connect-production.up.railway.app/webhooks/line/inbound
 ```
 
 6. Enable **Use webhook**.
@@ -497,16 +513,16 @@ https://api.win-crm.ai/webhooks/line/inbound
 2. Set the app OAuth callback URL to:
 
 ```text
-https://api.win-crm.ai/oauth/callback
+https://win-line-connect-production.up.railway.app/oauth/callback
 ```
 
 3. Copy the Marketplace app client ID into `GHL_OAUTH_CLIENT_ID`.
 4. Copy the Marketplace app client secret into `GHL_OAUTH_CLIENT_SECRET`.
 5. Find the target location ID in the location settings, business profile, or the HighLevel URL. Put it in `GHL_LOCATION_ID`.
-6. Put `https://api.win-crm.ai/oauth/callback` into `GHL_OAUTH_REDIRECT_URI`.
+6. Put `https://win-line-connect-production.up.railway.app/oauth/callback` into `GHL_OAUTH_REDIRECT_URI`.
 7. Install the Marketplace app into the target location. HighLevel should redirect to `/oauth/callback?code=...`, and the middleware will store the access and refresh tokens in Supabase.
-8. Open `https://api.win-crm.ai/debug/oauth-status` and confirm `token_present` and `refresh_token_present` are `true`.
-9. Open `https://api.win-crm.ai/debug/provider-config` and confirm the provider ID, location ID, `GHL_INBOUND_MESSAGE_TYPE=Custom`, and `GHL_INBOUND_SEND_AUTH_MODE=oauth`.
+8. Open `https://win-line-connect-production.up.railway.app/debug/oauth-status` and confirm `token_present` and `refresh_token_present` are `true`.
+9. Open `https://win-line-connect-production.up.railway.app/debug/provider-config` and confirm the provider ID, location ID, `GHL_INBOUND_MESSAGE_TYPE=Custom`, and `GHL_INBOUND_SEND_AUTH_MODE=oauth`.
 10. Use the production smoke test below to confirm the full LINE to GHL and GHL to LINE flow.
 11. Use deeper debug endpoints only during support or migration work.
 
@@ -521,7 +537,7 @@ https://api.win-crm.ai/oauth/callback
 7. Set the custom provider Delivery URL to:
 
 ```text
-https://api.win-crm.ai/webhooks/ghl/line/outbound
+https://win-line-connect-production.up.railway.app/webhooks/ghl/line/outbound
 ```
 
 This Delivery URL is for GHL replies going back to LINE. It is not the OAuth callback URL and it is not the LINE webhook URL.
@@ -538,7 +554,7 @@ This Delivery URL is for GHL replies going back to LINE. It is not the OAuth cal
 
 1. Open the GHL conversation that was created or mapped from LINE.
 2. Send a reply from GHL.
-3. GHL should POST to `https://api.win-crm.ai/webhooks/ghl/line/outbound`.
+3. GHL should POST to `https://win-line-connect-production.up.railway.app/webhooks/ghl/line/outbound`.
 4. The middleware should find the Supabase mapping and push the reply to the LINE user.
 5. Check `message_events` in Supabase if the message does not arrive.
 
