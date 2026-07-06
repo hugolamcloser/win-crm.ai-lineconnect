@@ -177,7 +177,7 @@ export async function upsertGhlOAuthToken(input: UpsertGhlOAuthTokenInput): Prom
         location_id: input.locationId,
         company_id: input.companyId ?? null,
         access_token: input.accessToken,
-        refresh_token: input.RefreshToken,
+        refresh_token: input.refreshToken,
         expires_at: input.expiresAt,
         scopes: input.scopes ?? [],
         token_type: input.tokenType ?? null,
