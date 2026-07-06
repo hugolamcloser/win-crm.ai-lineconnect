@@ -13,7 +13,6 @@ type FailureClass = "A" | "B" | "C" | "D" | "E" | "F" | "payload_validation_reac
 type InboundMessagePayload = {
   locationId: string;
   contactId: string;
-  conversationId?: string;
   conversationProviderId?: string;
   externalConversationId: string;
   externalMessageId: string;
@@ -58,6 +57,11 @@ type InboundRequestResult = {
   message?: string;
   authMode: GhlResolvedAuthMode;
   configuredAuthMode: GhlInboundSendAuthMode;
+  diagnostics: InboundSendDiagnostics;
+};
+
+export type GhlInboundMessageSendResult = {
+  response: GhlInboundMessageResponse;
   diagnostics: InboundSendDiagnostics;
 };
 
@@ -130,6 +134,26 @@ function getGhlErrorDetails(responseBody: unknown): { canonicalCode?: string; me
   };
 }
 
+function extractGhlInboundMessageIds(responseBody: unknown): { messageId?: string; conversationId?: string } {
+  return {
+    messageId:
+      getNestedString(responseBody, "messageId") ??
+      getNestedString(responseBody, "id") ??
+      getNestedString(responseBody, "_id") ??
+      getNestedString(responseBody, "message", "id") ??
+      getNestedString(responseBody, "message", "_id") ??
+      getNestedString(responseBody, "data", "messageId") ??
+      getNestedString(responseBody, "data", "id"),
+    conversationId:
+      getNestedString(responseBody, "conversationId") ??
+      getNestedString(responseBody, "conversation_id") ??
+      getNestedString(responseBody, "conversation", "id") ??
+      getNestedString(responseBody, "conversation", "_id") ??
+      getNestedString(responseBody, "data", "conversationId") ??
+      getNestedString(responseBody, "data", "conversation_id")
+  };
+}
+
 function idsEqual(left: string | undefined, right: string | undefined): boolean {
   return Boolean(left?.trim() && right?.trim() && left.trim() === right.trim());
 }
@@ -199,7 +223,6 @@ function buildInboundMessagePayload(input: GhlInboundMessageInput): InboundMessa
   return {
     locationId: requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID),
     contactId: input.contactId,
-    conversationId: input.conversationId,
     ...(shouldSendConversationProviderId() ? { conversationProviderId } : {}),
     externalConversationId: input.externalConversationId,
     externalMessageId: input.externalMessageId,
@@ -469,7 +492,7 @@ async function executeConfiguredInboundMessageRequest(input: {
   };
 }
 
-export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Promise<GhlInboundMessageResponse> {
+export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Promise<GhlInboundMessageSendResult> {
   const path = "/conversations/messages/inbound";
   const method = "POST";
   const payload = buildInboundMessagePayload(input);
@@ -534,6 +557,12 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
     }
 
     const data = result.responseText ? (JSON.parse(result.responseText) as GhlInboundMessageResponse) : {};
+    const ids = extractGhlInboundMessageIds(data);
+    const normalizedResponse: GhlInboundMessageResponse = {
+      ...data,
+      ...(ids.messageId && !data.messageId ? { messageId: ids.messageId } : {}),
+      ...(ids.conversationId && !data.conversationId ? { conversationId: ids.conversationId } : {})
+    };
 
     logger.info(
       {
@@ -557,7 +586,10 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
       "HighLevel inbound conversation provider message accepted"
     );
 
-    return data;
+    return {
+      response: normalizedResponse,
+      diagnostics: result.diagnostics
+    };
   } catch (error) {
     if (error instanceof GhlApiError) {
       logger.error(
