@@ -86,27 +86,10 @@ async function findLineProfileByLocationAndGhlContact(
   contactId: string
 ): Promise<LineProfileRecord | null> {
   const supabase = getSupabase();
-  const { data: tenants, error: tenantsError } = await supabase
-    .from("tenants")
-    .select("id")
-    .eq("location_id", locationId);
-
-  if (tenantsError) {
-    throw new Error(tenantsError.message);
-  }
-
-  const tenantIds = (tenants ?? [])
-    .map((tenant) => (typeof tenant.id === "string" ? tenant.id : undefined))
-    .filter((tenantId): tenantId is string => Boolean(tenantId));
-
-  if (tenantIds.length === 0) {
-    return null;
-  }
-
   const { data, error } = await supabase
     .from("line_profiles")
-    .select("*")
-    .in("tenant_id", tenantIds)
+    .select("*, tenants!inner(location_id)")
+    .eq("tenants.location_id", locationId)
     .eq("ghl_contact_id", contactId)
     .order("updated_at", { ascending: false })
     .limit(1)
@@ -207,6 +190,17 @@ export async function processGhlWorkflowSendLine(payload: Record<string, unknown
   }
 
   const mapping = await findLineProfileByLocationAndGhlContact(locationId, contactId);
+
+  logger.info(
+    {
+      locationId,
+      contactId,
+      mappingFound: Boolean(mapping),
+      lineUserId: mapping?.line_user_id,
+      ghlConversationId: mapping?.ghl_conversation_id
+    },
+    "GHL workflow LINE mapping lookup completed"
+  );
 
   if (!mapping) {
     const tenantId = await ensureDefaultTenant();
