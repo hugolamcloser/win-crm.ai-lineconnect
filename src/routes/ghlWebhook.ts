@@ -1,7 +1,9 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import { env } from "../config/env";
 import { HttpError } from "../middleware/errors";
 import { processGhlOutboundWebhook } from "../services/ghlSyncService";
+import { processGhlWorkflowSendLine, type WorkflowSendLineResponse } from "../services/ghlWorkflowActionService";
 
 export const ghlWebhookRouter = Router();
 
@@ -14,6 +16,50 @@ function validateProviderSecret(headerValue: string | undefined): void {
     throw new HttpError(401, "Invalid GHL provider secret");
   }
 }
+
+function workflowActionResponse(
+  status: WorkflowSendLineResponse["status"],
+  error = "",
+  lineMessageId: string | null = null
+): WorkflowSendLineResponse {
+  return {
+    ok: status === "sent",
+    status,
+    provider: "line",
+    lineMessageId,
+    error
+  };
+}
+
+function isValidWorkflowActionSecret(headerValue: string | undefined): boolean {
+  if (!env.WEBHOOK_SHARED_SECRET || !headerValue) {
+    return false;
+  }
+
+  const expected = Buffer.from(env.WEBHOOK_SHARED_SECRET);
+  const actual = Buffer.from(headerValue);
+
+  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
+}
+
+ghlWebhookRouter.post("/webhooks/ghl/workflows/send-line", async (req, res, next) => {
+  try {
+    if (!isValidWorkflowActionSecret(req.header("x-wincrm-webhook-secret"))) {
+      res.status(401).json(workflowActionResponse("failed", "Unauthorized"));
+      return;
+    }
+
+    if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+      res.status(400).json(workflowActionResponse("failed", "Invalid workflow action payload"));
+      return;
+    }
+
+    const result = await processGhlWorkflowSendLine(req.body as Record<string, unknown>);
+    res.status(result.httpStatus).json(result.body);
+  } catch (error) {
+    next(error);
+  }
+});
 
 ghlWebhookRouter.post(
   ["/webhooks/ghl", "/webhooks/ghl/outbound", "/webhooks/ghl/line/outbound"],
