@@ -5,6 +5,7 @@ import { logger } from "./config/logger";
 import { jsonBodyParser } from "./middleware/jsonBody";
 import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { adminRouter } from "./routes/admin";
+import { appLineRouter } from "./routes/appLine";
 import { debugRouter } from "./routes/debug";
 import { ghlWebhookRouter } from "./routes/ghlWebhook";
 import { healthRouter } from "./routes/health";
@@ -24,6 +25,7 @@ export function createApp() {
   app.use(oauthRouter);
   app.use(lineWebhookRouter);
   app.use(ghlWebhookRouter);
+  app.use(appLineRouter);
   app.use(adminRouter);
 
   app.use(notFoundHandler);
