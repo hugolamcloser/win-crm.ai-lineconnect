@@ -218,11 +218,12 @@ async function getInboundSendAuthContext(locationId: string): Promise<GhlAuthCon
 }
 
 function buildInboundMessagePayload(input: GhlInboundMessageInput): InboundMessagePayload {
-  const conversationProviderId = getConfiguredConversationProviderId();
+  const locationId = input.locationId?.trim() || requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
+  const conversationProviderId = input.conversationProviderId?.trim() || getConfiguredConversationProviderId();
   const attachments = (input.attachments ?? []).filter((attachment) => attachment.trim().length > 0);
 
   return {
-    locationId: requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID),
+    locationId,
     contactId: input.contactId,
     ...(shouldSendConversationProviderId() ? { conversationProviderId } : {}),
     externalConversationId: input.externalConversationId,
@@ -370,7 +371,7 @@ function buildInboundSendDiagnostics(input: {
     contact_step: "send_message",
     endpoint: input.path,
     method: input.method,
-    providerId: getConfiguredConversationProviderId(),
+    providerId: input.payload.conversationProviderId ?? getConfiguredConversationProviderId(),
     send_conversation_provider_id: shouldSendConversationProviderId(),
     provider_id_will_be_sent: "conversationProviderId" in input.payload,
     locationId: input.payload.locationId,

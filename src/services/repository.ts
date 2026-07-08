@@ -28,6 +28,15 @@ export type LineChannelRecord = {
   updated_at: string;
 };
 
+export type TenantRecord = {
+  id: string;
+  location_id: string;
+  ghl_provider_id: string;
+  line_channel_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type UpsertLineProfileInput = {
   tenantId: string;
   lineUserId: string;
@@ -309,6 +318,27 @@ export async function ensureDefaultTenant(): Promise<string> {
     .single();
 
   return requireSingle<{ id: string }>(data, error).id;
+}
+
+export async function getTenantById(tenantId: string): Promise<TenantRecord | null> {
+  const normalizedTenantId = tenantId.trim();
+
+  if (!normalizedTenantId) {
+    return null;
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("tenants")
+    .select("*")
+    .eq("id", normalizedTenantId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as TenantRecord | null;
 }
 
 export async function getLineChannelByWebhookKey(webhookKey: string): Promise<LineChannelRecord | null> {
