@@ -33,6 +33,7 @@ export type UpsertLineProfileInput = {
   lineUserId: string;
   lineSourceType: string;
   lineSourceId: string;
+  lineChannelId?: string;
   displayName?: string;
   pictureUrl?: string;
 };
@@ -364,20 +365,32 @@ export async function getActiveLineChannelByTenantId(tenantId: string): Promise<
 
 export async function upsertLineProfile(input: UpsertLineProfileInput): Promise<LineProfileRecord> {
   const supabase = getSupabase();
+  const upsertPayload: {
+    tenant_id: string;
+    line_user_id: string;
+    line_source_type: string;
+    line_source_id: string;
+    line_channel_id?: string;
+    display_name: string | null;
+    picture_url: string | null;
+    updated_at: string;
+  } = {
+    tenant_id: input.tenantId,
+    line_user_id: input.lineUserId,
+    line_source_type: input.lineSourceType,
+    line_source_id: input.lineSourceId,
+    display_name: input.displayName ?? null,
+    picture_url: input.pictureUrl ?? null,
+    updated_at: new Date().toISOString()
+  };
+
+  if (input.lineChannelId) {
+    upsertPayload.line_channel_id = input.lineChannelId;
+  }
+
   const { data, error } = await supabase
     .from("line_profiles")
-    .upsert(
-      {
-        tenant_id: input.tenantId,
-        line_user_id: input.lineUserId,
-        line_source_type: input.lineSourceType,
-        line_source_id: input.lineSourceId,
-        display_name: input.displayName ?? null,
-        picture_url: input.pictureUrl ?? null,
-        updated_at: new Date().toISOString()
-      },
-      { onConflict: "tenant_id,line_user_id" }
-    )
+    .upsert(upsertPayload, { onConflict: "tenant_id,line_user_id" })
     .select("*")
     .single();
 
