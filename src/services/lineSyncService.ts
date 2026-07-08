@@ -1,3 +1,4 @@
+import { env } from "../config/env";
 import { logger } from "../config/logger";
 import { sendInboundMessageToGhl } from "../integrations/ghlInboundMessageClient";
 import {
@@ -13,6 +14,7 @@ import { redactSecrets } from "../utils/redaction";
 import {
   clearGhlMapping,
   ensureDefaultTenant,
+  getTenantById,
   linkGhlMapping,
   markWebhookEventProcessed,
   saveMessageEvent,
@@ -26,6 +28,53 @@ export type LineInboundProcessingContext = {
   lineChannelId?: string;
   channelAccessToken?: string;
 };
+
+type TenantGhlConfigSource = "tenant" | "env_fallback";
+
+type ResolvedTenantGhlConfig = {
+  locationId?: string;
+  providerId?: string;
+  configSource: TenantGhlConfigSource;
+};
+
+function getTrimmedValue(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function getEnvGhlConfig(): ResolvedTenantGhlConfig {
+  return {
+    locationId: getTrimmedValue(env.GHL_LOCATION_ID),
+    providerId: getTrimmedValue(env.GHL_CUSTOM_PROVIDER_ID),
+    configSource: "env_fallback"
+  };
+}
+
+async function resolveTenantGhlConfig(tenantId: string): Promise<ResolvedTenantGhlConfig> {
+  try {
+    const tenant = await getTenantById(tenantId);
+    const locationId = getTrimmedValue(tenant?.location_id);
+    const providerId = getTrimmedValue(tenant?.ghl_provider_id);
+
+    if (locationId && providerId) {
+      return {
+        locationId,
+        providerId,
+        configSource: "tenant"
+      };
+    }
+  } catch (error) {
+    logger.warn(
+      {
+        tenantId,
+        error: redactSecrets(serializeError(error))
+      },
+      "Failed to load tenant GHL config for LINE inbound; falling back to env config"
+    );
+  }
+
+  return getEnvGhlConfig();
+}
 
 function getLineUserId(source: LineSource): string | undefined {
   return "userId" in source ? source.userId : undefined;
@@ -99,10 +148,12 @@ async function createAndLinkGhlContactForLineUser(input: {
   lineUserId: string;
   lineMessageId?: string;
   profile: LineProfile | null;
+  ghlConfig: ResolvedTenantGhlConfig;
   metadataWarnings: string[];
 }): Promise<LineProfileRecord> {
   const contact = await createGhlContact({
     lineUserId: input.lineUserId,
+    locationId: input.ghlConfig.locationId,
     displayName: input.profile?.displayName ?? undefined,
     pictureUrl: input.profile?.pictureUrl ?? undefined
   });
@@ -120,6 +171,7 @@ async function createAndLinkGhlContactForLineUser(input: {
   try {
     await ensureGhlContactLineMetadata(contact.id, {
       lineUserId: input.lineUserId,
+      locationId: input.ghlConfig.locationId,
       displayName: input.profile?.displayName ?? undefined,
       pictureUrl: input.profile?.pictureUrl ?? undefined
     });
@@ -146,6 +198,7 @@ async function recoverStaleGhlContactMapping(input: {
   lineMessageId?: string;
   record: LineProfileRecord;
   profile: LineProfile | null;
+  ghlConfig: ResolvedTenantGhlConfig;
   metadataWarnings: string[];
   cause: unknown;
 }): Promise<LineProfileRecord> {
@@ -173,6 +226,7 @@ async function recoverStaleGhlContactMapping(input: {
     lineUserId: input.lineUserId,
     lineMessageId: input.lineMessageId,
     profile: input.profile,
+    ghlConfig: input.ghlConfig,
     metadataWarnings: input.metadataWarnings
   });
 
@@ -203,6 +257,17 @@ export async function processLineWebhookEvent(event: LineWebhookEvent, context: 
 
   try {
     const tenantId = context.tenantId ?? (await ensureDefaultTenant());
+    const ghlConfig = await resolveTenantGhlConfig(tenantId);
+
+    logger.info(
+      {
+        tenantId,
+        locationId: ghlConfig.locationId,
+        providerId: ghlConfig.providerId,
+        configSource: ghlConfig.configSource
+      },
+      "Resolved GHL tenant config for LINE inbound processing"
+    );
 
     if (!lineUserId) {
       return { status: "skipped", reason: "LINE event has no userId" };
@@ -280,12 +345,14 @@ export async function processLineWebhookEvent(event: LineWebhookEvent, context: 
           lineUserId,
           lineMessageId,
           profile,
+          ghlConfig,
           metadataWarnings
         });
       } else {
         try {
           await ensureGhlContactLineMetadata(record.ghl_contact_id, {
             lineUserId,
+            locationId: ghlConfig.locationId,
             displayName: profile?.displayName ?? undefined,
             pictureUrl: profile?.pictureUrl ?? undefined
           });
@@ -297,6 +364,7 @@ export async function processLineWebhookEvent(event: LineWebhookEvent, context: 
               lineMessageId,
               record,
               profile,
+              ghlConfig,
               metadataWarnings,
               cause: error
             });
@@ -324,6 +392,8 @@ export async function processLineWebhookEvent(event: LineWebhookEvent, context: 
       const sendInboundMessage = () =>
         sendInboundMessageToGhl({
           contactId: record.ghl_contact_id as string,
+          locationId: ghlConfig.locationId,
+          conversationProviderId: ghlConfig.providerId,
           externalConversationId: buildLineExternalConversationId(lineUserId),
           externalMessageId: lineMessage.id,
           message: text,
@@ -341,6 +411,7 @@ export async function processLineWebhookEvent(event: LineWebhookEvent, context: 
             lineMessageId,
             record,
             profile,
+            ghlConfig,
             metadataWarnings,
             cause: error
           });
