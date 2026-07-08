@@ -14,14 +14,20 @@ import { healthRouter } from "./routes/health";
 import { lineWebhookRouter } from "./routes/lineWebhook";
 import { oauthRouter } from "./routes/oauth";
 
-const sensitiveQueryKeys = new Set([
+const sensitiveQueryKeyNames = [
   "pageToken",
   "actionToken",
   "channelAccessToken",
   "channelSecret",
   "channel_access_token",
   "channel_secret"
-]);
+] as const;
+
+const sensitiveQueryKeys = new Set(sensitiveQueryKeyNames.map((key) => key.toLowerCase()));
+
+function isSensitiveQueryKey(key: string): boolean {
+  return sensitiveQueryKeys.has(key.toLowerCase());
+}
 
 function redactSensitiveUrlQuery(rawUrl: string | undefined): string | undefined {
   if (!rawUrl) {
@@ -32,8 +38,8 @@ function redactSensitiveUrlQuery(rawUrl: string | undefined): string | undefined
     const parsedUrl = new URL(rawUrl, "http://localhost");
     let changed = false;
 
-    for (const key of sensitiveQueryKeys) {
-      if (parsedUrl.searchParams.has(key)) {
+    for (const key of Array.from(parsedUrl.searchParams.keys())) {
+      if (isSensitiveQueryKey(key)) {
         parsedUrl.searchParams.set(key, "[redacted]");
         changed = true;
       }
@@ -48,12 +54,63 @@ function redactSensitiveUrlQuery(rawUrl: string | undefined): string | undefined
   }
 }
 
+function redactSensitiveObjectKeys(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+
+  const redactedValue = { ...(value as Record<string, unknown>) };
+
+  for (const key of Object.keys(redactedValue)) {
+    if (isSensitiveQueryKey(key)) {
+      redactedValue[key] = "[redacted]";
+    }
+  }
+
+  return redactedValue;
+}
+
+function redactUrlHeaderValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return redactSensitiveUrlQuery(value);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => (typeof item === "string" ? redactSensitiveUrlQuery(item) : item));
+  }
+
+  return value;
+}
+
+function redactRequestHeaders(headers: unknown): unknown {
+  if (!headers || typeof headers !== "object" || Array.isArray(headers)) {
+    return headers;
+  }
+
+  const redactedHeaders = redactSensitiveObjectKeys(headers) as Record<string, unknown>;
+
+  for (const key of Object.keys(redactedHeaders)) {
+    if (["referer", "referrer"].includes(key.toLowerCase())) {
+      redactedHeaders[key] = redactUrlHeaderValue(redactedHeaders[key]);
+    }
+  }
+
+  return redactedHeaders;
+}
+
 function redactRequestSerializer(req: IncomingMessage): Record<string, unknown> {
-  const serializedReq = pino.stdSerializers.req(req) as unknown as Record<string, unknown> & { url?: unknown };
+  const serializedReq = pino.stdSerializers.req(req) as unknown as Record<string, unknown> & {
+    headers?: unknown;
+    query?: unknown;
+    url?: unknown;
+  };
 
   if (typeof serializedReq.url === "string") {
     serializedReq.url = redactSensitiveUrlQuery(serializedReq.url);
   }
+
+  serializedReq.query = redactSensitiveObjectKeys(serializedReq.query);
+  serializedReq.headers = redactRequestHeaders(serializedReq.headers);
 
   return serializedReq;
 }
@@ -70,11 +127,7 @@ function redactResponseHeaders(headers: unknown): unknown {
       continue;
     }
 
-    if (typeof value === "string") {
-      redactedHeaders[key] = redactSensitiveUrlQuery(value);
-    } else if (Array.isArray(value)) {
-      redactedHeaders[key] = value.map((item) => (typeof item === "string" ? redactSensitiveUrlQuery(item) : item));
-    }
+    redactedHeaders[key] = redactUrlHeaderValue(value);
   }
 
   return redactedHeaders;
