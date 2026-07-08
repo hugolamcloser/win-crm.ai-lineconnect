@@ -332,6 +332,27 @@ export async function getLineChannelByWebhookKey(webhookKey: string): Promise<Li
   return data as LineChannelRecord | null;
 }
 
+export async function getLineChannelById(lineChannelId: string): Promise<LineChannelRecord | null> {
+  const normalizedLineChannelId = lineChannelId.trim();
+
+  if (!normalizedLineChannelId) {
+    return null;
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("line_channels")
+    .select("*")
+    .eq("id", normalizedLineChannelId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as LineChannelRecord | null;
+}
+
 export async function getLineChannelByTenantId(tenantId: string): Promise<LineChannelRecord | null> {
   const supabase = getSupabase();
   const { data, error } = await supabase
