@@ -15,6 +15,16 @@ export type LinePushTextMessageResult = {
   };
 };
 
+export type LineBotInfo = {
+  userId?: string;
+  basicId?: string;
+  displayName?: string;
+  pictureUrl?: string;
+  chatMode?: string;
+  markAsReadMode?: string;
+  [key: string]: unknown;
+};
+
 function resolveLineChannelAccessToken(channelAccessToken?: string): string {
   const normalizedChannelAccessToken = channelAccessToken?.trim();
 
@@ -79,6 +89,14 @@ export async function getLineProfile(userId: string, channelAccessToken?: string
 
     throw error;
   }
+}
+
+export async function getLineBotInfo(channelAccessToken?: string): Promise<LineBotInfo> {
+  return lineRequest<LineBotInfo>("/v2/bot/info", undefined, channelAccessToken);
+}
+
+export async function validateLineChannelAccessToken(channelAccessToken: string): Promise<void> {
+  await getLineBotInfo(channelAccessToken);
 }
 
 export async function pushLineTextMessage(
