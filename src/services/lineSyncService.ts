@@ -21,6 +21,12 @@ import {
   type LineProfileRecord
 } from "./repository";
 
+export type LineInboundProcessingContext = {
+  tenantId?: string;
+  lineChannelId?: string;
+  channelAccessToken?: string;
+};
+
 function getLineUserId(source: LineSource): string | undefined {
   return "userId" in source ? source.userId : undefined;
 }
@@ -183,7 +189,7 @@ async function recoverStaleGhlContactMapping(input: {
   return recoveredRecord;
 }
 
-export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<{
+export async function processLineWebhookEvent(event: LineWebhookEvent, context: LineInboundProcessingContext = {}): Promise<{
   status: "processed" | "skipped" | "failed";
   reason?: string;
 }> {
@@ -196,7 +202,7 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
   });
 
   try {
-    const tenantId = await ensureDefaultTenant();
+    const tenantId = context.tenantId ?? (await ensureDefaultTenant());
 
     if (!lineUserId) {
       return { status: "skipped", reason: "LINE event has no userId" };
@@ -216,12 +222,13 @@ export async function processLineWebhookEvent(event: LineWebhookEvent): Promise<
     }
 
     const lineMessage = event.message;
-    const profile = event.source.type === "user" ? await getLineProfile(lineUserId) : null;
+    const profile = event.source.type === "user" ? await getLineProfile(lineUserId, context.channelAccessToken) : null;
     let record = await upsertLineProfile({
       tenantId,
       lineUserId,
       lineSourceType: event.source.type,
       lineSourceId: getLineSourceId(event.source),
+      lineChannelId: context.lineChannelId,
       displayName: profile?.displayName,
       pictureUrl: profile?.pictureUrl
     });
