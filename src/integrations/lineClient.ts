@@ -15,6 +15,16 @@ export type LinePushTextMessageResult = {
   };
 };
 
+function resolveLineChannelAccessToken(channelAccessToken?: string): string {
+  const normalizedChannelAccessToken = channelAccessToken?.trim();
+
+  if (normalizedChannelAccessToken) {
+    return normalizedChannelAccessToken;
+  }
+
+  return requireEnvValue("LINE_CHANNEL_ACCESS_TOKEN", env.LINE_CHANNEL_ACCESS_TOKEN);
+}
+
 export function verifyLineSignature(rawBody: Buffer, signature: string | undefined): boolean {
   if (!env.LINE_CHANNEL_SECRET || !signature) {
     return false;
@@ -31,11 +41,11 @@ export function verifyLineSignature(rawBody: Buffer, signature: string | undefin
   return crypto.timingSafeEqual(expectedBuffer, actualBuffer);
 }
 
-async function lineRequest<T>(path: string, init?: RequestInit): Promise<T> {
+async function lineRequest<T>(path: string, init?: RequestInit, channelAccessToken?: string): Promise<T> {
   const response = await fetch(`${lineApiBaseUrl}${path}`, {
     ...init,
     headers: {
-      Authorization: `Bearer ${requireEnvValue("LINE_CHANNEL_ACCESS_TOKEN", env.LINE_CHANNEL_ACCESS_TOKEN)}`,
+      Authorization: `Bearer ${resolveLineChannelAccessToken(channelAccessToken)}`,
       "Content-Type": "application/json",
       ...(init?.headers ?? {})
     }
@@ -53,9 +63,9 @@ async function lineRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function getLineProfile(userId: string): Promise<LineProfile | null> {
+export async function getLineProfile(userId: string, channelAccessToken?: string): Promise<LineProfile | null> {
   try {
-    return await lineRequest<LineProfile>(`/v2/bot/profile/${encodeURIComponent(userId)}`);
+    return await lineRequest<LineProfile>(`/v2/bot/profile/${encodeURIComponent(userId)}`, undefined, channelAccessToken);
   } catch (error) {
     if (error instanceof Error && error.message.includes("404")) {
       return null;
@@ -65,19 +75,27 @@ export async function getLineProfile(userId: string): Promise<LineProfile | null
   }
 }
 
-export async function pushLineTextMessage(to: string, text: string): Promise<LinePushTextMessageResult> {
-  const response = await lineRequest<LinePushTextMessageResult["raw"] | undefined>("/v2/bot/message/push", {
-    method: "POST",
-    body: JSON.stringify({
-      to,
-      messages: [
-        {
-          type: "text",
-          text
-        }
-      ]
-    })
-  });
+export async function pushLineTextMessage(
+  to: string,
+  text: string,
+  channelAccessToken?: string
+): Promise<LinePushTextMessageResult> {
+  const response = await lineRequest<LinePushTextMessageResult["raw"] | undefined>(
+    "/v2/bot/message/push",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        to,
+        messages: [
+          {
+            type: "text",
+            text
+          }
+        ]
+      })
+    },
+    channelAccessToken
+  );
 
   return {
     messageId: response?.sentMessages?.[0]?.id,
