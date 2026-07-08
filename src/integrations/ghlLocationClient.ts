@@ -296,9 +296,10 @@ async function executeLocationRequest<T>(input: {
   requestPayload?: unknown;
   contactStep: GhlLineInboundContactStep;
   contactId?: string;
+  locationId?: string;
 }): Promise<LocationRequestResult<T>> {
   const method = input.init?.method ?? "GET";
-  const locationId = requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
+  const locationId = input.locationId?.trim() || requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
   let auth = await getLocationApiAuthContext(locationId);
 
   logger.debug(
@@ -377,8 +378,9 @@ function getMetadataUpdateStep(input: GhlCreateContactInput): GhlLineInboundCont
 export async function createGhlContact(input: GhlCreateContactInput): Promise<GhlContactResponse> {
   const displayName = normalizeDisplayName(input);
   const nameParts = splitDisplayName(displayName);
+  const locationId = input.locationId?.trim() || requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
   const payload = {
-    locationId: requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID),
+    locationId,
     name: displayName,
     firstName: nameParts.firstName,
     lastName: nameParts.lastName,
@@ -395,7 +397,8 @@ export async function createGhlContact(input: GhlCreateContactInput): Promise<Gh
       body: JSON.stringify(payload)
     },
     requestPayload: payload,
-    contactStep: "create"
+    contactStep: "create",
+    locationId
   });
   const contactId = extractContactId(response.data);
 
@@ -415,21 +418,23 @@ export async function createGhlContact(input: GhlCreateContactInput): Promise<Gh
   };
 }
 
-export async function getGhlContact(contactId: string): Promise<Record<string, unknown>> {
+export async function getGhlContact(contactId: string, locationId?: string): Promise<Record<string, unknown>> {
   return (
     await executeLocationRequest<Record<string, unknown>>({
       path: `/contacts/${encodeURIComponent(contactId)}`,
       contactStep: "search",
-      contactId
+      contactId,
+      locationId
     })
   ).data;
 }
 
 export async function ensureGhlContactLineMetadata(contactId: string, input: GhlCreateContactInput): Promise<void> {
+  const locationId = input.locationId?.trim() || requireEnvValue("GHL_LOCATION_ID", env.GHL_LOCATION_ID);
   let existingTags: string[] = [];
 
   try {
-    existingTags = getTagsFromContactPayload(await getGhlContact(contactId));
+    existingTags = getTagsFromContactPayload(await getGhlContact(contactId, locationId));
   } catch (error) {
     if (isStaleGhlContactError(error)) {
       throw error;
@@ -456,7 +461,8 @@ export async function ensureGhlContactLineMetadata(contactId: string, input: Ghl
     },
     requestPayload: payload,
     contactStep: getMetadataUpdateStep(input),
-    contactId
+    contactId,
+    locationId
   });
 }
 
