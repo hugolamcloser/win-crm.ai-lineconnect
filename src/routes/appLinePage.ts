@@ -5,6 +5,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { env } from "../config/env";
 import { HttpError } from "../middleware/errors";
+import { requireSharedSecret } from "../middleware/sharedSecret";
 import {
   connectLineChannel,
   disconnectLineChannel,
@@ -14,42 +15,40 @@ import {
 
 type PageAction = "connect" | "disconnect";
 
-type PageActionTokenPayload = {
-  action: PageAction;
+type SignedPagePayload = {
+  kind: "page_access" | "page_action";
+  action?: PageAction;
   locationId: string;
   expiresAt: number;
   nonce: string;
 };
 
-const pageFormBodyParser = express.urlencoded({
-  extended: false,
-  limit: "32kb"
-});
+const tokenTtlMs = 15 * 60 * 1000;
 
+const pageFormBodyParser = express.urlencoded({ extended: false, limit: "32kb" });
+const pageLinkBodySchema = z.object({ locationId: z.string().min(1) });
+const pageQuerySchema = z.object({
+  locationId: z.string().min(1),
+  pageToken: z.string().min(1),
+  status: z.string().optional()
+});
 const pageConnectBodySchema = z.object({
   locationId: z.string().min(1),
+  pageToken: z.string().min(1),
   actionToken: z.string().min(1),
   channelAccessToken: z.string().min(1),
   channelSecret: z.string().min(1)
 });
-
 const pageDisconnectBodySchema = z.object({
   locationId: z.string().min(1),
+  pageToken: z.string().min(1),
   actionToken: z.string().min(1)
 });
 
 export const appLinePageRouter = Router();
 
 function getPublicBaseUrl(req: Request): string {
-  if (env.PUBLIC_BASE_URL) {
-    return env.PUBLIC_BASE_URL;
-  }
-
-  return `${req.protocol}://${req.get("host")}`;
-}
-
-function getLocationIdFromQuery(req: Request): string {
-  return z.object({ locationId: z.string().min(1) }).parse(req.query).locationId;
+  return env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
 }
 
 function getPageSigningSecret(): string {
@@ -60,53 +59,6 @@ function getPageSigningSecret(): string {
   }
 
   return secret;
-}
-
-function signPagePayload(payload: string): string {
-  return crypto.createHmac("sha256", getPageSigningSecret()).update(payload).digest("base64url");
-}
-
-function createPageActionToken(locationId: string, action: PageAction): string {
-  const payload: PageActionTokenPayload = {
-    action,
-    locationId,
-    expiresAt: Date.now() + 15 * 60 * 1000,
-    nonce: crypto.randomBytes(16).toString("hex")
-  };
-  const payloadText = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-
-  return `${payloadText}.${signPagePayload(payloadText)}`;
-}
-
-function timingSafeStringEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function verifyPageActionToken(token: string, locationId: string, action: PageAction): void {
-  const [payloadText, signature] = token.split(".");
-
-  if (!payloadText || !signature || !timingSafeStringEqual(signature, signPagePayload(payloadText))) {
-    throw new HttpError(401, "Invalid page action token");
-  }
-
-  let payload: PageActionTokenPayload;
-
-  try {
-    payload = JSON.parse(Buffer.from(payloadText, "base64url").toString("utf8")) as PageActionTokenPayload;
-  } catch {
-    throw new HttpError(401, "Invalid page action token");
-  }
-
-  if (payload.locationId !== locationId || payload.action !== action || payload.expiresAt < Date.now()) {
-    throw new HttpError(401, "Invalid page action token");
-  }
 }
 
 function escapeHtml(value: unknown): string {
@@ -130,6 +82,82 @@ function getReadableError(error: unknown): string {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
 
+function signPayload(payloadText: string): string {
+  return crypto.createHmac("sha256", getPageSigningSecret()).update(payloadText).digest("base64url");
+}
+
+function timingSafeStringEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function createSignedToken(input: {
+  kind: SignedPagePayload["kind"];
+  locationId: string;
+  action?: PageAction;
+}): { token: string; expiresAt: string } {
+  const expiresAt = Date.now() + tokenTtlMs;
+  const payload: SignedPagePayload = {
+    kind: input.kind,
+    action: input.action,
+    locationId: input.locationId,
+    expiresAt,
+    nonce: crypto.randomBytes(16).toString("hex")
+  };
+  const payloadText = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+
+  return {
+    token: `${payloadText}.${signPayload(payloadText)}`,
+    expiresAt: new Date(expiresAt).toISOString()
+  };
+}
+
+function readSignedToken(token: string, expectedKind: SignedPagePayload["kind"]): SignedPagePayload {
+  const [payloadText, signature] = token.split(".");
+
+  if (!payloadText || !signature || !timingSafeStringEqual(signature, signPayload(payloadText))) {
+    throw new HttpError(401, "Invalid page token");
+  }
+
+  let payload: SignedPagePayload;
+
+  try {
+    payload = JSON.parse(Buffer.from(payloadText, "base64url").toString("utf8")) as SignedPagePayload;
+  } catch {
+    throw new HttpError(401, "Invalid page token");
+  }
+
+  if (payload.kind !== expectedKind || payload.expiresAt < Date.now()) {
+    throw new HttpError(401, "Invalid page token");
+  }
+
+  return payload;
+}
+
+function verifyPageAccessToken(token: string, locationId: string): void {
+  const payload = readSignedToken(token, "page_access");
+
+  if (payload.locationId !== locationId) {
+    throw new HttpError(401, "Invalid page token");
+  }
+}
+
+function verifyPageActionToken(token: string, locationId: string, action: PageAction): void {
+  const payload = readSignedToken(token, "page_action");
+
+  if (payload.locationId !== locationId || payload.action !== action) {
+    throw new HttpError(401, "Invalid page action token");
+  }
+}
+
+function buildPageUrl(req: Request, locationId: string, pageToken: string): string {
+  return `${getPublicBaseUrl(req).replace(/\/+$/, "")}/app/line/page?locationId=${encodeURIComponent(
+    locationId
+  )}&pageToken=${encodeURIComponent(pageToken)}`;
+}
+
 function setPageHeaders(res: Response, scriptNonce: string): void {
   res.removeHeader("X-Frame-Options");
   res.setHeader("Cache-Control", "no-store");
@@ -151,8 +179,15 @@ function setPageHeaders(res: Response, scriptNonce: string): void {
 async function renderLinePage(
   req: Request,
   res: Response,
-  input: { locationId: string; statusMessage?: string; errorMessage?: string }
+  input: {
+    locationId: string;
+    pageToken: string;
+    statusMessage?: string;
+    errorMessage?: string;
+  }
 ): Promise<void> {
+  verifyPageAccessToken(input.pageToken, input.locationId);
+
   const settings = await getLineConnectionSettings({
     locationId: input.locationId,
     publicBaseUrl: getPublicBaseUrl(req)
@@ -165,14 +200,23 @@ async function renderLinePage(
       ...input,
       settings,
       scriptNonce,
-      connectActionToken: createPageActionToken(input.locationId, "connect"),
-      disconnectActionToken: createPageActionToken(input.locationId, "disconnect")
+      connectActionToken: createSignedToken({
+        kind: "page_action",
+        locationId: input.locationId,
+        action: "connect"
+      }).token,
+      disconnectActionToken: createSignedToken({
+        kind: "page_action",
+        locationId: input.locationId,
+        action: "disconnect"
+      }).token
     })
   );
 }
 
 function buildLinePageHtml(input: {
   locationId: string;
+  pageToken: string;
   settings: LineConnectionSettings;
   connectActionToken: string;
   disconnectActionToken: string;
@@ -181,9 +225,8 @@ function buildLinePageHtml(input: {
   errorMessage?: string;
 }): string {
   const webhookUrl = input.settings.webhook_url ?? "";
-  const connected = input.settings.connected;
-  const statusLabel = connected ? "Connected" : "Not connected";
-  const statusClass = connected ? "connected" : "disconnected";
+  const statusLabel = input.settings.connected ? "Connected" : "Not connected";
+  const statusClass = input.settings.connected ? "connected" : "disconnected";
 
   return `<!doctype html>
 <html lang="en">
@@ -224,6 +267,7 @@ function buildLinePageHtml(input: {
     <h2>Connect LINE Official Account</h2>
     <form method="post" action="/app/line/page/connect" autocomplete="off">
       <input type="hidden" name="locationId" value="${escapeHtml(input.locationId)}">
+      <input type="hidden" name="pageToken" value="${escapeHtml(input.pageToken)}">
       <input type="hidden" name="actionToken" value="${escapeHtml(input.connectActionToken)}">
       <div class="field"><label for="channel-access-token">Channel access token</label><textarea id="channel-access-token" name="channelAccessToken" required spellcheck="false" autocomplete="off"></textarea></div>
       <div class="field"><label for="channel-secret">Channel secret</label><input id="channel-secret" name="channelSecret" type="password" required autocomplete="off"></div>
@@ -234,8 +278,9 @@ function buildLinePageHtml(input: {
     <h2>Disconnect</h2>
     <form method="post" action="/app/line/page/disconnect">
       <input type="hidden" name="locationId" value="${escapeHtml(input.locationId)}">
+      <input type="hidden" name="pageToken" value="${escapeHtml(input.pageToken)}">
       <input type="hidden" name="actionToken" value="${escapeHtml(input.disconnectActionToken)}">
-      <div class="actions"><button class="danger" type="submit" ${connected ? "" : "disabled"}>Disconnect LINE</button></div>
+      <div class="actions"><button class="danger" type="submit" ${input.settings.connected ? "" : "disabled"}>Disconnect LINE</button></div>
     </form>
   </section>
 </main>
@@ -248,11 +293,28 @@ copyButton?.addEventListener("click",async()=>{if(!webhookInput?.value)return;tr
 </html>`;
 }
 
+appLinePageRouter.post("/app/line/page-link", requireSharedSecret, async (req, res, next) => {
+  try {
+    const input = pageLinkBodySchema.parse(req.body);
+    const { token, expiresAt } = createSignedToken({ kind: "page_access", locationId: input.locationId });
+
+    res.json({
+      page_url: buildPageUrl(req, input.locationId, token),
+      expires_at: expiresAt
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 appLinePageRouter.get("/app/line/page", async (req, res, next) => {
   try {
+    const query = pageQuerySchema.parse(req.query);
+
     await renderLinePage(req, res, {
-      locationId: getLocationIdFromQuery(req),
-      statusMessage: typeof req.query.status === "string" ? req.query.status : undefined
+      locationId: query.locationId,
+      pageToken: query.pageToken,
+      statusMessage: query.status
     });
   } catch (error) {
     next(error);
@@ -262,6 +324,7 @@ appLinePageRouter.get("/app/line/page", async (req, res, next) => {
 appLinePageRouter.post("/app/line/page/connect", pageFormBodyParser, async (req, res, next) => {
   try {
     const input = pageConnectBodySchema.parse(req.body);
+    verifyPageAccessToken(input.pageToken, input.locationId);
     verifyPageActionToken(input.actionToken, input.locationId, "connect");
 
     await connectLineChannel({
@@ -271,15 +334,14 @@ appLinePageRouter.post("/app/line/page/connect", pageFormBodyParser, async (req,
       publicBaseUrl: getPublicBaseUrl(req)
     });
 
-    res.redirect(303, `/app/line/page?locationId=${encodeURIComponent(input.locationId)}&status=LINE%20connected`);
+    const { token } = createSignedToken({ kind: "page_access", locationId: input.locationId });
+    res.redirect(303, `${buildPageUrl(req, input.locationId, token)}&status=LINE%20connected`);
   } catch (error) {
     try {
-      const locationId =
-        typeof req.body?.locationId === "string" && req.body.locationId.trim()
-          ? req.body.locationId
-          : getLocationIdFromQuery(req);
+      const locationId = typeof req.body?.locationId === "string" && req.body.locationId.trim() ? req.body.locationId : "";
+      const pageToken = typeof req.body?.pageToken === "string" ? req.body.pageToken : "";
 
-      await renderLinePage(req, res, { locationId, errorMessage: getReadableError(error) });
+      await renderLinePage(req, res, { locationId, pageToken, errorMessage: getReadableError(error) });
     } catch (renderError) {
       next(renderError);
     }
@@ -289,6 +351,7 @@ appLinePageRouter.post("/app/line/page/connect", pageFormBodyParser, async (req,
 appLinePageRouter.post("/app/line/page/disconnect", pageFormBodyParser, async (req, res, next) => {
   try {
     const input = pageDisconnectBodySchema.parse(req.body);
+    verifyPageAccessToken(input.pageToken, input.locationId);
     verifyPageActionToken(input.actionToken, input.locationId, "disconnect");
 
     await disconnectLineChannel({
@@ -296,15 +359,14 @@ appLinePageRouter.post("/app/line/page/disconnect", pageFormBodyParser, async (r
       publicBaseUrl: getPublicBaseUrl(req)
     });
 
-    res.redirect(303, `/app/line/page?locationId=${encodeURIComponent(input.locationId)}&status=LINE%20disconnected`);
+    const { token } = createSignedToken({ kind: "page_access", locationId: input.locationId });
+    res.redirect(303, `${buildPageUrl(req, input.locationId, token)}&status=LINE%20disconnected`);
   } catch (error) {
     try {
-      const locationId =
-        typeof req.body?.locationId === "string" && req.body.locationId.trim()
-          ? req.body.locationId
-          : getLocationIdFromQuery(req);
+      const locationId = typeof req.body?.locationId === "string" && req.body.locationId.trim() ? req.body.locationId : "";
+      const pageToken = typeof req.body?.pageToken === "string" ? req.body.pageToken : "";
 
-      await renderLinePage(req, res, { locationId, errorMessage: getReadableError(error) });
+      await renderLinePage(req, res, { locationId, pageToken, errorMessage: getReadableError(error) });
     } catch (renderError) {
       next(renderError);
     }
