@@ -55,14 +55,16 @@ function buildWebhookUrl(publicBaseUrl: string, webhookKey: string | null): stri
 function toSettings(channel: LineChannelRecord | null, publicBaseUrl: string): LineConnectionSettings {
   const webhookKey = channel?.webhook_key?.trim() || null;
   const isActive = Boolean(channel?.is_active);
+  const channelAccessTokenLength = isActive ? channel?.channel_access_token?.length ?? 0 : 0;
+  const channelSecretLength = isActive ? channel?.channel_secret?.length ?? 0 : 0;
 
   return {
     connected: isActive,
     webhook_key: webhookKey,
     webhook_url: buildWebhookUrl(publicBaseUrl, webhookKey),
     is_active: isActive,
-    channel_access_token_length: isActive ? channel?.channel_access_token?.length ?? 0 : 0,
-    channel_secret_length: isActive ? channel?.channel_secret?.length ?? 0 : 0
+    channel_access_token_length: channelAccessTokenLength,
+    channel_secret_length: channelSecretLength
   };
 }
 
