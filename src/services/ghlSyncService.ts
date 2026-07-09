@@ -2,7 +2,10 @@ import { logger } from "../config/logger";
 import { pushLineTextMessage } from "../integrations/lineClient";
 import { HttpError } from "../middleware/errors";
 import type { NormalizedGhlOutboundMessage } from "../types/ghl";
-import { isLineChannelNotConnectedError, resolveLineChannelForOutbound } from "./lineOutboundChannelService";
+import {
+  isLineChannelNotConnectedError,
+  resolveLineChannelForOutbound
+} from "./lineOutboundChannelService";
 import { ensureDefaultTenant, findLineProfileByGhlIds, saveMessageEvent } from "./repository";
 
 function getString(value: unknown): string | undefined {
