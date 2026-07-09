@@ -3,11 +3,18 @@ import { z } from "zod";
 
 dotenv.config();
 
+const defaultCustomPageFrameAncestors =
+  "'self' https://app.gohighlevel.com https://*.gohighlevel.com https://app.leadconnectorhq.com https://*.leadconnectorhq.com https://app.win-crm.ai";
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(3000),
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal", "silent"]).default("info"),
   PUBLIC_BASE_URL: z.string().url().optional(),
+  CUSTOM_PAGE_FRAME_ANCESTORS: z
+    .string()
+    .default(defaultCustomPageFrameAncestors)
+    .transform((value) => value.trim() || defaultCustomPageFrameAncestors),
 
   SUPABASE_URL: z.string().default(""),
   SUPABASE_SERVICE_ROLE_KEY: z.string().default(""),
@@ -80,7 +87,8 @@ export const optionalEnvCheckKeys = [
   "GHL_LOCATION_API_AUTH_MODE",
   "GHL_INBOUND_SEND_AUTH_MODE",
   "GHL_LINE_USER_ID_FIELD_ID",
-  "GHL_LINE_DISPLAY_NAME_FIELD_ID"
+  "GHL_LINE_DISPLAY_NAME_FIELD_ID",
+  "CUSTOM_PAGE_FRAME_ANCESTORS"
 ] as const;
 
 export type OptionalEnvCheckKey = (typeof optionalEnvCheckKeys)[number];
