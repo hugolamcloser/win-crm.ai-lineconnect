@@ -1,7 +1,10 @@
 import { logger } from "../config/logger";
 import { getSupabase } from "../config/supabase";
 import { pushLineTextMessage } from "../integrations/lineClient";
-import { isLineChannelNotConnectedError, resolveLineChannelForOutbound } from "./lineOutboundChannelService";
+import {
+  isLineChannelNotConnectedError,
+  resolveLineChannelForOutbound
+} from "./lineOutboundChannelService";
 import {
   ensureDefaultTenant,
   type LineProfileRecord,
