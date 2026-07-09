@@ -163,8 +163,16 @@ function buildPageUrl(req: Request, locationId: string, pageToken: string): stri
   return `${getPublicBaseUrl(req).replace(/\/+$/, "")}${buildPagePath(locationId, pageToken)}`;
 }
 
-function setPageHeaders(res: Response, scriptNonce: string): void {
+function removeFrameOptionsHeader(res: Response): void {
   res.removeHeader("X-Frame-Options");
+}
+
+function getCustomPageFrameAncestors(): string {
+  return env.CUSTOM_PAGE_FRAME_ANCESTORS.split(/\s+/).filter(Boolean).join(" ");
+}
+
+function setPageHeaders(res: Response, scriptNonce: string): void {
+  removeFrameOptionsHeader(res);
   res.setHeader("Cache-Control", "no-store");
   res.setHeader(
     "Content-Security-Policy",
@@ -176,7 +184,7 @@ function setPageHeaders(res: Response, scriptNonce: string): void {
       "img-src 'self' data:",
       "style-src 'unsafe-inline'",
       `script-src 'nonce-${scriptNonce}'`,
-      "frame-ancestors 'self' https://app.gohighlevel.com https://*.gohighlevel.com https://*.leadconnectorhq.com https://app.leadconnectorhq.com"
+      `frame-ancestors ${getCustomPageFrameAncestors()}`
     ].join("; ")
   );
 }
@@ -317,6 +325,8 @@ appLinePageRouter.get("/app/line/launch", async (req, res, next) => {
     const query = pageLaunchQuerySchema.parse(req.query);
     const { token } = createSignedToken({ kind: "page_access", locationId: query.locationId });
 
+    removeFrameOptionsHeader(res);
+    res.setHeader("Cache-Control", "no-store");
     res.redirect(302, buildPagePath(query.locationId, token));
   } catch (error) {
     next(error);
