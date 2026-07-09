@@ -26,6 +26,7 @@ type SignedPagePayload = {
 const tokenTtlMs = 15 * 60 * 1000;
 
 const pageFormBodyParser = express.urlencoded({ extended: false, limit: "32kb" });
+const pageLaunchQuerySchema = z.object({ locationId: z.string().min(1) });
 const pageLinkBodySchema = z.object({ locationId: z.string().min(1) });
 const pageQuerySchema = z.object({
   locationId: z.string().min(1),
@@ -152,10 +153,14 @@ function verifyPageActionToken(token: string, locationId: string, action: PageAc
   }
 }
 
-function buildPageUrl(req: Request, locationId: string, pageToken: string): string {
-  return `${getPublicBaseUrl(req).replace(/\/+$/, "")}/app/line/page?locationId=${encodeURIComponent(
+function buildPagePath(locationId: string, pageToken: string): string {
+  return `/app/line/page?locationId=${encodeURIComponent(
     locationId
   )}&pageToken=${encodeURIComponent(pageToken)}`;
+}
+
+function buildPageUrl(req: Request, locationId: string, pageToken: string): string {
+  return `${getPublicBaseUrl(req).replace(/\/+$/, "")}${buildPagePath(locationId, pageToken)}`;
 }
 
 function setPageHeaders(res: Response, scriptNonce: string): void {
@@ -302,6 +307,17 @@ appLinePageRouter.post("/app/line/page-link", requireSharedSecret, async (req, r
       page_url: buildPageUrl(req, input.locationId, token),
       expires_at: expiresAt
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+appLinePageRouter.get("/app/line/launch", async (req, res, next) => {
+  try {
+    const query = pageLaunchQuerySchema.parse(req.query);
+    const { token } = createSignedToken({ kind: "page_access", locationId: query.locationId });
+
+    res.redirect(302, buildPagePath(query.locationId, token));
   } catch (error) {
     next(error);
   }
