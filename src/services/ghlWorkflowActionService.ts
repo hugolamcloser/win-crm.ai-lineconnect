@@ -1,6 +1,7 @@
 import { logger } from "../config/logger";
 import { getSupabase } from "../config/supabase";
 import { pushLineTextMessage } from "../integrations/lineClient";
+import { isLineChannelNotConnectedError, resolveLineChannelForOutbound } from "./lineOutboundChannelService";
 import {
   ensureDefaultTenant,
   type LineProfileRecord,
@@ -264,7 +265,32 @@ export async function processGhlWorkflowSendLine(payload: Record<string, unknown
   }
 
   try {
-    const lineResult = await pushLineTextMessage(mapping.line_user_id, message);
+    const lineChannelSelection = await resolveLineChannelForOutbound(mapping.tenant_id, mapping);
+    const requestPayload = {
+      ...eventPayload,
+      lineChannelId: lineChannelSelection.lineChannelId ?? null,
+      channelTokenSource: lineChannelSelection.channelTokenSource,
+      channelConnected: lineChannelSelection.channelTokenSource !== "env_fallback"
+    };
+
+    logger.info(
+      {
+        locationId,
+        contactId,
+        workflowId,
+        metaKey,
+        tenantId: mapping.tenant_id,
+        lineChannelId: lineChannelSelection.lineChannelId,
+        channelTokenSource: lineChannelSelection.channelTokenSource
+      },
+      "Selected LINE channel token source for GHL workflow LINE send"
+    );
+
+    const lineResult = await pushLineTextMessage(
+      mapping.line_user_id,
+      message,
+      lineChannelSelection.channelAccessToken
+    );
 
     await saveMessageEvent({
       tenantId: mapping.tenant_id,
@@ -275,7 +301,7 @@ export async function processGhlWorkflowSendLine(payload: Record<string, unknown
       ghlConversationId: mapping.ghl_conversation_id ?? undefined,
       payload,
       status: "sent",
-      requestPayload: eventPayload
+      requestPayload
     });
 
     logger.info(
@@ -284,7 +310,10 @@ export async function processGhlWorkflowSendLine(payload: Record<string, unknown
         contactId,
         workflowId,
         metaKey,
+        tenantId: mapping.tenant_id,
         lineUserId: mapping.line_user_id,
+        lineChannelId: lineChannelSelection.lineChannelId,
+        channelTokenSource: lineChannelSelection.channelTokenSource,
         lineMessageId: lineResult.messageId
       },
       "GHL workflow LINE message sent"
@@ -292,7 +321,20 @@ export async function processGhlWorkflowSendLine(payload: Record<string, unknown
 
     return buildResponse(200, "sent", "", lineResult.messageId ?? null);
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown LINE send error";
+    const isDisconnected = isLineChannelNotConnectedError(error);
+    const errorMessage = isDisconnected
+      ? error.message
+      : error instanceof Error
+        ? error.message
+        : "Unknown LINE send error";
+    const requestPayload = {
+      ...eventPayload,
+      lineChannelId: isDisconnected
+        ? error.lineChannelId ?? mapping.line_channel_id ?? null
+        : mapping.line_channel_id ?? null,
+      channelTokenSource: isDisconnected ? error.channelTokenSource : null,
+      channelConnected: false
+    };
 
     await saveMessageEvent({
       tenantId: mapping.tenant_id,
@@ -304,17 +346,29 @@ export async function processGhlWorkflowSendLine(payload: Record<string, unknown
       payload,
       status: "failed",
       errorMessage,
-      requestPayload: eventPayload
+      requestPayload
     });
+
+    const logContext = {
+      locationId,
+      contactId,
+      workflowId,
+      metaKey,
+      tenantId: mapping.tenant_id,
+      lineUserId: mapping.line_user_id,
+      lineChannelId: requestPayload.lineChannelId,
+      channelTokenSource: requestPayload.channelTokenSource,
+      errorMessage
+    };
+
+    if (isDisconnected) {
+      logger.warn(logContext, "Blocked GHL workflow LINE send because LINE channel is not connected");
+      return buildResponse(409, "failed", errorMessage);
+    }
 
     logger.error(
       {
-        locationId,
-        contactId,
-        workflowId,
-        metaKey,
-        lineUserId: mapping.line_user_id,
-        errorMessage
+        ...logContext
       },
       "Failed to send GHL workflow LINE message"
     );
