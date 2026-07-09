@@ -3,8 +3,14 @@ import { z } from "zod";
 
 dotenv.config();
 
-const defaultCustomPageFrameAncestors =
-  "'self' https://app.gohighlevel.com https://*.gohighlevel.com https://app.leadconnectorhq.com https://*.leadconnectorhq.com https://app.win-crm.ai";
+const defaultCustomPageFrameAncestors = [
+  "'self'",
+  "https://app.gohighlevel.com",
+  "https://*.gohighlevel.com",
+  "https://app.leadconnectorhq.com",
+  "https://*.leadconnectorhq.com",
+  "https://app.win-crm.ai"
+].join(" ");
 
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
