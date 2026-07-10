@@ -1,5 +1,10 @@
 import { logger } from "../config/logger";
 import { getSupabase } from "../config/supabase";
+import { env } from "../config/env";
+import {
+  mirrorWorkflowOutboundMessageToGhl,
+  type GhlWorkflowOutboundMirrorResult
+} from "../integrations/ghlWorkflowOutboundMirrorClient";
 import { pushLineTextMessage } from "../integrations/lineClient";
 import {
   isLineChannelNotConnectedError,
@@ -83,6 +88,107 @@ function buildWorkflowEventPayload(input: {
     metaVersion: input.metaVersion ?? null,
     messagePresent: input.messagePresent
   };
+}
+
+function stringifyForStorage(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function buildMirrorRequestPayload(input: {
+  eventPayload: Record<string, unknown>;
+  mapping: LineProfileRecord;
+  workflowId?: string;
+  lineMessageId?: string | null;
+  mirrorResult: GhlWorkflowOutboundMirrorResult;
+}) {
+  return {
+    ...input.eventPayload,
+    source: "ghl_workflow_outbound_mirror",
+    tenantId: input.mapping.tenant_id,
+    lineUserId: input.mapping.line_user_id,
+    workflowId: input.workflowId ?? null,
+    lineMessageId: input.lineMessageId ?? null,
+    existingGhlConversationId: input.mapping.ghl_conversation_id ?? null,
+    endpoint: input.mirrorResult.endpoint,
+    method: input.mirrorResult.method,
+    authMode: input.mirrorResult.authMode,
+    statusCode: input.mirrorResult.statusCode ?? null,
+    canonicalCode: input.mirrorResult.canonicalCode ?? null,
+    mirrorStatus: input.mirrorResult.ok ? "success" : "failed",
+    request_body: input.mirrorResult.requestBody
+  };
+}
+
+async function mirrorWorkflowOutboundMessage(input: {
+  payload: Record<string, unknown>;
+  eventPayload: Record<string, unknown>;
+  locationId: string;
+  contactId: string;
+  message: string;
+  workflowId?: string;
+  metaKey?: string;
+  externalMessageId?: string;
+  mapping: LineProfileRecord;
+  lineMessageId?: string | null;
+}): Promise<void> {
+  if (!env.GHL_WORKFLOW_OUTBOUND_MIRROR_ENABLED) {
+    return;
+  }
+
+  const mirrorResult = await mirrorWorkflowOutboundMessageToGhl({
+    locationId: input.locationId,
+    contactId: input.contactId,
+    message: input.message,
+    workflowId: input.workflowId,
+    lineMessageId: input.lineMessageId,
+    existingGhlConversationId: input.mapping.ghl_conversation_id
+  });
+  const mirrorStatus = mirrorResult.ok ? "success" : "failed";
+  const requestPayload = buildMirrorRequestPayload({
+    eventPayload: input.eventPayload,
+    mapping: input.mapping,
+    workflowId: input.workflowId,
+    lineMessageId: input.lineMessageId,
+    mirrorResult
+  });
+
+  await saveMessageEvent({
+    tenantId: input.mapping.tenant_id,
+    provider: "ghl",
+    direction: "outbound",
+    externalMessageId: input.externalMessageId,
+    lineUserId: input.mapping.line_user_id,
+    ghlMessageId: mirrorResult.ghlMessageId,
+    ghlConversationId: mirrorResult.ghlConversationId ?? input.mapping.ghl_conversation_id ?? undefined,
+    payload: input.payload,
+    status: mirrorStatus,
+    errorMessage: mirrorResult.ok ? undefined : mirrorResult.errorMessage ?? "HighLevel workflow outbound mirror failed",
+    ghlStatusCode: mirrorResult.statusCode,
+    ghlResponseBody: stringifyForStorage(mirrorResult.responseBody),
+    requestPayload
+  });
+
+  logger.info(
+    {
+      locationId: input.locationId,
+      contactId: input.contactId,
+      tenantId: input.mapping.tenant_id,
+      lineUserId: input.mapping.line_user_id,
+      workflowId: input.workflowId,
+      metaKey: input.metaKey,
+      lineMessageId: input.lineMessageId,
+      ghlConversationId: mirrorResult.ghlConversationId ?? input.mapping.ghl_conversation_id,
+      ghlMessageId: mirrorResult.ghlMessageId,
+      mirrorStatus,
+      statusCode: mirrorResult.statusCode,
+      canonicalCode: mirrorResult.canonicalCode
+    },
+    "Saved HighLevel workflow outbound mirror attempt"
+  );
 }
 
 async function findLineProfileByLocationAndGhlContact(
@@ -321,6 +427,37 @@ export async function processGhlWorkflowSendLine(payload: Record<string, unknown
       },
       "GHL workflow LINE message sent"
     );
+
+    try {
+      await mirrorWorkflowOutboundMessage({
+        payload,
+        eventPayload,
+        locationId,
+        contactId,
+        message,
+        workflowId,
+        metaKey,
+        externalMessageId,
+        mapping,
+        lineMessageId: lineResult.messageId ?? null
+      });
+    } catch (mirrorError) {
+      logger.error(
+        {
+          locationId,
+          contactId,
+          workflowId,
+          metaKey,
+          tenantId: mapping.tenant_id,
+          lineUserId: mapping.line_user_id,
+          lineMessageId: lineResult.messageId,
+          ghlConversationId: mapping.ghl_conversation_id,
+          mirrorStatus: "failed",
+          errorMessage: mirrorError instanceof Error ? mirrorError.message : String(mirrorError)
+        },
+        "HighLevel workflow outbound mirror failed after LINE send succeeded"
+      );
+    }
 
     return buildResponse(200, "sent", "", lineResult.messageId ?? null);
   } catch (error) {
