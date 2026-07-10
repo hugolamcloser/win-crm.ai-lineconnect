@@ -49,6 +49,10 @@ const envSchema = z.object({
     .transform((value) => value === "true"),
   GHL_LOCATION_API_AUTH_MODE: z.enum(["oauth", "private_integration"]).default("oauth"),
   GHL_INBOUND_SEND_AUTH_MODE: z.enum(["oauth", "private_integration"]).default("oauth"),
+  GHL_WORKFLOW_OUTBOUND_MIRROR_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   GHL_LINE_USER_ID_FIELD_ID: z.string().default(""),
   GHL_LINE_DISPLAY_NAME_FIELD_ID: z.string().default(""),
 
@@ -92,6 +96,7 @@ export const optionalEnvCheckKeys = [
   "GHL_SEND_CONVERSATION_PROVIDER_ID",
   "GHL_LOCATION_API_AUTH_MODE",
   "GHL_INBOUND_SEND_AUTH_MODE",
+  "GHL_WORKFLOW_OUTBOUND_MIRROR_ENABLED",
   "GHL_LINE_USER_ID_FIELD_ID",
   "GHL_LINE_DISPLAY_NAME_FIELD_ID",
   "CUSTOM_PAGE_FRAME_ANCESTORS"
