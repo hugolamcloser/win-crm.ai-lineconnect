@@ -78,6 +78,14 @@ export type WebhookEventRecord = {
   created_at: string;
 };
 
+export type WorkflowOutboundMirrorEventRecord = {
+  id: string;
+  tenant_id: string;
+  ghl_message_id: string | null;
+  request_payload: unknown;
+  created_at: string;
+};
+
 export type GhlOAuthTokenRecord = {
   id: string;
   tenant_id: string | null;
@@ -101,6 +109,14 @@ export type UpsertGhlOAuthTokenInput = {
   expiresAt: string;
   scopes?: string[];
   tokenType?: string;
+};
+
+export type UpsertLineChannelInput = {
+  tenantId: string;
+  webhookKey: string;
+  channelAccessToken: string;
+  channelSecret: string;
+  isActive?: boolean;
 };
 
 function requireSingle<T>(data: T | null, error: { message: string } | null): T {
@@ -149,6 +165,14 @@ function sortCanonicalLineProfiles(records: LineProfileRecord[]): LineProfileRec
 
     return getProfileTimeValue(right.created_at) - getProfileTimeValue(left.created_at);
   });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isWorkflowOutboundMirrorRequestPayload(value: unknown): boolean {
+  return isRecord(value) && value.source === "ghl_workflow_outbound_mirror";
 }
 
 async function findCanonicalLineProfileByLineUser(
@@ -341,6 +365,82 @@ export async function getTenantById(tenantId: string): Promise<TenantRecord | nu
   return data as TenantRecord | null;
 }
 
+export async function getTenantByLocationId(locationId: string): Promise<TenantRecord | null> {
+  const normalizedLocationId = locationId.trim();
+
+  if (!normalizedLocationId) {
+    return null;
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("tenants")
+    .select("*")
+    .eq("location_id", normalizedLocationId)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as TenantRecord | null;
+}
+
+export async function getTenantIdsByLocationId(locationId: string): Promise<string[]> {
+  const normalizedLocationId = locationId.trim();
+
+  if (!normalizedLocationId) {
+    return [];
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("tenants")
+    .select("id")
+    .eq("location_id", normalizedLocationId)
+    .order("updated_at", { ascending: false });
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (data ?? [])
+    .map((tenant) => (typeof tenant.id === "string" ? tenant.id : undefined))
+    .filter((tenantId): tenantId is string => Boolean(tenantId));
+}
+
+export async function ensureTenantForLocation(locationId: string): Promise<TenantRecord> {
+  const normalizedLocationId = locationId.trim();
+
+  if (!normalizedLocationId) {
+    throw new Error("locationId is required");
+  }
+
+  const existing = await getTenantByLocationId(normalizedLocationId);
+
+  if (existing) {
+    return existing;
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("tenants")
+    .upsert(
+      {
+        location_id: normalizedLocationId,
+        ghl_provider_id: requireEnvValue("GHL_CUSTOM_PROVIDER_ID", env.GHL_CUSTOM_PROVIDER_ID),
+        line_channel_id: "default"
+      },
+      { onConflict: "location_id,ghl_provider_id,line_channel_id" }
+    )
+    .select("*")
+    .single();
+
+  return requireSingle<TenantRecord>(data, error);
+}
+
 export async function getLineChannelByWebhookKey(webhookKey: string): Promise<LineChannelRecord | null> {
   const normalizedWebhookKey = webhookKey.trim();
 
@@ -414,6 +514,49 @@ export async function getActiveLineChannelByTenantId(tenantId: string): Promise<
   return data as LineChannelRecord | null;
 }
 
+export async function upsertLineChannelByTenantId(input: UpsertLineChannelInput): Promise<LineChannelRecord> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("line_channels")
+    .upsert(
+      {
+        tenant_id: input.tenantId,
+        webhook_key: input.webhookKey,
+        channel_access_token: input.channelAccessToken,
+        channel_secret: input.channelSecret,
+        is_active: input.isActive ?? true,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: "tenant_id" }
+    )
+    .select("*")
+    .single();
+
+  return requireSingle<LineChannelRecord>(data, error);
+}
+
+export async function setLineChannelActiveByTenantId(
+  tenantId: string,
+  isActive: boolean
+): Promise<LineChannelRecord | null> {
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("line_channels")
+    .update({
+      is_active: isActive,
+      updated_at: new Date().toISOString()
+    })
+    .eq("tenant_id", tenantId)
+    .select("*")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data as LineChannelRecord | null;
+}
+
 export async function upsertLineProfile(input: UpsertLineProfileInput): Promise<LineProfileRecord> {
   const supabase = getSupabase();
   const upsertPayload: {
@@ -456,8 +599,26 @@ export async function findLineProfileByGhlIds(
   tenantId: string,
   ids: { contactId?: string; conversationId?: string }
 ): Promise<LineProfileRecord | null> {
+  return findLineProfileByGhlIdsForTenantIds([tenantId], ids);
+}
+
+export async function findLineProfileByGhlIdsForTenantIds(
+  tenantIds: string[],
+  ids: { contactId?: string; conversationId?: string }
+): Promise<LineProfileRecord | null> {
+  const normalizedTenantIds = tenantIds.map((tenantId) => tenantId.trim()).filter(Boolean);
+
+  if (normalizedTenantIds.length === 0) {
+    return null;
+  }
+
   const supabase = getSupabase();
-  let query = supabase.from("line_profiles").select("*").eq("tenant_id", tenantId);
+  let query = supabase
+    .from("line_profiles")
+    .select("*")
+    .in("tenant_id", normalizedTenantIds)
+    .order("updated_at", { ascending: false })
+    .limit(1);
 
   if (ids.conversationId) {
     query = query.eq("ghl_conversation_id", ids.conversationId);
@@ -612,6 +773,52 @@ export async function clearGhlMapping(input: { tenantId: string; lineUserId: str
   }
 
   return requireSingle<LineProfileRecord>(data, error);
+}
+
+export async function findWorkflowOutboundMirrorMessageEvent(input: {
+  tenantId: string;
+  ghlMessageId?: string;
+}): Promise<WorkflowOutboundMirrorEventRecord | null> {
+  return findWorkflowOutboundMirrorMessageEventForTenantIds({
+    tenantIds: [input.tenantId],
+    ghlMessageId: input.ghlMessageId
+  });
+}
+
+export async function findWorkflowOutboundMirrorMessageEventForTenantIds(input: {
+  tenantIds: string[];
+  ghlMessageId?: string;
+}): Promise<WorkflowOutboundMirrorEventRecord | null> {
+  const normalizedTenantIds = input.tenantIds.map((tenantId) => tenantId.trim()).filter(Boolean);
+  const normalizedGhlMessageId = input.ghlMessageId?.trim();
+
+  if (normalizedTenantIds.length === 0 || !normalizedGhlMessageId) {
+    return null;
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("message_events")
+    .select("id, tenant_id, ghl_message_id, request_payload, created_at")
+    .in("tenant_id", normalizedTenantIds)
+    .eq("provider", "ghl")
+    .eq("direction", "outbound")
+    .eq("ghl_message_id", normalizedGhlMessageId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const record = data as WorkflowOutboundMirrorEventRecord | null;
+
+  if (!record || !isWorkflowOutboundMirrorRequestPayload(record.request_payload)) {
+    return null;
+  }
+
+  return record;
 }
 
 export async function saveMessageEvent(input: SaveMessageEventInput): Promise<void> {

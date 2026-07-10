@@ -6,7 +6,13 @@ import {
   isLineChannelNotConnectedError,
   resolveLineChannelForOutbound
 } from "./lineOutboundChannelService";
-import { ensureDefaultTenant, findLineProfileByGhlIds, saveMessageEvent } from "./repository";
+import {
+  ensureDefaultTenant,
+  findLineProfileByGhlIdsForTenantIds,
+  findWorkflowOutboundMirrorMessageEventForTenantIds,
+  getTenantIdsByLocationId,
+  saveMessageEvent
+} from "./repository";
 
 function getString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
@@ -48,6 +54,11 @@ export function normalizeGhlOutboundMessage(payload: Record<string, unknown>): N
 
   return {
     contactId: getString(payload.contactId) ?? getNestedString(payload, ["contact", "id"]),
+    locationId:
+      getString(payload.locationId) ??
+      getString(payload.location_id) ??
+      getNestedString(payload, ["location", "id"]) ??
+      getNestedString(payload, ["location", "locationId"]),
     conversationId: getString(payload.conversationId) ?? getNestedString(payload, ["conversation", "id"]),
     messageId: getString(payload.messageId) ?? getString(payload.id) ?? getNestedString(payload, ["message", "id"]),
     message,
@@ -56,15 +67,55 @@ export function normalizeGhlOutboundMessage(payload: Record<string, unknown>): N
   };
 }
 
+async function resolveTenantIdsForGhlOutboundWebhook(message: NormalizedGhlOutboundMessage): Promise<string[]> {
+  if (message.locationId) {
+    const tenantIds = await getTenantIdsByLocationId(message.locationId);
+
+    if (tenantIds.length > 0) {
+      return tenantIds;
+    }
+
+    logger.warn(
+      {
+        locationId: message.locationId,
+        contactId: message.contactId,
+        conversationId: message.conversationId,
+        ghlMessageId: message.messageId
+      },
+      "Skipped HighLevel outbound provider webhook because no tenant exists for payload locationId"
+    );
+
+    return [];
+  }
+
+  logger.warn(
+    {
+      contactId: message.contactId,
+      conversationId: message.conversationId,
+      ghlMessageId: message.messageId
+    },
+    "HighLevel outbound provider webhook payload did not include locationId; falling back to default tenant is not multi-OA safe"
+  );
+
+  return [await ensureDefaultTenant()];
+}
+
 export async function processGhlOutboundWebhook(payload: Record<string, unknown>): Promise<{
   status: "processed" | "skipped";
   reason?: string;
 }> {
-  const tenantId = await ensureDefaultTenant();
   const message = normalizeGhlOutboundMessage(payload);
+  const tenantIds = await resolveTenantIdsForGhlOutboundWebhook(message);
+
+  if (tenantIds.length === 0) {
+    return { status: "skipped", reason: "No tenant found for locationId" };
+  }
 
   logger.info(
     {
+      tenantIds,
+      tenantCount: tenantIds.length,
+      locationId: message.locationId,
       contactId: message.contactId,
       conversationId: message.conversationId,
       ghlMessageId: message.messageId
@@ -72,12 +123,68 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
     "HighLevel outbound provider webhook accepted"
   );
 
-  const mapping = await findLineProfileByGhlIds(tenantId, {
+  if (!message.messageId) {
+    logger.warn(
+      {
+        tenantIds,
+        locationId: message.locationId,
+        contactId: message.contactId,
+        conversationId: message.conversationId
+      },
+      "HighLevel outbound provider webhook did not include a message ID; workflow mirror duplicate-send guard cannot match this callback"
+    );
+  }
+
+  const mirroredWorkflowMessage = await findWorkflowOutboundMirrorMessageEventForTenantIds({
+    tenantIds,
+    ghlMessageId: message.messageId
+  });
+
+  if (mirroredWorkflowMessage) {
+    const tenantId = mirroredWorkflowMessage.tenant_id;
+
+    await saveMessageEvent({
+      tenantId,
+      provider: "ghl",
+      direction: "outbound",
+      externalMessageId: message.messageId ? `ghl-provider-echo:${message.messageId}` : undefined,
+      ghlMessageId: message.messageId,
+      ghlConversationId: message.conversationId,
+      payload,
+      status: "skipped",
+      errorMessage: "Skipped workflow outbound mirror echo to avoid duplicate LINE delivery",
+      requestPayload: {
+        source: "ghl_outbound_provider",
+        skipReason: "workflow_outbound_mirror_echo",
+        mirrorMessageEventId: mirroredWorkflowMessage.id,
+        ghlMessageId: message.messageId ?? null,
+        conversationId: message.conversationId ?? null,
+        contactId: message.contactId ?? null
+      }
+    });
+
+    logger.warn(
+      {
+        tenantId,
+        contactId: message.contactId,
+        conversationId: message.conversationId,
+        ghlMessageId: message.messageId,
+        mirrorMessageEventId: mirroredWorkflowMessage.id
+      },
+      "Skipped HighLevel outbound provider webhook because it matches a workflow outbound mirror"
+    );
+
+    return { status: "skipped", reason: "Workflow outbound mirror echo" };
+  }
+
+  const mapping = await findLineProfileByGhlIdsForTenantIds(tenantIds, {
     contactId: message.contactId,
     conversationId: message.conversationId
   });
 
   if (!mapping) {
+    const [tenantId] = tenantIds;
+
     await saveMessageEvent({
       tenantId,
       provider: "ghl",
@@ -103,6 +210,8 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
 
     return { status: "skipped", reason: "No LINE mapping found" };
   }
+
+  const tenantId = mapping.tenant_id;
 
   const lineChannelSelection = await resolveLineChannelForOutbound(tenantId, mapping).catch(async (error) => {
     if (!isLineChannelNotConnectedError(error)) {
