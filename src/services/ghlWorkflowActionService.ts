@@ -98,6 +98,22 @@ function stringifyForStorage(value: unknown): string | undefined {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+function buildMirrorExternalMessageId(input: {
+  externalMessageId?: string;
+  lineMessageId?: string | null;
+  ghlMessageId?: string;
+}): string | undefined {
+  if (input.ghlMessageId) {
+    return input.ghlMessageId;
+  }
+
+  if (input.lineMessageId) {
+    return `line:${input.lineMessageId}:ghl-mirror`;
+  }
+
+  return input.externalMessageId ? `${input.externalMessageId}:ghl-mirror` : undefined;
+}
+
 function buildMirrorRequestPayload(input: {
   eventPayload: Record<string, unknown>;
   mapping: LineProfileRecord;
@@ -148,6 +164,11 @@ async function mirrorWorkflowOutboundMessage(input: {
     existingGhlConversationId: input.mapping.ghl_conversation_id
   });
   const mirrorStatus = mirrorResult.ok ? "success" : "failed";
+  const mirrorExternalMessageId = buildMirrorExternalMessageId({
+    externalMessageId: input.externalMessageId,
+    lineMessageId: input.lineMessageId,
+    ghlMessageId: mirrorResult.ghlMessageId
+  });
   const requestPayload = buildMirrorRequestPayload({
     eventPayload: input.eventPayload,
     mapping: input.mapping,
@@ -160,7 +181,7 @@ async function mirrorWorkflowOutboundMessage(input: {
     tenantId: input.mapping.tenant_id,
     provider: "ghl",
     direction: "outbound",
-    externalMessageId: input.externalMessageId,
+    externalMessageId: mirrorExternalMessageId,
     lineUserId: input.mapping.line_user_id,
     ghlMessageId: mirrorResult.ghlMessageId,
     ghlConversationId: mirrorResult.ghlConversationId ?? input.mapping.ghl_conversation_id ?? undefined,
@@ -180,6 +201,7 @@ async function mirrorWorkflowOutboundMessage(input: {
       lineUserId: input.mapping.line_user_id,
       workflowId: input.workflowId,
       metaKey: input.metaKey,
+      mirrorExternalMessageId,
       lineMessageId: input.lineMessageId,
       ghlConversationId: mirrorResult.ghlConversationId ?? input.mapping.ghl_conversation_id,
       ghlMessageId: mirrorResult.ghlMessageId,

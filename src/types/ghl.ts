@@ -31,6 +31,7 @@ export type GhlInboundMessageResponse = {
 
 export type NormalizedGhlOutboundMessage = {
   contactId?: string;
+  locationId?: string;
   conversationId?: string;
   messageId?: string;
   message: string;

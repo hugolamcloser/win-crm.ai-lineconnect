@@ -64,6 +64,38 @@ function getNestedString(payload: unknown, ...path: string[]): string | undefine
   return getString(current);
 }
 
+function getFirstString(value: unknown): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+
+  for (const item of value) {
+    const stringValue = getString(item);
+
+    if (stringValue) {
+      return stringValue;
+    }
+  }
+
+  return undefined;
+}
+
+function getNestedFirstString(payload: unknown, ...path: string[]): string | undefined {
+  let current = payload;
+
+  for (const key of path) {
+    const record = getRecord(current);
+
+    if (!record || !(key in record)) {
+      return undefined;
+    }
+
+    current = record[key];
+  }
+
+  return getFirstString(current);
+}
+
 function parseResponseBody(responseText: string): unknown {
   if (!responseText) {
     return undefined;
@@ -98,7 +130,9 @@ function extractGhlMessageIds(responseBody: unknown): { messageId?: string; conv
       getNestedString(responseBody, "message", "id") ??
       getNestedString(responseBody, "message", "_id") ??
       getNestedString(responseBody, "data", "messageId") ??
-      getNestedString(responseBody, "data", "id"),
+      getNestedString(responseBody, "data", "id") ??
+      getNestedFirstString(responseBody, "messageIds") ??
+      getNestedFirstString(responseBody, "data", "messageIds"),
     conversationId:
       getNestedString(responseBody, "conversationId") ??
       getNestedString(responseBody, "conversation_id") ??
@@ -223,6 +257,26 @@ export async function mirrorWorkflowOutboundMessageToGhl(
     }
 
     const parsed = await readGhlResponse(response);
+
+    if (response.ok && !parsed.ghlMessageId) {
+      logger.warn(
+        {
+          endpoint,
+          method,
+          authMode: auth.mode,
+          locationId: input.locationId,
+          contactId: input.contactId,
+          workflowId: input.workflowId,
+          lineMessageId: input.lineMessageId,
+          existingGhlConversationId: input.existingGhlConversationId,
+          ghlConversationId: parsed.ghlConversationId,
+          mirrorStatus: "success",
+          statusCode: response.status,
+          responseBody: parsed.responseBody
+        },
+        "HighLevel workflow outbound mirror succeeded without a GHL message ID; duplicate-send guard cannot match provider echoes"
+      );
+    }
 
     logger.info(
       {
