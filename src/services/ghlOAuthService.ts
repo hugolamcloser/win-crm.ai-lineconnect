@@ -11,25 +11,44 @@ import {
 
 const tokenRefreshSkewMs = 5 * 60 * 1000;
 const tokenExchangeTimeoutMs = 15000;
+const highLevelV3Version = "v3";
 
 export type GhlOAuthErrorCode =
   | "token_exchange_failed"
   | "token_response_parse_failed"
   | "oauth_storage_failed"
-  | "oauth_missing_location_id";
+  | "oauth_missing_location_id"
+  | "oauth_missing_company_id"
+  | "oauth_missing_marketplace_app_id"
+  | "oauth_missing_installed_locations"
+  | "oauth_location_token_mismatch";
 
 type GhlOAuthTokenPayload = {
   access_token?: string;
+  accessToken?: string;
   refresh_token?: string;
+  refreshToken?: string;
   expires_in?: number | string;
+  expiresIn?: number | string;
   expires_at?: string;
   scope?: string;
   scopes?: string[] | string;
   token_type?: string;
+  tokenType?: string;
   locationId?: string;
   location_id?: string;
   companyId?: string;
   company_id?: string;
+  userType?: string;
+  user_type?: string;
+  approvedLocations?: unknown;
+  approved_locations?: unknown;
+  isBulkInstallation?: boolean | string;
+  is_bulk_installation?: boolean | string;
+  appId?: string;
+  app_id?: string;
+  versionId?: string;
+  version_id?: string;
   [key: string]: unknown;
 };
 
@@ -38,6 +57,22 @@ type SaveTokenPayloadFallbackMetadata = {
   scopes?: string[] | null;
   tokenType?: string | null;
 };
+
+type GhlOAuthCompanyInstallStatus = {
+  mode: "company_to_location";
+  company_id: string;
+  locations: Array<{
+    location_id: string;
+    tenant_id: string | null;
+    token_present: boolean;
+    refresh_token_present: boolean;
+    expires_at: string | null;
+  }>;
+};
+
+export type GhlOAuthInstallStatus =
+  | Awaited<ReturnType<typeof getGhlOAuthTokenStatus>>
+  | GhlOAuthCompanyInstallStatus;
 
 export type GhlAuthContext = {
   mode: "oauth" | "private_integration";
@@ -122,6 +157,54 @@ function getNumber(value: unknown): number | undefined {
   return undefined;
 }
 
+function getBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+
+    if (normalized === "true") {
+      return true;
+    }
+
+    if (normalized === "false") {
+      return false;
+    }
+  }
+
+  return undefined;
+}
+
+function getAccessToken(payload: GhlOAuthTokenPayload): string | undefined {
+  return getString(payload.access_token) ?? getString(payload.accessToken);
+}
+
+function getRefreshToken(payload: GhlOAuthTokenPayload): string | undefined {
+  return getString(payload.refresh_token) ?? getString(payload.refreshToken);
+}
+
+function getTokenType(payload: GhlOAuthTokenPayload): string | undefined {
+  return getString(payload.token_type) ?? getString(payload.tokenType);
+}
+
+function getUserType(payload: GhlOAuthTokenPayload): string | undefined {
+  return getString(payload.user_type) ?? getString(payload.userType);
+}
+
+function getAppId(payload: GhlOAuthTokenPayload): string | undefined {
+  return getString(payload.app_id) ?? getString(payload.appId);
+}
+
+function getVersionId(payload: GhlOAuthTokenPayload): string | undefined {
+  return getString(payload.version_id) ?? getString(payload.versionId);
+}
+
+function getIsBulkInstallation(payload: GhlOAuthTokenPayload): boolean | undefined {
+  return getBoolean(payload.is_bulk_installation) ?? getBoolean(payload.isBulkInstallation);
+}
+
 function parseScopes(payload: GhlOAuthTokenPayload): string[] {
   if (Array.isArray(payload.scopes)) {
     return payload.scopes.filter((scope): scope is string => typeof scope === "string" && scope.trim().length > 0);
@@ -182,7 +265,7 @@ function getExpiresAt(payload: GhlOAuthTokenPayload): string {
     return new Date(explicitExpiresAt).toISOString();
   }
 
-  const expiresIn = getNumber(payload.expires_in) ?? 3600;
+  const expiresIn = getNumber(payload.expires_in) ?? getNumber(payload.expiresIn) ?? 3600;
   return new Date(Date.now() + expiresIn * 1000).toISOString();
 }
 
@@ -269,6 +352,95 @@ function resolveTokenCompanyId(payload: GhlOAuthTokenPayload): string | undefine
   );
 }
 
+function getLocationIdFromUnknown(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return getString(value);
+  }
+
+  const record = getRecord(value);
+
+  if (!record) {
+    return undefined;
+  }
+
+  return (
+    getString(record._id) ??
+    getString(record.id) ??
+    getString(record.locationId) ??
+    getString(record.location_id)
+  );
+}
+
+function uniqueLocationIds(locationIds: Array<string | undefined>): string[] {
+  return Array.from(new Set(locationIds.map((locationId) => locationId?.trim()).filter((locationId): locationId is string => Boolean(locationId))));
+}
+
+function parseLocationIds(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return uniqueLocationIds(value.map(getLocationIdFromUnknown));
+  }
+
+  const locationId = getLocationIdFromUnknown(value);
+  return locationId ? [locationId] : [];
+}
+
+function getApprovedLocationIds(payload: GhlOAuthTokenPayload): string[] {
+  return uniqueLocationIds([
+    ...parseLocationIds(payload.approved_locations),
+    ...parseLocationIds(payload.approvedLocations)
+  ]);
+}
+
+function isCompanyTokenPayload(payload: GhlOAuthTokenPayload): boolean {
+  const userType = getUserType(payload)?.toLowerCase();
+  const locationId = resolveTokenLocationId(payload);
+  const accessToken = getAccessToken(payload);
+
+  return userType === "company" || Boolean(!locationId && accessToken);
+}
+
+function parseJsonRecord(responseText: string, context: string): Record<string, unknown> {
+  try {
+    const parsed = responseText ? (JSON.parse(responseText) as unknown) : {};
+    const record = getRecord(parsed);
+
+    if (!record) {
+      throw new Error(`${context} response was not a JSON object`);
+    }
+
+    return record;
+  } catch (error) {
+    logger.error(
+      {
+        error: error instanceof Error ? error.message : String(error),
+        redactedResponseText: redactSensitiveText(responseText)
+      },
+      `Failed to parse HighLevel ${context} response`
+    );
+    throw new GhlOAuthError({
+      publicErrorCode: "token_response_parse_failed",
+      message: `HighLevel ${context} response was not valid JSON`,
+      responseBody: redactSensitiveText(responseText)
+    });
+  }
+}
+
+function getNextPageToken(payload: Record<string, unknown>): string | undefined {
+  return (
+    getString(payload.nextPageToken) ??
+    getString(payload.next_page_token) ??
+    getString(payload.pageToken) ??
+    getString(payload.page_token) ??
+    getNestedString(payload, "meta", "nextPageToken") ??
+    getNestedString(payload, "meta", "next_page_token")
+  );
+}
+
+function getInstalledLocationIds(payload: Record<string, unknown>): string[] {
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  return uniqueLocationIds(items.map(getLocationIdFromUnknown));
+}
+
 async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOAuthTokenPayload> {
   const body = buildTokenRequestBody(entries);
   const requestDiagnostics = getSafeTokenRequestDiagnostics(Object.fromEntries(body.entries()));
@@ -329,8 +501,7 @@ async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOA
   logger.info(
     {
       status: response.status,
-      ok: response.ok,
-      redactedResponseText
+      ok: response.ok
     },
     "HighLevel OAuth token exchange response received"
   );
@@ -351,20 +522,136 @@ async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOA
   return payload;
 }
 
+async function fetchInstalledLocationIds(input: { companyAccessToken: string; companyId: string }): Promise<string[]> {
+  const marketplaceAppId = getString(env.GHL_MARKETPLACE_APP_ID);
+
+  if (!marketplaceAppId) {
+    throw new GhlOAuthError({
+      publicErrorCode: "oauth_missing_marketplace_app_id",
+      message: "GHL_MARKETPLACE_APP_ID is required to resolve installed HighLevel locations"
+    });
+  }
+
+  const installedLocationIds: string[] = [];
+  let pageToken: string | undefined;
+
+  do {
+    const url = new URL("/oauth/installed-locations", env.GHL_API_BASE_URL);
+    url.searchParams.set("companyId", input.companyId);
+    url.searchParams.set("appId", marketplaceAppId);
+    url.searchParams.set("isInstalled", "true");
+    url.searchParams.set("pageSize", "100");
+
+    if (pageToken) {
+      url.searchParams.set("pageToken", pageToken);
+    }
+
+    const response = await fetch(url.toString(), {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${input.companyAccessToken}`,
+        Version: highLevelV3Version,
+        Accept: "application/json"
+      }
+    });
+    const responseText = await response.text();
+
+    logger.info(
+      {
+        companyId: input.companyId,
+        marketplaceAppIdPresent: Boolean(marketplaceAppId),
+        pageTokenPresent: Boolean(pageToken),
+        status: response.status,
+        ok: response.ok
+      },
+      "HighLevel installed locations response received"
+    );
+
+    if (!response.ok) {
+      throw new GhlOAuthError({
+        publicErrorCode: "token_exchange_failed",
+        message: `HighLevel installed locations lookup failed with status ${response.status}`,
+        statusCode: response.status,
+        responseBody: redactSensitiveText(responseText)
+      });
+    }
+
+    const responseBody = parseJsonRecord(responseText, "installed locations");
+    installedLocationIds.push(...getInstalledLocationIds(responseBody));
+    pageToken = getNextPageToken(responseBody);
+  } while (pageToken);
+
+  return uniqueLocationIds(installedLocationIds);
+}
+
+async function requestLocationToken(input: {
+  companyAccessToken: string;
+  companyId: string;
+  locationId: string;
+}): Promise<GhlOAuthTokenPayload> {
+  const body = buildTokenRequestBody({
+    companyId: input.companyId,
+    locationId: input.locationId
+  });
+
+  const response = await fetch(new URL("/oauth/location-token", env.GHL_API_BASE_URL).toString(), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.companyAccessToken}`,
+      Version: highLevelV3Version,
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json"
+    },
+    body
+  });
+  const responseText = await response.text();
+
+  logger.info(
+    {
+      companyId: input.companyId,
+      locationId: input.locationId,
+      status: response.status,
+      ok: response.ok
+    },
+    "HighLevel location-token response received"
+  );
+
+  if (!response.ok) {
+    throw new GhlOAuthError({
+      publicErrorCode: "token_exchange_failed",
+      message: `HighLevel location-token exchange failed with status ${response.status}`,
+      statusCode: response.status,
+      responseBody: redactSensitiveText(responseText)
+    });
+  }
+
+  const payload = parseTokenResponse(responseText);
+  logger.info(
+    {
+      companyId: input.companyId,
+      locationId: input.locationId,
+      tokenResponseKeys: getTokenPayloadKeys(payload)
+    },
+    "Parsed HighLevel location-token response"
+  );
+
+  return payload;
+}
+
 async function saveTokenPayload(
   payload: GhlOAuthTokenPayload,
   fallbackLocationId?: string,
   fallbackRefreshToken?: string,
   fallbackMetadata: SaveTokenPayloadFallbackMetadata = {}
 ): Promise<GhlOAuthTokenRecord> {
-  const accessToken = getString(payload.access_token);
-  const refreshToken = getString(payload.refresh_token) ?? fallbackRefreshToken;
+  const accessToken = getAccessToken(payload);
+  const refreshToken = getRefreshToken(payload) ?? fallbackRefreshToken;
   const resolvedLocationId = resolveTokenLocationId(payload);
   const fallbackLocationIdValue = getString(fallbackLocationId);
   const locationId = resolvedLocationId ?? fallbackLocationIdValue;
   const companyId = resolveTokenCompanyId(payload) ?? getString(fallbackMetadata.companyId);
   const scopes = hasScopeMetadata(payload) ? parseScopes(payload) : normalizeScopes(fallbackMetadata.scopes);
-  const tokenType = getString(payload.token_type) ?? getString(fallbackMetadata.tokenType);
+  const tokenType = getTokenType(payload) ?? getString(fallbackMetadata.tokenType);
 
   logger.info(
     {
@@ -439,9 +726,160 @@ async function saveTokenPayload(
   }
 }
 
+async function getTargetLocationIdsForCompanyToken(input: {
+  companyAccessToken: string;
+  companyId: string;
+  approvedLocationIds: string[];
+}): Promise<{ locationIds: string[]; installedLocationCount: number }> {
+  if (input.approvedLocationIds.length > 0) {
+    return {
+      locationIds: input.approvedLocationIds,
+      installedLocationCount: 0
+    };
+  }
+
+  const installedLocationIds = await fetchInstalledLocationIds({
+    companyAccessToken: input.companyAccessToken,
+    companyId: input.companyId
+  });
+
+  return {
+    locationIds: installedLocationIds,
+    installedLocationCount: installedLocationIds.length
+  };
+}
+
+function validateLocationTokenPayload(input: {
+  companyId: string;
+  targetLocationId: string;
+  payload: GhlOAuthTokenPayload;
+}): void {
+  const accessToken = getAccessToken(input.payload);
+  const responseLocationId = resolveTokenLocationId(input.payload);
+
+  if (!accessToken || !responseLocationId) {
+    throw new GhlOAuthError({
+      publicErrorCode: "oauth_missing_location_id",
+      message: `HighLevel location-token response did not include a location-specific access token for location ${input.targetLocationId}`
+    });
+  }
+
+  if (responseLocationId !== input.targetLocationId) {
+    throw new GhlOAuthError({
+      publicErrorCode: "oauth_location_token_mismatch",
+      message: `HighLevel location-token response location ${responseLocationId} did not match requested location ${input.targetLocationId}`
+    });
+  }
+}
+
+async function exchangeCompanyTokenForLocationTokens(payload: GhlOAuthTokenPayload): Promise<GhlOAuthCompanyInstallStatus> {
+  const companyAccessToken = getAccessToken(payload);
+  const companyId = resolveTokenCompanyId(payload);
+  const approvedLocationIds = getApprovedLocationIds(payload);
+  const userType = getUserType(payload);
+
+  logger.info(
+    {
+      tokenResponseKeys: getTokenPayloadKeys(payload),
+      userType,
+      companyId,
+      locationIdPresent: Boolean(resolveTokenLocationId(payload)),
+      approvedLocationCount: approvedLocationIds.length,
+      isBulkInstallation: getIsBulkInstallation(payload),
+      appIdPresent: Boolean(getAppId(payload)),
+      versionIdPresent: Boolean(getVersionId(payload))
+    },
+    "Detected HighLevel Company OAuth token response"
+  );
+
+  if (!companyAccessToken) {
+    throw new GhlOAuthError({
+      publicErrorCode: "token_response_parse_failed",
+      message: "HighLevel Company OAuth response did not include accessToken"
+    });
+  }
+
+  if (!companyId) {
+    throw new GhlOAuthError({
+      publicErrorCode: "oauth_missing_company_id",
+      message: "HighLevel Company OAuth response did not include companyId"
+    });
+  }
+
+  const { locationIds, installedLocationCount } = await getTargetLocationIdsForCompanyToken({
+    companyAccessToken,
+    companyId,
+    approvedLocationIds
+  });
+
+  if (locationIds.length === 0) {
+    throw new GhlOAuthError({
+      publicErrorCode: "oauth_missing_installed_locations",
+      message: "No approved or installed HighLevel locations were resolved for this Company OAuth installation"
+    });
+  }
+
+  logger.info(
+    {
+      companyId,
+      approvedLocationCount: approvedLocationIds.length,
+      installedLocationCount,
+      targetLocationIds: locationIds
+    },
+    "Resolved HighLevel Company OAuth target locations"
+  );
+
+  const locationTokenPayloads: Array<{ locationId: string; payload: GhlOAuthTokenPayload }> = [];
+
+  for (const locationId of locationIds) {
+    const locationTokenPayload = await requestLocationToken({
+      companyAccessToken,
+      companyId,
+      locationId
+    });
+
+    validateLocationTokenPayload({
+      companyId,
+      targetLocationId: locationId,
+      payload: locationTokenPayload
+    });
+    locationTokenPayloads.push({ locationId, payload: locationTokenPayload });
+  }
+
+  const locations: GhlOAuthCompanyInstallStatus["locations"] = [];
+
+  for (const locationTokenPayload of locationTokenPayloads) {
+    const token = await saveTokenPayload(locationTokenPayload.payload);
+
+    logger.info(
+      {
+        companyId,
+        locationId: token.location_id,
+        tenantId: token.tenant_id,
+        tokenRowId: token.id
+      },
+      "Stored HighLevel location-scoped OAuth token converted from Company token"
+    );
+
+    locations.push({
+      location_id: token.location_id,
+      tenant_id: token.tenant_id,
+      token_present: Boolean(token.access_token),
+      refresh_token_present: Boolean(token.refresh_token),
+      expires_at: token.expires_at
+    });
+  }
+
+  return {
+    mode: "company_to_location",
+    company_id: companyId,
+    locations
+  };
+}
+
 export async function exchangeGhlAuthorizationCode(
   code: string
-): Promise<Awaited<ReturnType<typeof getGhlOAuthTokenStatus>>> {
+): Promise<GhlOAuthInstallStatus> {
   logger.info(
     {
       codePresent: Boolean(code),
@@ -462,6 +900,10 @@ export async function exchangeGhlAuthorizationCode(
     client_secret: requireEnvValue("GHL_OAUTH_CLIENT_SECRET", env.GHL_OAUTH_CLIENT_SECRET),
     redirect_uri: requireEnvValue("GHL_OAUTH_REDIRECT_URI", env.GHL_OAUTH_REDIRECT_URI)
   });
+
+  if (isCompanyTokenPayload(payload)) {
+    return exchangeCompanyTokenForLocationTokens(payload);
+  }
 
   const token = await saveTokenPayload(payload);
   return getGhlOAuthTokenStatus(token.location_id);
@@ -547,6 +989,7 @@ export function getOAuthCallbackConfig() {
     redirect_uri: env.GHL_OAUTH_REDIRECT_URI,
     client_id_present: Boolean(env.GHL_OAUTH_CLIENT_ID),
     client_secret_present: Boolean(env.GHL_OAUTH_CLIENT_SECRET),
+    marketplace_app_id_present: Boolean(env.GHL_MARKETPLACE_APP_ID),
     location_id_present: Boolean(env.GHL_LOCATION_ID),
     supabase_present: Boolean(env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY)
   };

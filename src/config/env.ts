@@ -42,6 +42,7 @@ const envSchema = z.object({
   GHL_OAUTH_CLIENT_SECRET: z.string().default(""),
   GHL_OAUTH_REDIRECT_URI: z.string().default(""),
   GHL_OAUTH_TOKEN_URL: z.string().url().default("https://services.leadconnectorhq.com/oauth/token"),
+  GHL_MARKETPLACE_APP_ID: z.string().default(""),
   GHL_INBOUND_MESSAGE_TYPE: z.string().default("SMS"),
   GHL_SEND_CONVERSATION_PROVIDER_ID: z
     .enum(["true", "false"])
@@ -83,7 +84,8 @@ export const envCheckKeys = [
   "GHL_API_VERSION",
   "GHL_OAUTH_CLIENT_ID",
   "GHL_OAUTH_CLIENT_SECRET",
-  "GHL_OAUTH_REDIRECT_URI"
+  "GHL_OAUTH_REDIRECT_URI",
+  "GHL_MARKETPLACE_APP_ID"
 ] as const;
 
 export type EnvCheckKey = (typeof envCheckKeys)[number];

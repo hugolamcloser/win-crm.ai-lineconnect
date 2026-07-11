@@ -1,7 +1,7 @@
 const secretKeyPattern = /(authorization|token|secret|key|password)/i;
 const sensitiveTextPatterns = [
-  /("(?:access_token|refresh_token|client_secret|code|authorization)"\s*:\s*")[^"]*"/gi,
-  /((?:access_token|refresh_token|client_secret|code|authorization)=)[^&\s]+/gi,
+  /("(?:access_token|accessToken|refresh_token|refreshToken|client_secret|clientSecret|code|authorization)"\s*:\s*")[^"]*"/gi,
+  /((?:access_token|accessToken|refresh_token|refreshToken|client_secret|clientSecret|code|authorization)=)[^&\s]+/gi,
   /(Bearer\s+)[A-Za-z0-9._~+/-]+=*/gi
 ];
 

@@ -15,11 +15,15 @@ const oauthCallbackSchema = z.object({
 export const oauthRouter = Router();
 
 function getOAuthFailureStatus(error: GhlOAuthError): number {
-  if (error.publicErrorCode === "oauth_missing_location_id") {
+  if (
+    error.publicErrorCode === "oauth_missing_location_id" ||
+    error.publicErrorCode === "oauth_missing_company_id" ||
+    error.publicErrorCode === "oauth_missing_installed_locations"
+  ) {
     return 400;
   }
 
-  if (error.publicErrorCode === "oauth_storage_failed") {
+  if (error.publicErrorCode === "oauth_storage_failed" || error.publicErrorCode === "oauth_missing_marketplace_app_id") {
     return 500;
   }
 
