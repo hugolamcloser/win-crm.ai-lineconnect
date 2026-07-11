@@ -203,7 +203,7 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
         conversationId: message.conversationId,
         ghlMessageId: message.messageId,
         lineProfileFound: false,
-        channelTokenSource: "env_fallback"
+        channelTokenSource: null
       },
       "Skipped HighLevel outbound message because no LINE mapping exists"
     );

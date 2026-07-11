@@ -29,6 +29,7 @@ async function processLineEventsInBackground(
         {
           tenantId: context.tenantId,
           lineChannelId: context.lineChannelId,
+          webhookKey: context.webhookKey,
           lineUserId: "userId" in event.source ? event.source.userId : undefined,
           lineMessageId: event.message?.id,
           error: redactSecrets(serializeError(error))
@@ -37,6 +38,10 @@ async function processLineEventsInBackground(
       );
     }
   }
+}
+
+function hasUsableCredential(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
 }
 
 lineWebhookRouter.post("/webhooks/line/:webhookKey/inbound", async (req: RawBodyRequest, res, next) => {
@@ -54,6 +59,20 @@ lineWebhookRouter.post("/webhooks/line/:webhookKey/inbound", async (req: RawBody
       throw new HttpError(403, "LINE channel is inactive");
     }
 
+    if (!hasUsableCredential(lineChannel.channel_access_token) || !hasUsableCredential(lineChannel.channel_secret)) {
+      logger.warn(
+        {
+          webhookKey,
+          lineChannelId: lineChannel.id,
+          tenantId: lineChannel.tenant_id,
+          channelAccessTokenPresent: hasUsableCredential(lineChannel.channel_access_token),
+          channelSecretPresent: hasUsableCredential(lineChannel.channel_secret)
+        },
+        "LINE webhook channel credentials are incomplete"
+      );
+      throw new HttpError(409, "LINE channel is not connected");
+    }
+
     const signature = req.header("x-line-signature");
 
     if (!req.rawBody || !verifyLineSignature(req.rawBody, signature, lineChannel.channel_secret)) {
@@ -63,6 +82,7 @@ lineWebhookRouter.post("/webhooks/line/:webhookKey/inbound", async (req: RawBody
     const payload = lineWebhookSchema.parse(req.body) as LineWebhookPayload;
     logger.info(
       {
+        webhookKey,
         lineChannelId: lineChannel.id,
         tenantId: lineChannel.tenant_id,
         eventCount: payload.events.length
@@ -73,6 +93,7 @@ lineWebhookRouter.post("/webhooks/line/:webhookKey/inbound", async (req: RawBody
     void processLineEventsInBackground(payload, {
       tenantId: lineChannel.tenant_id,
       lineChannelId: lineChannel.id,
+      webhookKey,
       channelAccessToken: lineChannel.channel_access_token
     });
   } catch (error) {

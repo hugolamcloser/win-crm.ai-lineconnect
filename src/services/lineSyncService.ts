@@ -26,6 +26,7 @@ import {
 export type LineInboundProcessingContext = {
   tenantId?: string;
   lineChannelId?: string;
+  webhookKey?: string;
   channelAccessToken?: string;
 };
 
@@ -264,7 +265,10 @@ export async function processLineWebhookEvent(event: LineWebhookEvent, context: 
         tenantId,
         locationId: ghlConfig.locationId,
         providerId: ghlConfig.providerId,
-        configSource: ghlConfig.configSource
+        webhookKey: context.webhookKey,
+        configSource: ghlConfig.configSource,
+        selectedContactAuthMode: getLineInboundFlowAuthDiagnostics("send_message").contact_auth_mode_used,
+        selectedInboundSendAuthMode: getLineInboundFlowAuthDiagnostics("send_message").inbound_send_auth_mode_used
       },
       "Resolved GHL tenant config for LINE inbound processing"
     );
@@ -327,6 +331,7 @@ export async function processLineWebhookEvent(event: LineWebhookEvent, context: 
           lineUserId,
           lineMessageId,
           lineMessageType: lineMessage.type,
+          webhookKey: context.webhookKey,
           messageEventStatus: "skipped"
         },
         "Skipped unsupported LINE message type for HighLevel inbound message send"
@@ -471,6 +476,7 @@ export async function processLineWebhookEvent(event: LineWebhookEvent, context: 
           tenantId,
           locationId: ghlConfig.locationId,
           ghlProviderId: ghlConfig.providerId,
+          webhookKey: context.webhookKey,
           authModeUsed: requestPayload.actual_auth_mode_used,
           ghlStatusCode: requestPayload.statusCode,
           lineUserId,
@@ -494,6 +500,7 @@ export async function processLineWebhookEvent(event: LineWebhookEvent, context: 
           tenantId,
           locationId: ghlConfig.locationId,
           ghlProviderId: ghlConfig.providerId,
+          webhookKey: context.webhookKey,
           lineUserId,
           lineMessageId,
           error: serializedError,
@@ -536,6 +543,7 @@ export async function processLineWebhookEvent(event: LineWebhookEvent, context: 
           tenantId,
           locationId: ghlConfig.locationId,
           ghlProviderId: ghlConfig.providerId,
+          webhookKey: context.webhookKey,
           lineUserId,
           lineMessageId,
           ghlStatusCode: serializedError.statusCode,

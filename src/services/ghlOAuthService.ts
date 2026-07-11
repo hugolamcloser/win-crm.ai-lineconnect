@@ -2,7 +2,7 @@ import { env, requireEnvValue } from "../config/env";
 import { logger } from "../config/logger";
 import { redactSensitiveText } from "../utils/redaction";
 import {
-  ensureDefaultTenant,
+  ensureTenantForLocation,
   getGhlOAuthToken,
   getGhlOAuthTokenStatus,
   upsertGhlOAuthToken,
@@ -31,6 +31,12 @@ type GhlOAuthTokenPayload = {
   companyId?: string;
   company_id?: string;
   [key: string]: unknown;
+};
+
+type SaveTokenPayloadFallbackMetadata = {
+  companyId?: string | null;
+  scopes?: string[] | null;
+  tokenType?: string | null;
 };
 
 export type GhlAuthContext = {
@@ -123,6 +129,14 @@ function parseScopes(payload: GhlOAuthTokenPayload): string[] {
 
   const scopes = getString(payload.scopes) ?? getString(payload.scope);
   return scopes ? scopes.split(/\s+/).filter(Boolean) : [];
+}
+
+function hasScopeMetadata(payload: GhlOAuthTokenPayload): boolean {
+  return Object.prototype.hasOwnProperty.call(payload, "scope") || Object.prototype.hasOwnProperty.call(payload, "scopes");
+}
+
+function normalizeScopes(scopes: string[] | null | undefined): string[] {
+  return (scopes ?? []).filter((scope): scope is string => typeof scope === "string" && scope.trim().length > 0);
 }
 
 function parseClaimScopes(value: unknown): string[] | undefined {
@@ -242,8 +256,7 @@ function resolveTokenLocationId(payload: GhlOAuthTokenPayload): string | undefin
     getNestedString(payload, "location", "locationId") ??
     getNestedString(payload, "location", "_id") ??
     getNestedString(payload, "activeLocation", "id") ??
-    getNestedString(payload, "activeLocation", "locationId") ??
-    getString(env.GHL_LOCATION_ID)
+    getNestedString(payload, "activeLocation", "locationId")
   );
 }
 
@@ -340,19 +353,25 @@ async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOA
 
 async function saveTokenPayload(
   payload: GhlOAuthTokenPayload,
-  fallbackLocationId: string,
-  fallbackRefreshToken?: string
+  fallbackLocationId?: string,
+  fallbackRefreshToken?: string,
+  fallbackMetadata: SaveTokenPayloadFallbackMetadata = {}
 ): Promise<GhlOAuthTokenRecord> {
   const accessToken = getString(payload.access_token);
   const refreshToken = getString(payload.refresh_token) ?? fallbackRefreshToken;
-  const locationId = resolveTokenLocationId(payload) ?? fallbackLocationId;
-  const companyId = resolveTokenCompanyId(payload);
+  const resolvedLocationId = resolveTokenLocationId(payload);
+  const fallbackLocationIdValue = getString(fallbackLocationId);
+  const locationId = resolvedLocationId ?? fallbackLocationIdValue;
+  const companyId = resolveTokenCompanyId(payload) ?? getString(fallbackMetadata.companyId);
+  const scopes = hasScopeMetadata(payload) ? parseScopes(payload) : normalizeScopes(fallbackMetadata.scopes);
+  const tokenType = getString(payload.token_type) ?? getString(fallbackMetadata.tokenType);
 
   logger.info(
     {
       tokenResponseKeys: getTokenPayloadKeys(payload),
       locationIdPresent: Boolean(locationId),
       resolvedLocationId: locationId,
+      locationIdSource: resolvedLocationId ? "token_response" : fallbackLocationIdValue ? "caller_fallback" : "missing",
       companyIdPresent: Boolean(companyId),
       resolvedCompanyId: companyId
     },
@@ -376,17 +395,18 @@ async function saveTokenPayload(
   if (!locationId) {
     throw new GhlOAuthError({
       publicErrorCode: "oauth_missing_location_id",
-      message: "HighLevel OAuth response did not include a location ID and GHL_LOCATION_ID is missing"
+      message: "HighLevel OAuth response did not include a location ID"
     });
   }
 
-  let tenantId: string | undefined;
+  let tenantId: string;
 
   try {
-    tenantId = locationId === env.GHL_LOCATION_ID ? await ensureDefaultTenant() : undefined;
+    const tenant = await ensureTenantForLocation(locationId);
+    tenantId = tenant.id;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.error({ locationId, companyId, error: message }, "Failed to resolve default tenant before OAuth token upsert");
+    logger.error({ locationId, companyId, error: message }, "Failed to resolve tenant before OAuth token upsert");
     throw new GhlOAuthError({
       publicErrorCode: "oauth_storage_failed",
       message: `Supabase tenant lookup failed before OAuth token storage: ${message}`
@@ -403,8 +423,8 @@ async function saveTokenPayload(
       accessToken,
       refreshToken,
       expiresAt: getExpiresAt(payload),
-      scopes: parseScopes(payload),
-      tokenType: getString(payload.token_type)
+      scopes,
+      tokenType
     });
 
     logger.info({ locationId: token.location_id, companyId: token.company_id, tokenRowId: token.id }, "Supabase OAuth token upsert succeeded");
@@ -443,7 +463,7 @@ export async function exchangeGhlAuthorizationCode(
     redirect_uri: requireEnvValue("GHL_OAUTH_REDIRECT_URI", env.GHL_OAUTH_REDIRECT_URI)
   });
 
-  const token = await saveTokenPayload(payload, env.GHL_LOCATION_ID);
+  const token = await saveTokenPayload(payload);
   return getGhlOAuthTokenStatus(token.location_id);
 }
 
@@ -464,7 +484,11 @@ export async function refreshGhlOAuthToken(locationId = env.GHL_LOCATION_ID): Pr
     client_secret: requireEnvValue("GHL_OAUTH_CLIENT_SECRET", env.GHL_OAUTH_CLIENT_SECRET)
   });
 
-  return saveTokenPayload(payload, token.location_id, token.refresh_token);
+  return saveTokenPayload(payload, token.location_id, token.refresh_token, {
+    companyId: token.company_id,
+    scopes: token.scopes,
+    tokenType: token.token_type
+  });
 }
 
 export async function getGhlAuthContext(
