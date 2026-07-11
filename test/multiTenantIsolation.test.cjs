@@ -20,7 +20,7 @@ const lineOutbound = require("../dist/services/lineOutboundChannelService");
 const originalRepositoryExports = {};
 
 for (const key of [
-  "ensureDefaultTenant",
+  "ensureTenantForLocation",
   "getGhlOAuthToken",
   "getGhlOAuthTokenStatus",
   "upsertGhlOAuthToken",
@@ -58,7 +58,40 @@ function buildTokenRow(locationId, accessToken, refreshToken, overrides = {}) {
 }
 
 function setupOAuthRows(rows) {
-  repository.ensureDefaultTenant = async () => "tenant_A";
+  const tenantsByLocation = new Map([
+    [
+      "loc_A",
+      {
+        id: "tenant_A",
+        location_id: "loc_A",
+        ghl_provider_id: "provider_A",
+        line_channel_id: "default",
+        created_at: "2026-07-11T00:00:00.000Z",
+        updated_at: "2026-07-11T00:00:00.000Z"
+      }
+    ],
+    [
+      "loc_B",
+      {
+        id: "tenant_B",
+        location_id: "loc_B",
+        ghl_provider_id: "provider_B",
+        line_channel_id: "default",
+        created_at: "2026-07-11T00:00:00.000Z",
+        updated_at: "2026-07-11T00:00:00.000Z"
+      }
+    ]
+  ]);
+
+  repository.ensureTenantForLocation = async (locationId) => {
+    const tenant = tenantsByLocation.get(locationId);
+
+    if (!tenant) {
+      throw new Error(`No tenant for location ${locationId}`);
+    }
+
+    return tenant;
+  };
   repository.getGhlOAuthToken = async (locationId) => rows.get(locationId) ?? null;
   repository.getGhlOAuthTokenStatus = async (locationId) => {
     const token = rows.get(locationId);
@@ -116,8 +149,8 @@ function mockTokenResponse(payload, inspectRequest) {
 
 test("OAuth token storage and refresh stay isolated by location", async () => {
   const rows = new Map([
-    ["loc_A", buildTokenRow("loc_A", "access_A", "refresh_A")],
-    ["loc_B", buildTokenRow("loc_B", "access_B", "refresh_B")]
+    ["loc_A", buildTokenRow("loc_A", "access_A", "refresh_A", { tenant_id: "tenant_A" })],
+    ["loc_B", buildTokenRow("loc_B", "access_B", "refresh_B", { tenant_id: "tenant_B" })]
   ]);
   setupOAuthRows(rows);
 
@@ -145,8 +178,12 @@ test("OAuth token storage and refresh stay isolated by location", async () => {
 
   const installStatus = await oauthService.exchangeGhlAuthorizationCode("mock-code-location-B");
   assert.equal(installStatus.location_id, "loc_B");
+  assert.equal(rows.get("loc_A").tenant_id, "tenant_A");
   assert.equal(rows.get("loc_A").access_token, "access_A");
+  assert.equal(rows.get("loc_A").refresh_token, "refresh_A");
+  assert.equal(rows.get("loc_B").tenant_id, "tenant_B");
   assert.equal(rows.get("loc_B").access_token, "access_B_install");
+  assert.equal(rows.get("loc_B").refresh_token, "refresh_B_install");
 
   mockTokenResponse(
     {
@@ -165,15 +202,52 @@ test("OAuth token storage and refresh stay isolated by location", async () => {
 
   const refreshed = await oauthService.refreshGhlOAuthToken("loc_B");
   assert.equal(refreshed.location_id, "loc_B");
+  assert.equal(refreshed.tenant_id, "tenant_B");
+  assert.equal(rows.get("loc_A").tenant_id, "tenant_A");
   assert.equal(rows.get("loc_A").access_token, "access_A");
+  assert.equal(rows.get("loc_A").refresh_token, "refresh_A");
+  assert.equal(rows.get("loc_B").tenant_id, "tenant_B");
   assert.equal(rows.get("loc_B").access_token, "access_B_refreshed");
+  assert.equal(rows.get("loc_B").refresh_token, "refresh_B_refreshed");
+
+  mockTokenResponse({
+    access_token: "access_without_location",
+    refresh_token: "refresh_without_location",
+    expires_in: 3600,
+    scopes: ["oauth.readonly", "oauth.write"],
+    token_type: "Bearer"
+  });
+
+  await assert.rejects(
+    () => oauthService.exchangeGhlAuthorizationCode("mock-code-missing-location"),
+    /HighLevel OAuth response did not include a location ID/
+  );
+
+  mockTokenResponse({
+    access_token: "access_unresolved_location",
+    refresh_token: "refresh_unresolved_location",
+    expires_in: 3600,
+    location_id: "loc_unresolved",
+    scopes: ["oauth.readonly", "oauth.write"],
+    token_type: "Bearer"
+  });
+
+  await assert.rejects(
+    () => oauthService.exchangeGhlAuthorizationCode("mock-code-unresolved-location"),
+    /Supabase tenant lookup failed before OAuth token storage/
+  );
 
   await assert.rejects(
     () => oauthService.getGhlAuthContext("loc_missing", { allowPrivateFallback: false }),
     /No HighLevel OAuth token is stored for location loc_missing/
   );
+  assert.equal(rows.has("loc_unresolved"), false);
+  assert.equal(rows.get("loc_A").tenant_id, "tenant_A");
   assert.equal(rows.get("loc_A").access_token, "access_A");
+  assert.equal(rows.get("loc_A").refresh_token, "refresh_A");
+  assert.equal(rows.get("loc_B").tenant_id, "tenant_B");
   assert.equal(rows.get("loc_B").access_token, "access_B_refreshed");
+  assert.equal(rows.get("loc_B").refresh_token, "refresh_B_refreshed");
 });
 
 test("LINE outbound channel selection stays isolated by tenant", async () => {

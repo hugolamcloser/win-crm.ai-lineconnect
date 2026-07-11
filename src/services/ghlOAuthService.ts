@@ -2,7 +2,7 @@ import { env, requireEnvValue } from "../config/env";
 import { logger } from "../config/logger";
 import { redactSensitiveText } from "../utils/redaction";
 import {
-  ensureDefaultTenant,
+  ensureTenantForLocation,
   getGhlOAuthToken,
   getGhlOAuthTokenStatus,
   upsertGhlOAuthToken,
@@ -382,13 +382,14 @@ async function saveTokenPayload(
     });
   }
 
-  let tenantId: string | undefined;
+  let tenantId: string;
 
   try {
-    tenantId = locationId === env.GHL_LOCATION_ID ? await ensureDefaultTenant() : undefined;
+    const tenant = await ensureTenantForLocation(locationId);
+    tenantId = tenant.id;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    logger.error({ locationId, companyId, error: message }, "Failed to resolve default tenant before OAuth token upsert");
+    logger.error({ locationId, companyId, error: message }, "Failed to resolve tenant before OAuth token upsert");
     throw new GhlOAuthError({
       publicErrorCode: "oauth_storage_failed",
       message: `Supabase tenant lookup failed before OAuth token storage: ${message}`
