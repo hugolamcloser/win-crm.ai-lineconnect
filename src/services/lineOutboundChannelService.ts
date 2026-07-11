@@ -72,8 +72,8 @@ export async function resolveLineChannelForOutbound(
     };
   }
 
-  return {
+  throw new LineChannelNotConnectedError({
     lineChannelId: mapping.line_channel_id ?? undefined,
-    channelTokenSource: "env_fallback"
-  };
+    channelTokenSource: "tenant_active_channel"
+  });
 }

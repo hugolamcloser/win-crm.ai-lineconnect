@@ -51,8 +51,8 @@ cp .env.example .env
 Important production values:
 
 - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`: Supabase backend credentials. Use the service role key only on the server.
-- `LINE_CHANNEL_SECRET`: Used to verify LINE webhook signatures.
-- `LINE_CHANNEL_ACCESS_TOKEN`: Used to call LINE profile and push message APIs.
+- `LINE_CHANNEL_SECRET`: Legacy/default fallback for LINE webhook signatures. Connected multi-tenant LINE webhooks use the tenant's `line_channels.channel_secret`.
+- `LINE_CHANNEL_ACCESS_TOKEN`: Legacy/default fallback for LINE profile and push APIs. Connected multi-tenant runtime sends use the tenant's `line_channels.channel_access_token`.
 - `GHL_LOCATION_ID`: HighLevel location ID.
 - `GHL_CUSTOM_PROVIDER_ID`: Your HighLevel custom Conversation Provider ID.
 - `GHL_INBOUND_MESSAGE_TYPE`: HighLevel inbound message `type`. The confirmed production LINE setup uses `Custom`.

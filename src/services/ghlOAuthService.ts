@@ -242,8 +242,7 @@ function resolveTokenLocationId(payload: GhlOAuthTokenPayload): string | undefin
     getNestedString(payload, "location", "locationId") ??
     getNestedString(payload, "location", "_id") ??
     getNestedString(payload, "activeLocation", "id") ??
-    getNestedString(payload, "activeLocation", "locationId") ??
-    getString(env.GHL_LOCATION_ID)
+    getNestedString(payload, "activeLocation", "locationId")
   );
 }
 
@@ -340,12 +339,14 @@ async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOA
 
 async function saveTokenPayload(
   payload: GhlOAuthTokenPayload,
-  fallbackLocationId: string,
+  fallbackLocationId?: string,
   fallbackRefreshToken?: string
 ): Promise<GhlOAuthTokenRecord> {
   const accessToken = getString(payload.access_token);
   const refreshToken = getString(payload.refresh_token) ?? fallbackRefreshToken;
-  const locationId = resolveTokenLocationId(payload) ?? fallbackLocationId;
+  const resolvedLocationId = resolveTokenLocationId(payload);
+  const fallbackLocationIdValue = getString(fallbackLocationId);
+  const locationId = resolvedLocationId ?? fallbackLocationIdValue;
   const companyId = resolveTokenCompanyId(payload);
 
   logger.info(
@@ -353,6 +354,7 @@ async function saveTokenPayload(
       tokenResponseKeys: getTokenPayloadKeys(payload),
       locationIdPresent: Boolean(locationId),
       resolvedLocationId: locationId,
+      locationIdSource: resolvedLocationId ? "token_response" : fallbackLocationIdValue ? "caller_fallback" : "missing",
       companyIdPresent: Boolean(companyId),
       resolvedCompanyId: companyId
     },
@@ -376,7 +378,7 @@ async function saveTokenPayload(
   if (!locationId) {
     throw new GhlOAuthError({
       publicErrorCode: "oauth_missing_location_id",
-      message: "HighLevel OAuth response did not include a location ID and GHL_LOCATION_ID is missing"
+      message: "HighLevel OAuth response did not include a location ID"
     });
   }
 
@@ -443,7 +445,7 @@ export async function exchangeGhlAuthorizationCode(
     redirect_uri: requireEnvValue("GHL_OAUTH_REDIRECT_URI", env.GHL_OAUTH_REDIRECT_URI)
   });
 
-  const token = await saveTokenPayload(payload, env.GHL_LOCATION_ID);
+  const token = await saveTokenPayload(payload);
   return getGhlOAuthTokenStatus(token.location_id);
 }
 

@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "npm run build && node --watch dist/server.js",
     "start": "node dist/server.js",
+    "test": "npm run build && node --test test/*.test.cjs",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [
