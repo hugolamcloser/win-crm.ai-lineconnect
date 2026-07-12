@@ -41,9 +41,8 @@ export class GhlApiError extends Error {
 }
 
 const providerNoAccessCanonicalCode = "CONVERSATIONS_MSG_PROVIDER_NO_ACCESS";
-const requiredInboundSendAuthMode = "oauth" satisfies GhlInboundSendAuthMode;
+const requiredInboundSendAuthMode = "oauth" as const;
 let providerConfigWarningLogged = false;
-type GhlInboundSendAuthMode = "oauth" | "private_integration";
 
 type InboundEndpointDiagnosis = {
   diagnosis: string;
@@ -117,10 +116,6 @@ function getConfiguredInboundMessageType(): string {
   }
 
   return configuredType;
-}
-
-function getConfiguredInboundSendAuthMode(): GhlInboundSendAuthMode {
-  return env.GHL_INBOUND_SEND_AUTH_MODE;
 }
 
 async function getInboundSendAuthContext(locationId: string): Promise<GhlAuthContext> {
@@ -482,13 +477,11 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
   const path = "/conversations/messages/inbound";
   const method = "POST";
   const payload = buildInboundMessagePayload(input);
-  const configuredAuthMode = getConfiguredInboundSendAuthMode();
 
   logger.info(
     {
       method,
       path,
-      configuredAuthMode,
       conversationProviderId: payload.conversationProviderId,
       providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
       locationId: payload.locationId,
@@ -511,7 +504,6 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
         method,
         path,
         authMode: auth.mode,
-        configuredAuthMode,
         conversationProviderId: payload.conversationProviderId,
         providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
         locationId: payload.locationId,
@@ -594,7 +586,6 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
           method,
           path,
           authMode: error.authMode,
-          configuredAuthMode,
           conversationProviderId: payload.conversationProviderId,
           providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
           locationId: payload.locationId,
@@ -613,7 +604,6 @@ export async function sendInboundMessageToGhl(input: GhlInboundMessageInput): Pr
         {
           method,
           path,
-          configuredAuthMode,
           conversationProviderId: payload.conversationProviderId,
           providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
           locationId: payload.locationId,
@@ -682,7 +672,6 @@ export async function getGhlProviderConfigDebug(): Promise<{
   provider_id_equals_oauth_client_id: boolean;
   GHL_LOCATION_ID: string;
   GHL_INBOUND_MESSAGE_TYPE: string;
-  GHL_INBOUND_SEND_AUTH_MODE: GhlInboundSendAuthMode;
   oauth_token_present: boolean;
   selected_auth_mode: "oauth" | "private_integration" | "none";
 }> {
@@ -709,14 +698,13 @@ export async function getGhlProviderConfigDebug(): Promise<{
     provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
     GHL_LOCATION_ID: locationId,
     GHL_INBOUND_MESSAGE_TYPE: getConfiguredInboundMessageType(),
-    GHL_INBOUND_SEND_AUTH_MODE: getConfiguredInboundSendAuthMode(),
     oauth_token_present: oauthTokenPresent,
     selected_auth_mode: selectedAuthMode
   };
 }
 
 export function getGhlInboundSendAuthConfigDebug(): {
-  GHL_INBOUND_SEND_AUTH_MODE: GhlInboundSendAuthMode;
+  required_auth_mode: "oauth";
   private_token_present: boolean;
   provider_id_used: string;
   provider_id_equals_oauth_client_id: boolean;
@@ -724,7 +712,7 @@ export function getGhlInboundSendAuthConfigDebug(): {
   location_id: string;
 } {
   return {
-    GHL_INBOUND_SEND_AUTH_MODE: getConfiguredInboundSendAuthMode(),
+    required_auth_mode: requiredInboundSendAuthMode,
     private_token_present: Boolean(env.GHL_PRIVATE_INTEGRATION_TOKEN.trim()),
     provider_id_used: getConfiguredConversationProviderId(),
     provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
@@ -972,11 +960,10 @@ export async function testGhlInboundMessageEndpoint(): Promise<{
   }
 }
 
-export async function testConfiguredGhlInboundSendAuth(): Promise<{
+export async function testGhlInboundSendAuth(): Promise<{
   endpoint_path: string;
   method: string;
   auth_mode: string;
-  configured_auth_mode: GhlInboundSendAuthMode;
   provider_id_used: string;
   provider_id_equals_oauth_client_id: boolean;
   location_id: string;
@@ -994,15 +981,13 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
   const conversationProviderId = getConfiguredConversationProviderId();
   const endpoint = "/conversations/messages/inbound";
   const method = "POST";
-  const configuredAuthMode = getConfiguredInboundSendAuthMode();
   const payload = buildProviderProbePayload(conversationProviderId, locationId);
-  let authMode: string = configuredAuthMode;
+  let authMode: string = requiredInboundSendAuthMode;
 
   logger.info(
     {
       method,
       endpoint,
-      configuredAuthMode,
       conversationProviderId,
       providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
       locationId,
@@ -1055,7 +1040,6 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
         method,
         endpoint,
         authMode,
-        configuredAuthMode,
         conversationProviderId,
         providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
         locationId,
@@ -1068,14 +1052,13 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
         responseBody,
         diagnosis
       },
-      "Configured HighLevel inbound send auth test completed"
+      "HighLevel inbound send OAuth test completed"
     );
 
     return {
       endpoint_path: endpoint,
       method,
       auth_mode: authMode,
-      configured_auth_mode: configuredAuthMode,
       provider_id_used: conversationProviderId,
       provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
       location_id: locationId,
@@ -1096,7 +1079,6 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
         method,
         endpoint,
         authMode,
-        configuredAuthMode,
         conversationProviderId,
         providerIdEqualsOAuthClientId: getProviderIdEqualsOAuthClientId(),
         locationId,
@@ -1105,21 +1087,20 @@ export async function testConfiguredGhlInboundSendAuth(): Promise<{
         requestBody: redactSecrets(payload),
         error: errorMessage
       },
-      "Configured HighLevel inbound send auth test failed before receiving a response"
+      "HighLevel inbound send OAuth test failed before receiving a response"
     );
 
     return {
       endpoint_path: endpoint,
       method,
       auth_mode: authMode,
-      configured_auth_mode: configuredAuthMode,
       provider_id_used: conversationProviderId,
       provider_id_equals_oauth_client_id: getProviderIdEqualsOAuthClientId(),
       location_id: locationId,
       inbound_message_type: payload.type,
       request_payload: redactSecrets(payload),
       diagnosis:
-        "The configured inbound send auth probe failed before receiving a HighLevel HTTP response. Check server logs for token lookup, private-token configuration, network, or provider settings.",
+        "The inbound send OAuth probe failed before receiving a HighLevel HTTP response. Check server logs for token lookup, network, or provider settings.",
       likely_failure_class: "unknown",
       error: errorMessage
     };
