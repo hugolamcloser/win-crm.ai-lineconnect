@@ -87,7 +87,7 @@ function getReadableError(error: unknown): string {
     return "Please fill in all required fields.";
   }
 
-  return error instanceof Error ? error.message : "Something went wrong.";
+  return "Something went wrong. Please try again or contact support.";
 }
 
 function signPayload(payloadText: string): string {
@@ -275,7 +275,7 @@ function buildLinePageHtml(input: {
 <body>
 <main>
   <div class="topbar">
-    <div><h1>LINE Official Account</h1><div class="tenant">Location ${escapeHtml(input.locationId)}</div></div>
+    <div><h1>LINE Official Account</h1><div class="tenant">Manage your LINE Official Account connection.</div></div>
     <span class="pill ${statusClass}">${statusLabel}</span>
   </div>
   ${input.statusMessage ? `<div class="notice">${escapeHtml(input.statusMessage)}</div>` : ""}
