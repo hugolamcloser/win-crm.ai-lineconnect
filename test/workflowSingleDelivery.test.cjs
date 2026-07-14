@@ -9,6 +9,7 @@ process.env.GHL_CUSTOM_PROVIDER_ID = "global_provider_must_not_be_used";
 process.env.GHL_WORKFLOW_LINE_DELIVERY_MODE = "provider_first";
 
 const config = require("../dist/config/env");
+const supabaseConfig = require("../dist/config/supabase");
 const repository = require("../dist/services/repository");
 const workflowOutboundClient = require("../dist/integrations/ghlWorkflowOutboundMirrorClient");
 const lineClient = require("../dist/integrations/lineClient");
@@ -17,11 +18,13 @@ const ghlWorkflowActionService = require("../dist/services/ghlWorkflowActionServ
 const ghlSyncService = require("../dist/services/ghlSyncService");
 
 const patchedExports = [
+  [supabaseConfig, "getSupabase"],
   [repository, "getTenantIdsByLocationId"],
   [repository, "findLineProfileByGhlIdsForTenantIds"],
   [repository, "getTenantById"],
   [repository, "findWorkflowOutboundMirrorMessageEventForTenantIds"],
-  [repository, "findSentGhlOutboundProviderMessageEvent"],
+  [repository, "claimGhlOutboundProviderDelivery"],
+  [repository, "finalizeGhlOutboundProviderDelivery"],
   [repository, "saveMessageEvent"],
   [workflowOutboundClient, "mirrorWorkflowOutboundMessageToGhl"],
   [lineOutboundChannelService, "resolveLineChannelForOutbound"],
@@ -231,17 +234,170 @@ test("direct_legacy rollback mode retains one direct LINE push", async () => {
   assert.equal(messageEvents.at(-1).status, "sent");
 });
 
+test("repository atomic claim distinguishes success, unique conflict, and database failure", async () => {
+  const inserts = [];
+  const responses = [
+    { data: { id: "claim_db_exact" }, error: null },
+    { data: null, error: { code: "23505", message: "duplicate key" } },
+    { data: null, error: { code: "XX000", message: "database unavailable" } }
+  ];
+  supabaseConfig.getSupabase = () => ({
+    from(table) {
+      assert.equal(table, "message_events");
+      return {
+        insert(payload) {
+          inserts.push(payload);
+          return {
+            select(columns) {
+              assert.equal(columns, "id");
+              return {
+                single: async () => responses.shift()
+              };
+            }
+          };
+        }
+      };
+    }
+  });
+  const input = {
+    tenantId: "tenant_exact",
+    lineUserId: "line_user_exact",
+    ghlMessageId: "ghl_claim_exact",
+    ghlConversationId: "conversation_exact",
+    payload: { message: "claim test" },
+    requestPayload: { source: "ghl_outbound_provider", deliveryState: "claimed" }
+  };
+
+  const claimed = await repository.claimGhlOutboundProviderDelivery(input);
+  const duplicate = await repository.claimGhlOutboundProviderDelivery(input);
+
+  assert.deepEqual(claimed, {
+    claimed: true,
+    eventId: "claim_db_exact",
+    externalMessageId: "ghl-provider-delivery:ghl_claim_exact"
+  });
+  assert.deepEqual(duplicate, {
+    claimed: false,
+    externalMessageId: "ghl-provider-delivery:ghl_claim_exact"
+  });
+  await assert.rejects(
+    () => repository.claimGhlOutboundProviderDelivery(input),
+    /database unavailable/
+  );
+  assert.equal(inserts[0].status, "received");
+  assert.equal(inserts[0].tenant_id, "tenant_exact");
+  assert.equal(inserts[0].external_message_id, "ghl-provider-delivery:ghl_claim_exact");
+  assert.equal(inserts[0].request_payload.deliveryState, "claimed");
+});
+
+test("repository finalization updates the exact claimed message event row", async () => {
+  const updates = [];
+  const filters = [];
+  supabaseConfig.getSupabase = () => ({
+    from(table) {
+      assert.equal(table, "message_events");
+      const chain = {
+        update(payload) {
+          updates.push(payload);
+          return chain;
+        },
+        eq(column, value) {
+          filters.push([column, value]);
+          return chain;
+        },
+        select(columns) {
+          assert.equal(columns, "id");
+          return chain;
+        },
+        maybeSingle: async () => ({ data: { id: "claim_db_exact" }, error: null })
+      };
+      return chain;
+    }
+  });
+
+  await repository.finalizeGhlOutboundProviderDelivery({
+    eventId: "claim_db_exact",
+    tenantId: "tenant_exact",
+    status: "sent",
+    lineUserId: "line_user_exact",
+    ghlMessageId: "ghl_claim_exact",
+    ghlConversationId: "conversation_exact",
+    requestPayload: { source: "ghl_outbound_provider", deliveryState: "sent" }
+  });
+
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].status, "sent");
+  assert.equal(updates[0].request_payload.deliveryState, "sent");
+  assert.deepEqual(filters, [
+    ["id", "claim_db_exact"],
+    ["tenant_id", "tenant_exact"],
+    ["provider", "ghl"],
+    ["direction", "outbound"],
+    ["ghl_message_id", "ghl_claim_exact"],
+    ["status", "received"]
+  ]);
+});
+
+test("repository rejects an ambiguous contact fallback within the exact location tenants", async () => {
+  const filters = [];
+  const matches = [
+    { id: "profile_a", tenant_id: "tenant_exact", ghl_contact_id: "contact_exact" },
+    { id: "profile_b", tenant_id: "tenant_exact", ghl_contact_id: "contact_exact" }
+  ];
+  supabaseConfig.getSupabase = () => ({
+    from(table) {
+      assert.equal(table, "line_profiles");
+      const chain = {
+        select() {
+          return chain;
+        },
+        in(column, values) {
+          filters.push([column, values]);
+          return chain;
+        },
+        order() {
+          return chain;
+        },
+        eq(column, value) {
+          filters.push([column, value]);
+          return chain;
+        },
+        limit: async (count) => {
+          assert.equal(count, 2);
+          return { data: matches, error: null };
+        }
+      };
+      return chain;
+    }
+  });
+
+  const mapping = await repository.findLineProfileByGhlIdsForTenantIds(
+    ["tenant_exact"],
+    { contactId: "contact_exact" }
+  );
+
+  assert.equal(mapping, null);
+  assert.deepEqual(filters, [
+    ["tenant_id", ["tenant_exact"]],
+    ["ghl_contact_id", "contact_exact"]
+  ]);
+});
+
 function setupProviderCallbackHarness() {
   const calls = {
     tenantLocations: [],
     mirrorGuards: [],
     profileLookups: [],
-    idempotencyChecks: [],
     channelSelections: [],
+    claimAttempts: [],
+    finalizations: [],
     linePushes: []
   };
   const messageEvents = [];
-  let sentEvent = null;
+  const claims = new Map();
+  let channelConnected = true;
+  let claimError = null;
+  let pushError = null;
 
   repository.getTenantIdsByLocationId = async (locationId) => {
     calls.tenantLocations.push(locationId);
@@ -262,24 +418,53 @@ function setupProviderCallbackHarness() {
       ghl_conversation_id: "conversation_exact"
     };
   };
-  repository.findSentGhlOutboundProviderMessageEvent = async (input) => {
-    calls.idempotencyChecks.push(input);
-    return sentEvent;
+  repository.claimGhlOutboundProviderDelivery = async (input) => {
+    calls.claimAttempts.push(input);
+
+    if (claimError) {
+      throw claimError;
+    }
+
+    const externalMessageId = `ghl-provider-delivery:${input.ghlMessageId}`;
+    const key = `${input.tenantId}:${externalMessageId}`;
+
+    if (claims.has(key)) {
+      return { claimed: false, externalMessageId };
+    }
+
+    const eventId = `claim_${claims.size + 1}`;
+    claims.set(key, {
+      eventId,
+      status: "received",
+      input
+    });
+
+    return { claimed: true, eventId, externalMessageId };
+  };
+  repository.finalizeGhlOutboundProviderDelivery = async (input) => {
+    calls.finalizations.push(input);
+    const claim = [...claims.values()].find((candidate) => candidate.eventId === input.eventId);
+
+    if (!claim) {
+      throw new Error("claim not found");
+    }
+
+    claim.status = input.status;
+    claim.finalization = input;
   };
   repository.saveMessageEvent = async (input) => {
     messageEvents.push(input);
-
-    if (input.status === "sent" && input.requestPayload?.source === "ghl_outbound_provider") {
-      sentEvent = {
-        id: "sent_event_exact",
-        tenant_id: input.tenantId,
-        ghl_message_id: input.ghlMessageId,
-        request_payload: input.requestPayload
-      };
-    }
   };
   lineOutboundChannelService.resolveLineChannelForOutbound = async (tenantId, mapping) => {
     calls.channelSelections.push({ tenantId, mapping });
+
+    if (!channelConnected) {
+      throw new lineOutboundChannelService.LineChannelNotConnectedError({
+        lineChannelId: "line_channel_exact",
+        channelTokenSource: "profile_channel"
+      });
+    }
+
     return {
       channelAccessToken: "line_token_exact",
       lineChannelId: "line_channel_exact",
@@ -288,10 +473,31 @@ function setupProviderCallbackHarness() {
   };
   lineClient.pushLineTextMessage = async (lineUserId, message, channelAccessToken) => {
     calls.linePushes.push({ lineUserId, message, channelAccessToken });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    if (pushError) {
+      throw pushError;
+    }
+
     return { messageId: "line_message_exact" };
   };
 
-  return { calls, messageEvents };
+  return {
+    calls,
+    messageEvents,
+    claims,
+    controls: {
+      setChannelConnected(value) {
+        channelConnected = value;
+      },
+      setClaimError(error) {
+        claimError = error;
+      },
+      setPushError(error) {
+        pushError = error;
+      }
+    }
+  };
 }
 
 function providerCallbackPayload(messageId = "ghl_message_exact") {
@@ -305,7 +511,7 @@ function providerCallbackPayload(messageId = "ghl_message_exact") {
 }
 
 test("provider callback sends once to the exact LINE user with the exact tenant channel token", async () => {
-  const { calls, messageEvents } = setupProviderCallbackHarness();
+  const { calls, claims } = setupProviderCallbackHarness();
 
   const result = await ghlSyncService.processGhlOutboundWebhook(providerCallbackPayload());
 
@@ -316,47 +522,64 @@ test("provider callback sends once to the exact LINE user with the exact tenant 
     contactId: "contact_exact",
     conversationId: "conversation_exact"
   });
-  assert.deepEqual(calls.idempotencyChecks, [{
-    tenantId: "tenant_exact",
-    ghlMessageId: "ghl_message_exact"
-  }]);
+  assert.equal(calls.claimAttempts.length, 1);
+  assert.equal(calls.claimAttempts[0].tenantId, "tenant_exact");
+  assert.equal(calls.claimAttempts[0].ghlMessageId, "ghl_message_exact");
+  assert.equal(calls.claimAttempts[0].requestPayload.deliveryState, "claimed");
   assert.deepEqual(calls.linePushes, [{
     lineUserId: "line_user_exact",
     message: "provider callback reply",
     channelAccessToken: "line_token_exact"
   }]);
-  assert.equal(messageEvents.at(-1).tenantId, "tenant_exact");
-  assert.equal(messageEvents.at(-1).ghlMessageId, "ghl_message_exact");
-  assert.equal(messageEvents.at(-1).requestPayload.source, "ghl_outbound_provider");
+  assert.equal(calls.finalizations.length, 1);
+  assert.equal(calls.finalizations[0].status, "sent");
+  assert.equal(calls.finalizations[0].requestPayload.deliveryState, "sent");
+  assert.equal([...claims.values()][0].status, "sent");
 });
 
-test("provider callback retry is durably acknowledged and skipped after the first successful send", async () => {
-  const { calls, messageEvents } = setupProviderCallbackHarness();
-  const payload = providerCallbackPayload("ghl_message_retry");
+test("two concurrent provider callbacks atomically claim one physical LINE delivery", async () => {
+  const { calls, claims } = setupProviderCallbackHarness();
+  const payload = providerCallbackPayload("ghl_message_concurrent");
+
+  const results = await Promise.all([
+    ghlSyncService.processGhlOutboundWebhook(payload),
+    ghlSyncService.processGhlOutboundWebhook(payload)
+  ]);
+
+  assert.equal(results.filter((result) => result.status === "processed").length, 1);
+  assert.equal(results.filter((result) => result.reason === "Already claimed").length, 1);
+  assert.equal(calls.linePushes.length, 1);
+  assert.equal(calls.claimAttempts.length, 2);
+  assert.equal(calls.finalizations.length, 1);
+  assert.equal(calls.finalizations[0].status, "sent");
+  assert.equal(claims.size, 1);
+  assert.equal([...claims.values()][0].status, "sent");
+});
+
+test("three repeated provider callbacks keep the physical LINE push total at one", async () => {
+  const { calls, claims } = setupProviderCallbackHarness();
+  const payload = providerCallbackPayload("ghl_message_three_retries");
 
   const first = await ghlSyncService.processGhlOutboundWebhook(payload);
   const second = await ghlSyncService.processGhlOutboundWebhook(payload);
+  const third = await ghlSyncService.processGhlOutboundWebhook(payload);
 
   assert.deepEqual(first, { status: "processed" });
-  assert.deepEqual(second, { status: "skipped", reason: "Already sent" });
+  assert.deepEqual(second, { status: "skipped", reason: "Already claimed" });
+  assert.deepEqual(third, { status: "skipped", reason: "Already claimed" });
   assert.equal(calls.linePushes.length, 1);
-  assert.equal(calls.channelSelections.length, 1);
-  assert.equal(calls.idempotencyChecks.length, 2);
-  assert.equal(messageEvents.at(-1).status, "skipped");
-  assert.equal(messageEvents.at(-1).requestPayload.skipReason, "already_sent");
+  assert.equal(calls.claimAttempts.length, 3);
+  assert.equal(calls.finalizations.length, 1);
+  assert.equal([...claims.values()][0].status, "sent");
 });
 
-test("provider callback with a disconnected exact-tenant channel fails closed without a LINE push", async () => {
-  const { calls, messageEvents } = setupProviderCallbackHarness();
-  lineOutboundChannelService.resolveLineChannelForOutbound = async () => {
-    throw new lineOutboundChannelService.LineChannelNotConnectedError({
-      lineChannelId: "line_channel_exact",
-      channelTokenSource: "profile_channel"
-    });
-  };
+test("disconnected channel creates no claim and a later connected retry sends once", async () => {
+  const { calls, claims, controls, messageEvents } = setupProviderCallbackHarness();
+  const payload = providerCallbackPayload("ghl_disconnected_message");
+  controls.setChannelConnected(false);
 
   await assert.rejects(
-    () => ghlSyncService.processGhlOutboundWebhook(providerCallbackPayload("ghl_disconnected_message")),
+    () => ghlSyncService.processGhlOutboundWebhook(payload),
     (error) => {
       assert.equal(error.statusCode, 409);
       assert.match(error.message, /LINE channel is not connected/);
@@ -364,10 +587,100 @@ test("provider callback with a disconnected exact-tenant channel fails closed wi
     }
   );
 
+  assert.equal(calls.claimAttempts.length, 0);
   assert.equal(calls.linePushes.length, 0);
   assert.equal(messageEvents.at(-1).status, "failed");
   assert.equal(messageEvents.at(-1).tenantId, "tenant_exact");
   assert.equal(messageEvents.at(-1).requestPayload.channelConnected, false);
+  assert.equal(claims.size, 0);
+
+  controls.setChannelConnected(true);
+  const retry = await ghlSyncService.processGhlOutboundWebhook(payload);
+
+  assert.deepEqual(retry, { status: "processed" });
+  assert.equal(calls.claimAttempts.length, 1);
+  assert.equal(calls.linePushes.length, 1);
+  assert.equal([...claims.values()][0].status, "sent");
+});
+
+test("claim database failure fails closed without a LINE push", async () => {
+  const { calls, controls } = setupProviderCallbackHarness();
+  controls.setClaimError(new Error("Supabase claim failed"));
+
+  await assert.rejects(
+    () => ghlSyncService.processGhlOutboundWebhook(providerCallbackPayload("ghl_claim_failure")),
+    (error) => {
+      assert.equal(error.statusCode, 503);
+      assert.equal(error.message, "Unable to claim outbound provider delivery");
+      return true;
+    }
+  );
+
+  assert.equal(calls.claimAttempts.length, 1);
+  assert.equal(calls.linePushes.length, 0);
+  assert.equal(calls.finalizations.length, 0);
+});
+
+test("LINE push failure finalizes the claim as failed and later callbacks do not retry", async () => {
+  const { calls, claims, controls } = setupProviderCallbackHarness();
+  const payload = providerCallbackPayload("ghl_push_failure");
+  controls.setPushError(new Error("Ambiguous LINE API failure"));
+
+  await assert.rejects(
+    () => ghlSyncService.processGhlOutboundWebhook(payload),
+    (error) => {
+      assert.equal(error.statusCode, 502);
+      assert.equal(error.message, "LINE delivery failed after outbound provider claim");
+      return true;
+    }
+  );
+
+  controls.setPushError(null);
+  const retry = await ghlSyncService.processGhlOutboundWebhook(payload);
+
+  assert.deepEqual(retry, { status: "skipped", reason: "Already claimed" });
+  assert.equal(calls.linePushes.length, 1);
+  assert.equal(calls.finalizations.length, 1);
+  assert.equal(calls.finalizations[0].status, "failed");
+  assert.equal([...claims.values()][0].status, "failed");
+});
+
+test("stale conversation mapping falls back only to one exact-location contact profile", async () => {
+  const { calls } = setupProviderCallbackHarness();
+  repository.findLineProfileByGhlIdsForTenantIds = async (tenantIds, ids) => {
+    calls.profileLookups.push({ tenantIds, ids });
+
+    if (ids.conversationId) {
+      return null;
+    }
+
+    return {
+      id: "profile_older",
+      tenant_id: "tenant_exact",
+      line_user_id: "line_user_exact",
+      line_channel_id: "line_channel_exact",
+      ghl_contact_id: "contact_exact",
+      ghl_conversation_id: null
+    };
+  };
+
+  const result = await ghlSyncService.processGhlOutboundWebhook(
+    providerCallbackPayload("ghl_stale_conversation")
+  );
+
+  assert.deepEqual(result, { status: "processed" });
+  assert.deepEqual(calls.profileLookups, [
+    {
+      tenantIds: ["tenant_exact"],
+      ids: { contactId: "contact_exact", conversationId: "conversation_exact" }
+    },
+    {
+      tenantIds: ["tenant_exact"],
+      ids: { contactId: "contact_exact" }
+    }
+  ]);
+  assert.equal(calls.claimAttempts.length, 1);
+  assert.equal(calls.linePushes.length, 1);
 });
 
 test("manual HighLevel Conversations outbound messages remain compatible and send exactly once", async () => {

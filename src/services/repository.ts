@@ -86,12 +86,35 @@ export type WorkflowOutboundMirrorEventRecord = {
   created_at: string;
 };
 
-export type GhlOutboundProviderSentEventRecord = {
-  id: string;
-  tenant_id: string;
-  ghl_message_id: string | null;
-  request_payload: unknown;
-  created_at: string;
+export type GhlOutboundProviderDeliveryClaimResult =
+  | {
+      claimed: true;
+      eventId: string;
+      externalMessageId: string;
+    }
+  | {
+      claimed: false;
+      externalMessageId: string;
+    };
+
+export type ClaimGhlOutboundProviderDeliveryInput = {
+  tenantId: string;
+  lineUserId: string;
+  ghlMessageId: string;
+  ghlConversationId?: string;
+  payload: unknown;
+  requestPayload: unknown;
+};
+
+export type FinalizeGhlOutboundProviderDeliveryInput = {
+  eventId: string;
+  tenantId: string;
+  status: "sent" | "failed";
+  lineUserId: string;
+  ghlMessageId: string;
+  ghlConversationId?: string;
+  errorMessage?: string;
+  requestPayload: unknown;
 };
 
 export type GhlOAuthTokenRecord = {
@@ -210,10 +233,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isWorkflowOutboundMirrorRequestPayload(value: unknown): boolean {
   return isRecord(value) && value.source === "ghl_workflow_outbound_mirror";
-}
-
-function isGhlOutboundProviderRequestPayload(value: unknown): boolean {
-  return isRecord(value) && value.source === "ghl_outbound_provider";
 }
 
 async function findCanonicalLineProfileByLineUser(
@@ -936,8 +955,7 @@ export async function findLineProfileByGhlIdsForTenantIds(
     .from("line_profiles")
     .select("*")
     .in("tenant_id", normalizedTenantIds)
-    .order("updated_at", { ascending: false })
-    .limit(1);
+    .order("updated_at", { ascending: false });
 
   if (!ids.conversationId && !ids.contactId) {
     return null;
@@ -951,7 +969,32 @@ export async function findLineProfileByGhlIdsForTenantIds(
     query = query.eq("ghl_contact_id", ids.contactId);
   }
 
-  const { data, error } = await query.maybeSingle();
+  if (ids.contactId && !ids.conversationId) {
+    const { data, error } = await query.limit(2);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    const matches = (data ?? []) as LineProfileRecord[];
+
+    if (matches.length > 1) {
+      logger.warn(
+        {
+          tenantIds: normalizedTenantIds,
+          contactId: ids.contactId,
+          matchCount: matches.length
+        },
+        "Rejected ambiguous tenant-scoped LINE profile contact fallback"
+      );
+
+      return null;
+    }
+
+    return matches[0] ?? null;
+  }
+
+  const { data, error } = await query.limit(1).maybeSingle();
 
   if (error) {
     throw new Error(error.message);
@@ -1127,6 +1170,7 @@ export async function findWorkflowOutboundMirrorMessageEventForTenantIds(input: 
     .eq("provider", "ghl")
     .eq("direction", "outbound")
     .eq("ghl_message_id", normalizedGhlMessageId)
+    .contains("request_payload", { source: "ghl_workflow_outbound_mirror" })
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
@@ -1144,42 +1188,90 @@ export async function findWorkflowOutboundMirrorMessageEventForTenantIds(input: 
   return record;
 }
 
-export async function findSentGhlOutboundProviderMessageEvent(input: {
-  tenantId: string;
-  ghlMessageId?: string;
-}): Promise<GhlOutboundProviderSentEventRecord | null> {
-  const normalizedTenantId = input.tenantId.trim();
-  const normalizedGhlMessageId = input.ghlMessageId?.trim();
+export async function claimGhlOutboundProviderDelivery(
+  input: ClaimGhlOutboundProviderDeliveryInput
+): Promise<GhlOutboundProviderDeliveryClaimResult> {
+  const tenantId = input.tenantId.trim();
+  const ghlMessageId = input.ghlMessageId.trim();
 
-  if (!normalizedTenantId || !normalizedGhlMessageId) {
-    return null;
+  if (!tenantId || !ghlMessageId) {
+    throw new Error("tenantId and ghlMessageId are required for outbound provider delivery claim");
+  }
+
+  const externalMessageId = `ghl-provider-delivery:${ghlMessageId}`;
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("message_events")
+    .insert({
+      tenant_id: tenantId,
+      provider: "ghl",
+      direction: "outbound",
+      external_message_id: externalMessageId,
+      line_user_id: input.lineUserId,
+      ghl_message_id: ghlMessageId,
+      ghl_conversation_id: input.ghlConversationId ?? null,
+      payload: input.payload,
+      status: "received",
+      error_message: null,
+      request_payload: input.requestPayload
+    })
+    .select("id")
+    .single();
+
+  if (error?.code === "23505") {
+    return { claimed: false, externalMessageId };
+  }
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const eventId = isRecord(data) && typeof data.id === "string" ? data.id : undefined;
+
+  if (!eventId) {
+    throw new Error("Outbound provider delivery claim did not return a message event ID");
+  }
+
+  return { claimed: true, eventId, externalMessageId };
+}
+
+export async function finalizeGhlOutboundProviderDelivery(
+  input: FinalizeGhlOutboundProviderDeliveryInput
+): Promise<void> {
+  const eventId = input.eventId.trim();
+  const tenantId = input.tenantId.trim();
+
+  if (!eventId || !tenantId) {
+    throw new Error("eventId and tenantId are required to finalize outbound provider delivery");
   }
 
   const supabase = getSupabase();
   const { data, error } = await supabase
     .from("message_events")
-    .select("id, tenant_id, ghl_message_id, request_payload, created_at")
-    .eq("tenant_id", normalizedTenantId)
+    .update({
+      status: input.status,
+      line_user_id: input.lineUserId,
+      ghl_message_id: input.ghlMessageId,
+      ghl_conversation_id: input.ghlConversationId ?? null,
+      error_message: input.errorMessage ?? null,
+      request_payload: input.requestPayload
+    })
+    .eq("id", eventId)
+    .eq("tenant_id", tenantId)
     .eq("provider", "ghl")
     .eq("direction", "outbound")
-    .eq("ghl_message_id", normalizedGhlMessageId)
-    .eq("status", "sent")
-    .contains("request_payload", { source: "ghl_outbound_provider" })
-    .order("created_at", { ascending: false })
-    .limit(1)
+    .eq("ghl_message_id", input.ghlMessageId)
+    .eq("status", "received")
+    .select("id")
     .maybeSingle();
 
   if (error) {
     throw new Error(error.message);
   }
 
-  const record = data as GhlOutboundProviderSentEventRecord | null;
-
-  if (!record || !isGhlOutboundProviderRequestPayload(record.request_payload)) {
-    return null;
+  if (!data) {
+    throw new Error("Outbound provider delivery claim was not found for finalization");
   }
-
-  return record;
 }
 
 export async function saveMessageEvent(input: SaveMessageEventInput): Promise<void> {

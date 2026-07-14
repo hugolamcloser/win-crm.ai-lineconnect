@@ -7,11 +7,13 @@ import {
   resolveLineChannelForOutbound
 } from "./lineOutboundChannelService";
 import {
+  claimGhlOutboundProviderDelivery,
+  finalizeGhlOutboundProviderDelivery,
   findLineProfileByGhlIdsForTenantIds,
-  findSentGhlOutboundProviderMessageEvent,
   findWorkflowOutboundMirrorMessageEventForTenantIds,
   getTenantIdsByLocationId,
-  saveMessageEvent
+  saveMessageEvent,
+  type GhlOutboundProviderDeliveryClaimResult
 } from "./repository";
 
 function getString(value: unknown): string | undefined {
@@ -100,6 +102,39 @@ async function resolveTenantIdsForGhlOutboundWebhook(message: NormalizedGhlOutbo
   return [];
 }
 
+async function resolveLineProfileForGhlOutbound(
+  tenantIds: string[],
+  message: NormalizedGhlOutboundMessage
+) {
+  const exactMapping = await findLineProfileByGhlIdsForTenantIds(tenantIds, {
+    contactId: message.contactId,
+    conversationId: message.conversationId
+  });
+
+  if (exactMapping || !message.contactId || !message.conversationId) {
+    return exactMapping;
+  }
+
+  const contactFallback = await findLineProfileByGhlIdsForTenantIds(tenantIds, {
+    contactId: message.contactId
+  });
+
+  if (contactFallback) {
+    logger.info(
+      {
+        tenantIds,
+        tenantId: contactFallback.tenant_id,
+        contactId: message.contactId,
+        callbackConversationId: message.conversationId,
+        storedConversationId: contactFallback.ghl_conversation_id
+      },
+      "Resolved HighLevel outbound provider callback by unique exact-location contact fallback"
+    );
+  }
+
+  return contactFallback;
+}
+
 export async function processGhlOutboundWebhook(payload: Record<string, unknown>): Promise<{
   status: "processed" | "skipped";
   reason?: string;
@@ -182,10 +217,7 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
     return { status: "skipped", reason: "Workflow outbound mirror echo" };
   }
 
-  const mapping = await findLineProfileByGhlIdsForTenantIds(tenantIds, {
-    contactId: message.contactId,
-    conversationId: message.conversationId
-  });
+  const mapping = await resolveLineProfileForGhlOutbound(tenantIds, message);
 
   if (!mapping) {
     const [tenantId] = tenantIds;
@@ -194,7 +226,7 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
       tenantId,
       provider: "ghl",
       direction: "outbound",
-      externalMessageId: message.messageId,
+      externalMessageId: `ghl-provider-unmapped:${message.messageId}`,
       ghlConversationId: message.conversationId,
       payload,
       status: "skipped",
@@ -218,47 +250,6 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
 
   const tenantId = mapping.tenant_id;
 
-  const existingSentEvent = await findSentGhlOutboundProviderMessageEvent({
-    tenantId,
-    ghlMessageId: message.messageId
-  });
-
-  if (existingSentEvent) {
-    await saveMessageEvent({
-      tenantId,
-      provider: "ghl",
-      direction: "outbound",
-      externalMessageId: `ghl-provider-retry:${message.messageId}`,
-      lineUserId: mapping.line_user_id,
-      ghlMessageId: message.messageId,
-      ghlConversationId: message.conversationId,
-      payload,
-      status: "skipped",
-      errorMessage: "Skipped duplicate HighLevel outbound provider callback",
-      requestPayload: {
-        source: "ghl_outbound_provider",
-        skipReason: "already_sent",
-        successfulMessageEventId: existingSentEvent.id,
-        ghlMessageId: message.messageId,
-        contactId: message.contactId ?? mapping.ghl_contact_id ?? null,
-        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? null
-      }
-    });
-
-    logger.info(
-      {
-        tenantId,
-        contactId: message.contactId ?? mapping.ghl_contact_id ?? undefined,
-        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
-        ghlMessageId: message.messageId,
-        successfulMessageEventId: existingSentEvent.id
-      },
-      "Skipped duplicate HighLevel outbound provider callback because LINE delivery already succeeded"
-    );
-
-    return { status: "skipped", reason: "Already sent" };
-  }
-
   const lineChannelSelection = await resolveLineChannelForOutbound(tenantId, mapping).catch(async (error) => {
     if (!isLineChannelNotConnectedError(error)) {
       throw error;
@@ -268,7 +259,7 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
       tenantId,
       provider: "ghl",
       direction: "outbound",
-      externalMessageId: message.messageId,
+      externalMessageId: `ghl-provider-channel-failure:${message.messageId}`,
       lineUserId: mapping.line_user_id,
       ghlMessageId: message.messageId,
       ghlConversationId: message.conversationId,
@@ -311,34 +302,145 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
     "Selected LINE channel token source for HighLevel outbound message"
   );
 
-  await pushLineTextMessage(mapping.line_user_id, message.message, lineChannelSelection.channelAccessToken);
+  const claimedRequestPayload = {
+    source: "ghl_outbound_provider",
+    deliveryState: "claimed",
+    contactId: message.contactId ?? mapping.ghl_contact_id ?? null,
+    conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? null,
+    lineChannelId: lineChannelSelection.lineChannelId ?? null,
+    channelTokenSource: lineChannelSelection.channelTokenSource,
+    channelConnected: true
+  };
+  let claim: GhlOutboundProviderDeliveryClaimResult;
 
-  await saveMessageEvent({
-    tenantId,
-    provider: "ghl",
-    direction: "outbound",
-    externalMessageId: message.messageId,
-    lineUserId: mapping.line_user_id,
-    ghlMessageId: message.messageId,
-    ghlConversationId: message.conversationId,
-    payload,
-    status: "sent",
-    requestPayload: {
-      source: "ghl_outbound_provider",
-      contactId: message.contactId ?? mapping.ghl_contact_id ?? null,
-      conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? null,
-      lineChannelId: lineChannelSelection.lineChannelId ?? null,
-      channelTokenSource: lineChannelSelection.channelTokenSource,
-      channelConnected: true
+  try {
+    claim = await claimGhlOutboundProviderDelivery({
+      tenantId,
+      lineUserId: mapping.line_user_id,
+      ghlMessageId: message.messageId,
+      ghlConversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
+      payload,
+      requestPayload: claimedRequestPayload
+    });
+  } catch (error) {
+    logger.error(
+      {
+        tenantId,
+        contactId: message.contactId ?? mapping.ghl_contact_id ?? undefined,
+        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
+        ghlMessageId: message.messageId,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      },
+      "Failed to claim HighLevel outbound provider delivery"
+    );
+
+    throw new HttpError(503, "Unable to claim outbound provider delivery");
+  }
+
+  if (!claim.claimed) {
+    logger.info(
+      {
+        tenantId,
+        contactId: message.contactId ?? mapping.ghl_contact_id ?? undefined,
+        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
+        ghlMessageId: message.messageId,
+        externalMessageId: claim.externalMessageId
+      },
+      "Skipped HighLevel outbound provider callback because delivery is already claimed"
+    );
+
+    return { status: "skipped", reason: "Already claimed" };
+  }
+
+  let lineResult;
+
+  try {
+    lineResult = await pushLineTextMessage(
+      mapping.line_user_id,
+      message.message,
+      lineChannelSelection.channelAccessToken
+    );
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown LINE push error";
+
+    try {
+      await finalizeGhlOutboundProviderDelivery({
+        eventId: claim.eventId,
+        tenantId,
+        status: "failed",
+        lineUserId: mapping.line_user_id,
+        ghlMessageId: message.messageId,
+        ghlConversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
+        errorMessage,
+        requestPayload: {
+          ...claimedRequestPayload,
+          deliveryState: "failed"
+        }
+      });
+    } catch (finalizeError) {
+      logger.error(
+        {
+          tenantId,
+          ghlMessageId: message.messageId,
+          deliveryClaimEventId: claim.eventId,
+          errorMessage: finalizeError instanceof Error ? finalizeError.message : String(finalizeError)
+        },
+        "Failed to mark outbound provider delivery claim as failed"
+      );
     }
-  });
+
+    logger.error(
+      {
+        tenantId,
+        contactId: message.contactId ?? mapping.ghl_contact_id ?? undefined,
+        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
+        ghlMessageId: message.messageId,
+        deliveryClaimEventId: claim.eventId,
+        errorMessage
+      },
+      "LINE push failed after outbound provider delivery was claimed; later callbacks will be skipped"
+    );
+
+    throw new HttpError(502, "LINE delivery failed after outbound provider claim");
+  }
+
+  try {
+    await finalizeGhlOutboundProviderDelivery({
+      eventId: claim.eventId,
+      tenantId,
+      status: "sent",
+      lineUserId: mapping.line_user_id,
+      ghlMessageId: message.messageId,
+      ghlConversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
+      requestPayload: {
+        ...claimedRequestPayload,
+        deliveryState: "sent",
+        lineMessageId: lineResult.messageId ?? null
+      }
+    });
+  } catch (error) {
+    logger.error(
+      {
+        tenantId,
+        ghlMessageId: message.messageId,
+        deliveryClaimEventId: claim.eventId,
+        lineMessageId: lineResult.messageId,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      },
+      "LINE push succeeded but outbound provider delivery claim finalization failed; later callbacks will be skipped"
+    );
+
+    throw new HttpError(500, "LINE delivery claim finalization failed");
+  }
 
   logger.info(
     {
       lineUserId: mapping.line_user_id,
       contactId: message.contactId,
       conversationId: message.conversationId,
-      ghlMessageId: message.messageId
+      ghlMessageId: message.messageId,
+      deliveryClaimEventId: claim.eventId,
+      lineMessageId: lineResult.messageId
     },
     "HighLevel outbound message sent to LINE"
   );
