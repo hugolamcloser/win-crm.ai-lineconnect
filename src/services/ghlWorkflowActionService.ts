@@ -1,5 +1,4 @@
 import { logger } from "../config/logger";
-import { getSupabase } from "../config/supabase";
 import { env } from "../config/env";
 import {
   mirrorWorkflowOutboundMessageToGhl,
@@ -11,7 +10,9 @@ import {
   resolveLineChannelForOutbound
 } from "./lineOutboundChannelService";
 import {
-  ensureDefaultTenant,
+  findLineProfileByGhlIdsForTenantIds,
+  getTenantById,
+  getTenantIdsByLocationId,
   type LineProfileRecord,
   saveMessageEvent
 } from "./repository";
@@ -114,6 +115,17 @@ function buildMirrorExternalMessageId(input: {
   return input.externalMessageId ? `${input.externalMessageId}:ghl-mirror` : undefined;
 }
 
+function buildProviderDispatchExternalMessageId(input: {
+  externalMessageId?: string;
+  ghlMessageId?: string;
+}): string | undefined {
+  if (input.ghlMessageId) {
+    return `ghl-workflow-provider-dispatch:${input.ghlMessageId}`;
+  }
+
+  return input.externalMessageId ? `ghl-workflow-provider-dispatch:${input.externalMessageId}` : undefined;
+}
+
 function buildMirrorRequestPayload(input: {
   eventPayload: Record<string, unknown>;
   mapping: LineProfileRecord;
@@ -213,26 +225,13 @@ async function mirrorWorkflowOutboundMessage(input: {
   );
 }
 
-async function findLineProfileByLocationAndGhlContact(
+async function resolveLineProfileByLocationAndGhlContact(
   locationId: string,
   contactId: string
-): Promise<LineProfileRecord | null> {
+): Promise<{ tenantIds: string[]; mapping: LineProfileRecord | null }> {
   const normalizedLocationId = locationId.trim();
   const normalizedContactId = contactId.trim();
-  const supabase = getSupabase();
-  const { data: tenants, error: tenantsError } = await supabase
-    .from("tenants")
-    .select("id, location_id, updated_at")
-    .eq("location_id", normalizedLocationId)
-    .order("updated_at", { ascending: false });
-
-  if (tenantsError) {
-    throw new Error(tenantsError.message);
-  }
-
-  const tenantIds = (tenants ?? [])
-    .map((tenant) => (typeof tenant.id === "string" ? tenant.id : undefined))
-    .filter((tenantId): tenantId is string => Boolean(tenantId));
+  const tenantIds = await getTenantIdsByLocationId(normalizedLocationId);
 
   if (tenantIds.length === 0) {
     logger.info(
@@ -245,23 +244,12 @@ async function findLineProfileByLocationAndGhlContact(
       "GHL workflow LINE mapping lookup completed"
     );
 
-    return null;
+    return { tenantIds, mapping: null };
   }
 
-  const { data, error } = await supabase
-    .from("line_profiles")
-    .select("*")
-    .in("tenant_id", tenantIds)
-    .eq("ghl_contact_id", normalizedContactId)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  const mapping = data as LineProfileRecord | null;
+  const mapping = await findLineProfileByGhlIdsForTenantIds(tenantIds, {
+    contactId: normalizedContactId
+  });
 
   logger.info(
     {
@@ -276,7 +264,7 @@ async function findLineProfileByLocationAndGhlContact(
     "GHL workflow LINE mapping lookup completed"
   );
 
-  return mapping;
+  return { tenantIds, mapping };
 }
 
 export async function processGhlWorkflowSendLine(payload: Record<string, unknown>): Promise<WorkflowSendLineResult> {
@@ -329,31 +317,6 @@ export async function processGhlWorkflowSendLine(payload: Record<string, unknown
   }
 
   if (!contactId) {
-    try {
-      const tenantId = await ensureDefaultTenant();
-
-      await saveMessageEvent({
-        tenantId,
-        provider: "line",
-        direction: "outbound",
-        externalMessageId,
-        payload,
-        status: "skipped",
-        errorMessage: "No LINE mapping found for contact",
-        requestPayload: eventPayload
-      });
-    } catch (error) {
-      logger.warn(
-        {
-          locationId,
-          workflowId,
-          metaKey,
-          errorMessage: error instanceof Error ? error.message : "Unknown Supabase error"
-        },
-        "Failed to save skipped workflow LINE send event for missing contactId"
-      );
-    }
-
     logger.warn(
       {
         locationId,
@@ -363,25 +326,14 @@ export async function processGhlWorkflowSendLine(payload: Record<string, unknown
       "Skipped GHL workflow LINE send because contactId is missing"
     );
 
-    return buildResponse(200, "skipped", "No LINE mapping found for contact");
+    return env.GHL_WORKFLOW_LINE_DELIVERY_MODE === "provider_first"
+      ? buildResponse(400, "failed", "contactId is required")
+      : buildResponse(200, "skipped", "No LINE mapping found for contact");
   }
 
-  const mapping = await findLineProfileByLocationAndGhlContact(locationId, contactId);
+  const { mapping } = await resolveLineProfileByLocationAndGhlContact(locationId, contactId);
 
   if (!mapping) {
-    const tenantId = await ensureDefaultTenant();
-
-    await saveMessageEvent({
-      tenantId,
-      provider: "line",
-      direction: "outbound",
-      externalMessageId,
-      payload,
-      status: "skipped",
-      errorMessage: "No LINE mapping found for contact",
-      requestPayload: eventPayload
-    });
-
     logger.warn(
       {
         locationId,
@@ -393,6 +345,148 @@ export async function processGhlWorkflowSendLine(payload: Record<string, unknown
     );
 
     return buildResponse(200, "skipped", "No LINE mapping found for contact");
+  }
+
+  if (env.GHL_WORKFLOW_LINE_DELIVERY_MODE === "provider_first") {
+    try {
+      const tenant = await getTenantById(mapping.tenant_id);
+      const tenantLocationId = tenant?.location_id?.trim();
+      const conversationProviderId = tenant?.ghl_provider_id?.trim();
+
+      if (!tenant) {
+        throw new Error(`Tenant ${mapping.tenant_id} was not found`);
+      }
+
+      if (!tenantLocationId || tenantLocationId !== locationId) {
+        throw new Error("Resolved tenant does not belong to the workflow locationId");
+      }
+
+      if (!conversationProviderId) {
+        throw new Error(`Tenant ${mapping.tenant_id} has no ghl_provider_id`);
+      }
+
+      const lineChannelSelection = await resolveLineChannelForOutbound(mapping.tenant_id, mapping);
+      const dispatchResult = await mirrorWorkflowOutboundMessageToGhl({
+        locationId,
+        contactId,
+        message,
+        conversationProviderId,
+        workflowId,
+        lineMessageId: null,
+        existingGhlConversationId: mapping.ghl_conversation_id
+      });
+      const dispatchStatus = dispatchResult.ok ? "success" : "failed";
+      const requestPayload = {
+        ...eventPayload,
+        source: "ghl_workflow_provider_dispatch",
+        tenantId: mapping.tenant_id,
+        lineUserId: mapping.line_user_id,
+        existingGhlConversationId: mapping.ghl_conversation_id ?? null,
+        lineChannelId: lineChannelSelection.lineChannelId ?? null,
+        channelTokenSource: lineChannelSelection.channelTokenSource,
+        channelConnected: true,
+        conversationProviderId,
+        endpoint: dispatchResult.endpoint,
+        method: dispatchResult.method,
+        authMode: dispatchResult.authMode,
+        statusCode: dispatchResult.statusCode ?? null,
+        canonicalCode: dispatchResult.canonicalCode ?? null,
+        dispatchStatus,
+        request_body: dispatchResult.requestBody
+      };
+
+      await saveMessageEvent({
+        tenantId: mapping.tenant_id,
+        provider: "ghl",
+        direction: "outbound",
+        externalMessageId: buildProviderDispatchExternalMessageId({
+          externalMessageId,
+          ghlMessageId: dispatchResult.ghlMessageId
+        }),
+        lineUserId: mapping.line_user_id,
+        ghlMessageId: dispatchResult.ghlMessageId,
+        ghlConversationId: dispatchResult.ghlConversationId ?? mapping.ghl_conversation_id ?? undefined,
+        payload,
+        status: dispatchStatus,
+        errorMessage: dispatchResult.ok
+          ? undefined
+          : dispatchResult.errorMessage ?? "HighLevel workflow provider dispatch failed",
+        ghlStatusCode: dispatchResult.statusCode,
+        ghlResponseBody: stringifyForStorage(dispatchResult.responseBody),
+        requestPayload
+      });
+
+      logger.info(
+        {
+          locationId,
+          contactId,
+          workflowId,
+          metaKey,
+          tenantId: mapping.tenant_id,
+          lineUserId: mapping.line_user_id,
+          lineChannelId: lineChannelSelection.lineChannelId,
+          channelTokenSource: lineChannelSelection.channelTokenSource,
+          ghlConversationId: dispatchResult.ghlConversationId ?? mapping.ghl_conversation_id,
+          ghlMessageId: dispatchResult.ghlMessageId,
+          dispatchStatus,
+          statusCode: dispatchResult.statusCode
+        },
+        "HighLevel workflow provider dispatch completed"
+      );
+
+      return dispatchResult.ok
+        ? buildResponse(200, "sent")
+        : buildResponse(200, "failed", dispatchResult.errorMessage ?? "HighLevel workflow provider dispatch failed");
+    } catch (error) {
+      const isDisconnected = isLineChannelNotConnectedError(error);
+      const errorMessage = error instanceof Error ? error.message : "Unknown HighLevel provider dispatch error";
+      const requestPayload = {
+        ...eventPayload,
+        source: "ghl_workflow_provider_dispatch",
+        tenantId: mapping.tenant_id,
+        lineUserId: mapping.line_user_id,
+        existingGhlConversationId: mapping.ghl_conversation_id ?? null,
+        lineChannelId: isDisconnected
+          ? error.lineChannelId ?? mapping.line_channel_id ?? null
+          : mapping.line_channel_id ?? null,
+        channelTokenSource: isDisconnected ? error.channelTokenSource : null,
+        channelConnected: false,
+        dispatchStatus: "failed"
+      };
+
+      await saveMessageEvent({
+        tenantId: mapping.tenant_id,
+        provider: "ghl",
+        direction: "outbound",
+        externalMessageId: buildProviderDispatchExternalMessageId({ externalMessageId }),
+        lineUserId: mapping.line_user_id,
+        ghlConversationId: mapping.ghl_conversation_id ?? undefined,
+        payload,
+        status: "failed",
+        errorMessage,
+        requestPayload
+      });
+
+      const logContext = {
+        locationId,
+        contactId,
+        workflowId,
+        metaKey,
+        tenantId: mapping.tenant_id,
+        lineUserId: mapping.line_user_id,
+        lineChannelId: requestPayload.lineChannelId,
+        channelTokenSource: requestPayload.channelTokenSource,
+        errorMessage
+      };
+
+      if (isDisconnected) {
+        logger.warn(logContext, "Blocked HighLevel workflow provider dispatch because LINE channel is not connected");
+        return buildResponse(409, "failed", errorMessage);
+      }
+
+      logger.error(logContext, "Failed to dispatch HighLevel workflow message through the conversation provider");
+      return buildResponse(200, "failed", errorMessage);
+    }
   }
 
   try {
