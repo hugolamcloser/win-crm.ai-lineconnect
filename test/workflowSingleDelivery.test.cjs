@@ -219,7 +219,7 @@ test("provider_first disconnected channel fails before HighLevel dispatch", asyn
   assert.equal(messageEvents.at(-1).requestPayload.channelConnected, false);
 });
 
-test("direct_legacy rollback mode retains one direct LINE push", async () => {
+test("safe direct_legacy rollback disables outbound mirroring and retains one direct LINE push", async () => {
   config.env.GHL_WORKFLOW_LINE_DELIVERY_MODE = "direct_legacy";
   config.env.GHL_WORKFLOW_OUTBOUND_MIRROR_ENABLED = false;
   const { calls, messageEvents } = setupWorkflowHarness();
