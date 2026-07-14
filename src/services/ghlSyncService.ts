@@ -8,6 +8,7 @@ import {
 } from "./lineOutboundChannelService";
 import {
   findLineProfileByGhlIdsForTenantIds,
+  findSentGhlOutboundProviderMessageEvent,
   findWorkflowOutboundMirrorMessageEventForTenantIds,
   getTenantIdsByLocationId,
   saveMessageEvent
@@ -133,8 +134,10 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
         contactId: message.contactId,
         conversationId: message.conversationId
       },
-      "HighLevel outbound provider webhook did not include a message ID; workflow mirror duplicate-send guard cannot match this callback"
+      "Skipped HighLevel outbound provider webhook because payload messageId is missing"
     );
+
+    return { status: "skipped", reason: "Missing messageId" };
   }
 
   const mirroredWorkflowMessage = await findWorkflowOutboundMirrorMessageEventForTenantIds({
@@ -215,6 +218,47 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
 
   const tenantId = mapping.tenant_id;
 
+  const existingSentEvent = await findSentGhlOutboundProviderMessageEvent({
+    tenantId,
+    ghlMessageId: message.messageId
+  });
+
+  if (existingSentEvent) {
+    await saveMessageEvent({
+      tenantId,
+      provider: "ghl",
+      direction: "outbound",
+      externalMessageId: `ghl-provider-retry:${message.messageId}`,
+      lineUserId: mapping.line_user_id,
+      ghlMessageId: message.messageId,
+      ghlConversationId: message.conversationId,
+      payload,
+      status: "skipped",
+      errorMessage: "Skipped duplicate HighLevel outbound provider callback",
+      requestPayload: {
+        source: "ghl_outbound_provider",
+        skipReason: "already_sent",
+        successfulMessageEventId: existingSentEvent.id,
+        ghlMessageId: message.messageId,
+        contactId: message.contactId ?? mapping.ghl_contact_id ?? null,
+        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? null
+      }
+    });
+
+    logger.info(
+      {
+        tenantId,
+        contactId: message.contactId ?? mapping.ghl_contact_id ?? undefined,
+        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
+        ghlMessageId: message.messageId,
+        successfulMessageEventId: existingSentEvent.id
+      },
+      "Skipped duplicate HighLevel outbound provider callback because LINE delivery already succeeded"
+    );
+
+    return { status: "skipped", reason: "Already sent" };
+  }
+
   const lineChannelSelection = await resolveLineChannelForOutbound(tenantId, mapping).catch(async (error) => {
     if (!isLineChannelNotConnectedError(error)) {
       throw error;
@@ -226,6 +270,7 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
       direction: "outbound",
       externalMessageId: message.messageId,
       lineUserId: mapping.line_user_id,
+      ghlMessageId: message.messageId,
       ghlConversationId: message.conversationId,
       payload,
       status: "failed",
@@ -274,9 +319,18 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
     direction: "outbound",
     externalMessageId: message.messageId,
     lineUserId: mapping.line_user_id,
+    ghlMessageId: message.messageId,
     ghlConversationId: message.conversationId,
     payload,
-    status: "sent"
+    status: "sent",
+    requestPayload: {
+      source: "ghl_outbound_provider",
+      contactId: message.contactId ?? mapping.ghl_contact_id ?? null,
+      conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? null,
+      lineChannelId: lineChannelSelection.lineChannelId ?? null,
+      channelTokenSource: lineChannelSelection.channelTokenSource,
+      channelConnected: true
+    }
   });
 
   logger.info(

@@ -53,6 +53,7 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((value) => value === "true"),
+  GHL_WORKFLOW_LINE_DELIVERY_MODE: z.enum(["direct_legacy", "provider_first"]).default("direct_legacy"),
   GHL_LINE_USER_ID_FIELD_ID: z.string().default(""),
   GHL_LINE_DISPLAY_NAME_FIELD_ID: z.string().default(""),
 
@@ -97,6 +98,7 @@ export const optionalEnvCheckKeys = [
   "GHL_SEND_CONVERSATION_PROVIDER_ID",
   "GHL_LOCATION_API_AUTH_MODE",
   "GHL_WORKFLOW_OUTBOUND_MIRROR_ENABLED",
+  "GHL_WORKFLOW_LINE_DELIVERY_MODE",
   "GHL_LINE_USER_ID_FIELD_ID",
   "GHL_LINE_DISPLAY_NAME_FIELD_ID",
   "CUSTOM_PAGE_FRAME_ANCESTORS"

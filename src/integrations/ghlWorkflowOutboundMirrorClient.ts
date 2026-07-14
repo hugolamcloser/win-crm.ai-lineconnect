@@ -15,6 +15,7 @@ export type GhlWorkflowOutboundMirrorInput = {
   locationId: string;
   contactId: string;
   message: string;
+  conversationProviderId?: string;
   workflowId?: string;
   lineMessageId?: string | null;
   existingGhlConversationId?: string | null;
@@ -167,14 +168,15 @@ function getConfiguredMirrorMessageType(): string {
 }
 
 function buildWorkflowOutboundMirrorPayload(input: GhlWorkflowOutboundMirrorInput): GhlWorkflowOutboundMirrorPayload {
-  const conversationProviderId = requireEnvValue("GHL_CUSTOM_PROVIDER_ID", env.GHL_CUSTOM_PROVIDER_ID);
+  const conversationProviderId = input.conversationProviderId?.trim() ||
+    requireEnvValue("GHL_CUSTOM_PROVIDER_ID", env.GHL_CUSTOM_PROVIDER_ID);
 
   return {
     type: getConfiguredMirrorMessageType(),
     contactId: input.contactId,
     message: input.message,
     status: "delivered",
-    ...(env.GHL_SEND_CONVERSATION_PROVIDER_ID ? { conversationProviderId } : {})
+    ...(input.conversationProviderId || env.GHL_SEND_CONVERSATION_PROVIDER_ID ? { conversationProviderId } : {})
   };
 }
 

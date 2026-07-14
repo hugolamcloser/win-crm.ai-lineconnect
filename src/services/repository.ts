@@ -86,6 +86,14 @@ export type WorkflowOutboundMirrorEventRecord = {
   created_at: string;
 };
 
+export type GhlOutboundProviderSentEventRecord = {
+  id: string;
+  tenant_id: string;
+  ghl_message_id: string | null;
+  request_payload: unknown;
+  created_at: string;
+};
+
 export type GhlOAuthTokenRecord = {
   id: string;
   tenant_id: string | null;
@@ -202,6 +210,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isWorkflowOutboundMirrorRequestPayload(value: unknown): boolean {
   return isRecord(value) && value.source === "ghl_workflow_outbound_mirror";
+}
+
+function isGhlOutboundProviderRequestPayload(value: unknown): boolean {
+  return isRecord(value) && value.source === "ghl_outbound_provider";
 }
 
 async function findCanonicalLineProfileByLineUser(
@@ -927,12 +939,16 @@ export async function findLineProfileByGhlIdsForTenantIds(
     .order("updated_at", { ascending: false })
     .limit(1);
 
+  if (!ids.conversationId && !ids.contactId) {
+    return null;
+  }
+
   if (ids.conversationId) {
     query = query.eq("ghl_conversation_id", ids.conversationId);
-  } else if (ids.contactId) {
+  }
+
+  if (ids.contactId) {
     query = query.eq("ghl_contact_id", ids.contactId);
-  } else {
-    return null;
   }
 
   const { data, error } = await query.maybeSingle();
@@ -1122,6 +1138,44 @@ export async function findWorkflowOutboundMirrorMessageEventForTenantIds(input: 
   const record = data as WorkflowOutboundMirrorEventRecord | null;
 
   if (!record || !isWorkflowOutboundMirrorRequestPayload(record.request_payload)) {
+    return null;
+  }
+
+  return record;
+}
+
+export async function findSentGhlOutboundProviderMessageEvent(input: {
+  tenantId: string;
+  ghlMessageId?: string;
+}): Promise<GhlOutboundProviderSentEventRecord | null> {
+  const normalizedTenantId = input.tenantId.trim();
+  const normalizedGhlMessageId = input.ghlMessageId?.trim();
+
+  if (!normalizedTenantId || !normalizedGhlMessageId) {
+    return null;
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("message_events")
+    .select("id, tenant_id, ghl_message_id, request_payload, created_at")
+    .eq("tenant_id", normalizedTenantId)
+    .eq("provider", "ghl")
+    .eq("direction", "outbound")
+    .eq("ghl_message_id", normalizedGhlMessageId)
+    .eq("status", "sent")
+    .contains("request_payload", { source: "ghl_outbound_provider" })
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const record = data as GhlOutboundProviderSentEventRecord | null;
+
+  if (!record || !isGhlOutboundProviderRequestPayload(record.request_payload)) {
     return null;
   }
 

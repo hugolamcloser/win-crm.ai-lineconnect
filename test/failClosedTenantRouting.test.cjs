@@ -30,6 +30,7 @@ const patchedExports = [
   [repository, "linkGhlMapping"],
   [repository, "getTenantIdsByLocationId"],
   [repository, "findWorkflowOutboundMirrorMessageEventForTenantIds"],
+  [repository, "findSentGhlOutboundProviderMessageEvent"],
   [repository, "findLineProfileByGhlIdsForTenantIds"],
   [ghlLocationClient, "createGhlContact"],
   [ghlLocationClient, "ensureGhlContactLineMetadata"],
@@ -232,6 +233,7 @@ function setupGhlOutboundHarness() {
     ensureDefaultTenant: 0,
     locationLookups: [],
     mirrorGuardTenantIds: [],
+    idempotencyTenantIds: [],
     profileLookupTenantIds: [],
     channelSelection: 0,
     linePush: 0
@@ -248,6 +250,10 @@ function setupGhlOutboundHarness() {
   };
   repository.findWorkflowOutboundMirrorMessageEventForTenantIds = async (input) => {
     calls.mirrorGuardTenantIds.push(input.tenantIds);
+    return null;
+  };
+  repository.findSentGhlOutboundProviderMessageEvent = async (input) => {
+    calls.idempotencyTenantIds.push(input.tenantId);
     return null;
   };
   repository.findLineProfileByGhlIdsForTenantIds = async (tenantIds) => {
@@ -296,6 +302,7 @@ test("GHL outbound payload without locationId sends no LINE message or tenant lo
   assert.equal(calls.ensureDefaultTenant, 0);
   assert.deepEqual(calls.locationLookups, []);
   assert.deepEqual(calls.mirrorGuardTenantIds, []);
+  assert.deepEqual(calls.idempotencyTenantIds, []);
   assert.deepEqual(calls.profileLookupTenantIds, []);
   assert.equal(calls.channelSelection, 0);
   assert.equal(calls.linePush, 0);
@@ -316,6 +323,7 @@ test("GHL outbound payload with locationId selects only the exact tenant", async
   assert.equal(calls.ensureDefaultTenant, 0);
   assert.deepEqual(calls.locationLookups, ["location_exact"]);
   assert.deepEqual(calls.mirrorGuardTenantIds, [["tenant_exact"]]);
+  assert.deepEqual(calls.idempotencyTenantIds, ["tenant_exact"]);
   assert.deepEqual(calls.profileLookupTenantIds, [["tenant_exact"]]);
   assert.equal(calls.channelSelection, 1);
   assert.equal(calls.linePush, 1);
@@ -345,6 +353,7 @@ test("workflow mirror duplicate protection remains unchanged for exact tenant", 
   assert.deepEqual(result, { status: "skipped", reason: "Workflow outbound mirror echo" });
   assert.deepEqual(calls.locationLookups, ["location_exact"]);
   assert.deepEqual(calls.mirrorGuardTenantIds, [["tenant_exact"]]);
+  assert.deepEqual(calls.idempotencyTenantIds, []);
   assert.deepEqual(calls.profileLookupTenantIds, []);
   assert.equal(calls.channelSelection, 0);
   assert.equal(calls.linePush, 0);
