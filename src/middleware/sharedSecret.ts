@@ -8,7 +8,10 @@ export const requireSharedSecret: RequestHandler = (req, _res, next) => {
     return;
   }
 
-  const provided = req.header("x-webhook-secret") ?? req.header("authorization")?.replace(/^Bearer\s+/i, "");
+  const provided =
+    req.header("x-wincrm-webhook-secret") ??
+    req.header("x-webhook-secret") ??
+    req.header("authorization")?.replace(/^Bearer\s+/i, "");
 
   if (provided !== env.WEBHOOK_SHARED_SECRET) {
     next(new HttpError(401, "Invalid shared secret"));
