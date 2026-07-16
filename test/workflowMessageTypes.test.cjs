@@ -16,6 +16,7 @@ const workflowOutboundClient = require("../dist/integrations/ghlWorkflowOutbound
 const lineClient = require("../dist/integrations/lineClient");
 const lineOutboundChannelService = require("../dist/services/lineOutboundChannelService");
 const ghlWorkflowActionService = require("../dist/services/ghlWorkflowActionService");
+const { normalizeWorkflowRequestId } = require("../dist/routes/ghlWebhook");
 
 const patchedExports = [
   [repository, "getTenantIdsByLocationId"],
@@ -284,6 +285,16 @@ test("HighLevel mirror client logs no request text, OAuth token, or complete ide
   );
 });
 
+test("workflow route preserves string and numeric request correlation IDs safely", () => {
+  assert.equal(normalizeWorkflowRequestId("request-string-exact"), "request-string-exact");
+  assert.equal(normalizeWorkflowRequestId(42), "42");
+  assert.equal(normalizeWorkflowRequestId(undefined), undefined);
+  assert.equal(normalizeWorkflowRequestId(null), undefined);
+  assert.equal(normalizeWorkflowRequestId(true), undefined);
+  assert.equal(normalizeWorkflowRequestId({ id: "unsupported" }), undefined);
+  assert.equal(normalizeWorkflowRequestId(["unsupported"]), undefined);
+});
+
 test("logger redaction safety net censors project headers, nested bodies, identifiers, and messages", () => {
   let output = "";
   const privacyLogger = pino({
@@ -298,6 +309,7 @@ test("logger redaction safety net censors project headers, nested bodies, identi
   });
 
   privacyLogger.info({
+    requestId: normalizeWorkflowRequestId(42),
     req: {
       headers: {
         authorization: "Bearer request-authorization-sensitive",
@@ -344,6 +356,7 @@ test("logger redaction safety net censors project headers, nested bodies, identi
   assert.match(output, /\[redacted\]/);
   assert.match(output, /providerDispatchStatus/);
   assert.match(output, /success/);
+  assert.match(output, /"requestId":"42"/);
   assert.match(output, /"statusCode":201/);
   assert.match(output, /"locationIdPresent":true/);
 });

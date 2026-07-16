@@ -42,6 +42,18 @@ function isValidWorkflowActionSecret(headerValue: string | undefined): boolean {
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
 }
 
+export function normalizeWorkflowRequestId(requestId: unknown): string | undefined {
+  if (typeof requestId === "string") {
+    return requestId;
+  }
+
+  if (typeof requestId === "number") {
+    return String(requestId);
+  }
+
+  return undefined;
+}
+
 ghlWebhookRouter.post("/webhooks/ghl/workflows/send-line", async (req, res, next) => {
   try {
     if (!isValidWorkflowActionSecret(req.header("x-wincrm-webhook-secret"))) {
@@ -55,7 +67,7 @@ ghlWebhookRouter.post("/webhooks/ghl/workflows/send-line", async (req, res, next
     }
 
     const result = await processGhlWorkflowSendLine(req.body as Record<string, unknown>, {
-      requestId: typeof req.id === "string" ? req.id : undefined
+      requestId: normalizeWorkflowRequestId(req.id)
     });
     res.status(result.httpStatus).json(result.body);
   } catch (error) {
