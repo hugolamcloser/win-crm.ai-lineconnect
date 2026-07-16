@@ -20,7 +20,13 @@ const repository = require("../dist/services/repository");
 const oauthService = require("../dist/services/ghlOAuthService");
 const lineOutbound = require("../dist/services/lineOutboundChannelService");
 const signatureVerifier = require("../dist/middleware/ghlWebhookSignature");
-const { createApp, redactRequestHeaders, redactResponseHeaders, redactSensitiveUrlQuery } = require("../dist/app");
+const {
+  createApp,
+  redactRequestHeaders,
+  redactResponseHeaders,
+  redactSensitiveQueryObject,
+  redactSensitiveUrlQuery
+} = require("../dist/app");
 
 const repositoryMockKeys = [
   "ensureTenantForLocation",
@@ -547,6 +553,33 @@ test("request logging redacts OAuth codes, tokens, and webhook signatures", () =
   assert.equal(redactedHeaders.providerSecretPresent, true);
   assert.equal(redactedHeaders.signaturePresent, true);
   assert.equal(redactedHeaders.headerCount, 9);
+});
+
+test("request logging redacts customer identifiers from URL and query metadata", () => {
+  const redactedUrl = redactSensitiveUrlQuery(
+    "/webhooks/ghl/workflows/send-line?locationId=location-complete-sensitive&CoNtAcTiD=contact-complete-sensitive&%77orkflow%49d=workflow-complete-sensitive&mode=proof"
+  );
+  const redactedQuery = redactSensitiveQueryObject({
+    locationId: "location-complete-sensitive",
+    CoNvErSaTiOnId: "conversation-complete-sensitive",
+    "%74enant%49d": "tenant-complete-sensitive",
+    mode: "proof"
+  });
+
+  assert.equal(
+    redactedUrl,
+    "/webhooks/ghl/workflows/send-line?locationId=%5Bredacted%5D&CoNtAcTiD=%5Bredacted%5D&workflowId=%5Bredacted%5D&mode=proof"
+  );
+  assert.deepEqual(redactedQuery, {
+    locationId: "[redacted]",
+    CoNvErSaTiOnId: "[redacted]",
+    "%74enant%49d": "[redacted]",
+    mode: "proof"
+  });
+  assert.doesNotMatch(
+    JSON.stringify({ redactedUrl, redactedQuery }),
+    /location-complete-sensitive|contact-complete-sensitive|workflow-complete-sensitive|conversation-complete-sensitive|tenant-complete-sensitive/
+  );
 });
 
 test("response logging emits only safe header metadata", () => {

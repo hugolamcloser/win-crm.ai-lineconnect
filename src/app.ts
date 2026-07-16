@@ -40,13 +40,34 @@ const sensitiveQueryKeyNames = [
   "x-provider-secret",
   "x-ghl-secret",
   "x-webhook-secret",
-  "x-wincrm-webhook-secret"
+  "x-wincrm-webhook-secret",
+  "locationId",
+  "contactId",
+  "conversationId",
+  "ghlConversationId",
+  "tenantId",
+  "companyId",
+  "lineUserId",
+  "lineChannelId",
+  "channelId",
+  "messageId",
+  "ghlMessageId",
+  "workflowId",
+  "userId"
 ] as const;
 
 const sensitiveQueryKeys = new Set(sensitiveQueryKeyNames.map((key) => key.toLowerCase()));
 
 function isSensitiveQueryKey(key: string): boolean {
-  return sensitiveQueryKeys.has(key.toLowerCase());
+  if (sensitiveQueryKeys.has(key.toLowerCase())) {
+    return true;
+  }
+
+  try {
+    return sensitiveQueryKeys.has(decodeURIComponent(key.replace(/\+/g, " ")).toLowerCase());
+  } catch {
+    return false;
+  }
 }
 
 export function redactSensitiveUrlQuery(rawUrl: string | undefined): string | undefined {
@@ -84,7 +105,7 @@ export function redactSensitiveUrlQuery(rawUrl: string | undefined): string | un
   }
 }
 
-function redactSensitiveObjectKeys(value: unknown): unknown {
+export function redactSensitiveQueryObject(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return value;
   }
@@ -136,7 +157,7 @@ function redactRequestSerializer(req: IncomingMessage): Record<string, unknown> 
     serializedReq.url = redactSensitiveUrlQuery(serializedReq.url);
   }
 
-  serializedReq.query = redactSensitiveObjectKeys(serializedReq.query);
+  serializedReq.query = redactSensitiveQueryObject(serializedReq.query);
   serializedReq.headers = redactRequestHeaders(serializedReq.headers);
 
   return serializedReq;
