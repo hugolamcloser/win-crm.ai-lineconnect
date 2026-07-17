@@ -80,14 +80,61 @@ function emptyFieldMetadata() {
     type: "undefined",
     isArray: false,
     arrayLength: null,
+    stringLength: null,
+    nonEmptyString: false,
+    nonWhitespaceString: false,
     objectKeys: [],
     urlLikeValuePresent: false,
     mimeTypePresent: false,
-    filenamePresent: false
+    filenamePresent: false,
+    attachmentObjectCount: 0,
+    urlPresentCount: 0,
+    namePresentCount: 0,
+    sizePresentCount: 0,
+    missingUrlCount: 0,
+    imageCount: 0,
+    videoCount: 0,
+    audioCount: 0,
+    documentCount: 0,
+    otherCount: 0
   };
 }
 
-test("attachment payload probe reports missing attachments without exposing message text", async () => {
+test("attachment payload probe reports missing fields", async () => {
+  const response = await requestApp({ authorized: true, body: {} });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.fields.message, emptyFieldMetadata());
+  assert.deepEqual(response.body.fields.imageAttachment, emptyFieldMetadata());
+  assert.deepEqual(response.body.fields.videoAttachment, emptyFieldMetadata());
+});
+
+test("attachment payload probe classifies an empty string without returning it", async () => {
+  const response = await requestApp({ authorized: true, body: { message: "" } });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.fields.message, {
+    ...emptyFieldMetadata(),
+    present: true,
+    type: "string",
+    stringLength: 0
+  });
+});
+
+test("attachment payload probe distinguishes a whitespace-only string", async () => {
+  const response = await requestApp({ authorized: true, body: { message: "   " } });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.fields.message, {
+    ...emptyFieldMetadata(),
+    present: true,
+    type: "string",
+    stringLength: 3,
+    nonEmptyString: true
+  });
+});
+
+test("attachment payload probe reports non-empty string metadata without exposing message text", async () => {
   const logs = captureProbeLogs();
   const customerMessage = "customer-message-value-fixture";
   const response = await requestApp({ authorized: true, body: { message: customerMessage } });
@@ -96,7 +143,10 @@ test("attachment payload probe reports missing attachments without exposing mess
   assert.deepEqual(response.body.fields.message, {
     ...emptyFieldMetadata(),
     present: true,
-    type: "string"
+    type: "string",
+    stringLength: customerMessage.length,
+    nonEmptyString: true,
+    nonWhitespaceString: true
   });
   assert.deepEqual(response.body.fields.imageAttachment, emptyFieldMetadata());
   assert.deepEqual(response.body.fields.videoAttachment, emptyFieldMetadata());
@@ -113,14 +163,13 @@ test("attachment payload probe classifies a string URL without returning it", as
 
   assert.equal(response.status, 200);
   assert.deepEqual(response.body.fields.imageAttachment, {
+    ...emptyFieldMetadata(),
     present: true,
     type: "string",
-    isArray: false,
-    arrayLength: null,
-    objectKeys: [],
+    stringLength: attachmentUrl.length,
+    nonEmptyString: true,
+    nonWhitespaceString: true,
     urlLikeValuePresent: true,
-    mimeTypePresent: false,
-    filenamePresent: false
   });
   assert.doesNotMatch(
     JSON.stringify({ response: response.body, logs }),
@@ -147,10 +196,9 @@ test("attachment payload probe classifies an attachment object safely", async ()
 
   assert.equal(response.status, 200);
   assert.deepEqual(response.body.fields.imageAttachment, {
+    ...emptyFieldMetadata(),
     present: true,
     type: "object",
-    isArray: false,
-    arrayLength: null,
     objectKeys: ["url", "mimeType", "filename"],
     urlLikeValuePresent: true,
     mimeTypePresent: true,
@@ -162,33 +210,72 @@ test("attachment payload probe classifies an attachment object safely", async ()
   );
 });
 
-test("attachment payload probe classifies an attachment array safely", async () => {
+test("attachment payload probe classifies a mixed attachment array safely", async () => {
   const logs = captureProbeLogs();
   const response = await requestApp({
     authorized: true,
     body: {
       videoAttachment: [
-        "https://media.example.test/private/video-file.mp4?signature=video-signed-value",
-        { contentType: "video/mp4", originalName: "customer-video-file.mp4" }
+        { url: "https://media.example.test/private/image-one?token=image-token", name: "customer-image.jpg", size: 10 },
+        { url: "https://media.example.test/private/video-one?token=video-token", name: "customer-video.mp4", size: "20" },
+        { url: "https://media.example.test/private/audio-one?token=audio-token", name: "customer-audio.m4a", size: 30 },
+        { url: "https://media.example.test/private/document-one?token=document-token", name: "customer-document.pdf", size: 40 },
+        { url: "https://media.example.test/private/other-one?token=other-token", name: "customer-other.archive", size: 50 }
       ]
     }
   });
 
   assert.equal(response.status, 200);
   assert.deepEqual(response.body.fields.videoAttachment, {
+    ...emptyFieldMetadata(),
     present: true,
     type: "object",
     isArray: true,
-    arrayLength: 2,
-    objectKeys: ["contentType", "originalName"],
+    arrayLength: 5,
+    objectKeys: ["url", "name", "size"],
     urlLikeValuePresent: true,
-    mimeTypePresent: true,
-    filenamePresent: true
+    filenamePresent: true,
+    attachmentObjectCount: 5,
+    urlPresentCount: 5,
+    namePresentCount: 5,
+    sizePresentCount: 5,
+    imageCount: 1,
+    videoCount: 1,
+    audioCount: 1,
+    documentCount: 1,
+    otherCount: 1
   });
   assert.doesNotMatch(
     JSON.stringify({ response: response.body, logs }),
-    /video-file\.mp4|customer-video-file\.mp4|video-signed-value/
+    /customer-(?:image|video|audio|document|other)|image-token|video-token|audio-token|document-token|other-token|\.jpg|\.mp4|\.m4a|\.pdf|\.archive/
   );
+});
+
+test("attachment payload probe counts an attachment object missing its URL", async () => {
+  const logs = captureProbeLogs();
+  const response = await requestApp({
+    authorized: true,
+    body: {
+      imageAttachment: [{ name: "missing-url-customer-file.pdf", size: 123 }]
+    }
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.fields.imageAttachment, {
+    ...emptyFieldMetadata(),
+    present: true,
+    type: "object",
+    isArray: true,
+    arrayLength: 1,
+    objectKeys: ["name", "size"],
+    filenamePresent: true,
+    attachmentObjectCount: 1,
+    namePresentCount: 1,
+    sizePresentCount: 1,
+    missingUrlCount: 1,
+    documentCount: 1
+  });
+  assert.doesNotMatch(JSON.stringify({ response: response.body, logs }), /missing-url-customer-file|\.pdf/);
 });
 
 test("attachment payload probe inspects nested attachment structure without values", async () => {

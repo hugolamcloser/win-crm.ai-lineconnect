@@ -37,11 +37,38 @@ type ProbeFieldMetadata = {
   type: string;
   isArray: boolean;
   arrayLength: number | null;
+  stringLength: number | null;
+  nonEmptyString: boolean;
+  nonWhitespaceString: boolean;
   objectKeys: string[];
   urlLikeValuePresent: boolean;
   mimeTypePresent: boolean;
   filenamePresent: boolean;
+  attachmentObjectCount: number;
+  urlPresentCount: number;
+  namePresentCount: number;
+  sizePresentCount: number;
+  missingUrlCount: number;
+  imageCount: number;
+  videoCount: number;
+  audioCount: number;
+  documentCount: number;
+  otherCount: number;
 };
+
+type AttachmentArrayMetadata = Pick<
+  ProbeFieldMetadata,
+  | "attachmentObjectCount"
+  | "urlPresentCount"
+  | "namePresentCount"
+  | "sizePresentCount"
+  | "missingUrlCount"
+  | "imageCount"
+  | "videoCount"
+  | "audioCount"
+  | "documentCount"
+  | "otherCount"
+>;
 
 type ProbeInspectionState = {
   inspectedNodes: number;
@@ -95,6 +122,21 @@ const sensitiveProbeObjectKeys = new Set([
 const mimeTypeProbeKeys = new Set(["mime", "mimetype", "contenttype", "mediatype"]);
 const filenameProbeKeys = new Set(["filename", "name", "originalname", "originalfilename"]);
 const urlProbeKeys = new Set(["url", "uri", "href", "downloadurl", "fileurl", "mediaurl"]);
+const sizeProbeKeys = new Set(["size", "filesize", "bytes", "contentlength"]);
+const imageExtensions = new Set(["jpg", "jpeg", "png", "gif", "webp"]);
+const videoExtensions = new Set(["mp4", "mov", "m4v", "webm"]);
+const audioExtensions = new Set(["mp3", "m4a", "wav", "aac", "ogg"]);
+const documentExtensions = new Set([
+  "pdf",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "csv",
+  "ppt",
+  "pptx",
+  "txt"
+]);
 
 function getProbeRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -139,6 +181,110 @@ function stringLooksUrlLike(value: string): boolean {
 function stringLooksMimeLike(value: string): boolean {
   const inspectedValue = value.trim().slice(0, 256);
   return /^[a-z0-9][a-z0-9!#$&^_.+-]*\/[a-z0-9][a-z0-9!#$&^_.+-]*(?:\s*;.*)?$/i.test(inspectedValue);
+}
+
+function emptyAttachmentArrayMetadata(): AttachmentArrayMetadata {
+  return {
+    attachmentObjectCount: 0,
+    urlPresentCount: 0,
+    namePresentCount: 0,
+    sizePresentCount: 0,
+    missingUrlCount: 0,
+    imageCount: 0,
+    videoCount: 0,
+    audioCount: 0,
+    documentCount: 0,
+    otherCount: 0
+  };
+}
+
+function getMeaningfulStringProperty(
+  value: Record<string, unknown>,
+  recognizedKeys: Set<string>
+): string | undefined {
+  for (const key of Object.keys(value).slice(0, probeMaxObjectEntries)) {
+    const propertyValue = value[key];
+    if (
+      recognizedKeys.has(normalizeProbeKey(key)) &&
+      typeof propertyValue === "string" &&
+      propertyValue.trim().length > 0
+    ) {
+      return propertyValue;
+    }
+  }
+
+  return undefined;
+}
+
+function hasMeaningfulSizeProperty(value: Record<string, unknown>): boolean {
+  for (const key of Object.keys(value).slice(0, probeMaxObjectEntries)) {
+    if (!sizeProbeKeys.has(normalizeProbeKey(key))) {
+      continue;
+    }
+
+    const propertyValue = value[key];
+    if (
+      (typeof propertyValue === "number" && Number.isFinite(propertyValue)) ||
+      (typeof propertyValue === "string" && propertyValue.trim().length > 0)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function incrementFileCategory(name: string, metadata: AttachmentArrayMetadata): void {
+  const lastPathSegment = name.split(/[\\/]/).at(-1) ?? "";
+  const lastDotIndex = lastPathSegment.lastIndexOf(".");
+  const extension = lastDotIndex > 0 ? lastPathSegment.slice(lastDotIndex + 1).toLowerCase() : "";
+
+  if (imageExtensions.has(extension)) {
+    metadata.imageCount += 1;
+  } else if (videoExtensions.has(extension)) {
+    metadata.videoCount += 1;
+  } else if (audioExtensions.has(extension)) {
+    metadata.audioCount += 1;
+  } else if (documentExtensions.has(extension)) {
+    metadata.documentCount += 1;
+  } else {
+    metadata.otherCount += 1;
+  }
+}
+
+function inspectAttachmentArray(value: unknown): AttachmentArrayMetadata {
+  const metadata = emptyAttachmentArrayMetadata();
+  if (!Array.isArray(value)) {
+    return metadata;
+  }
+
+  for (const entry of value.slice(0, probeMaxArrayElements)) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      continue;
+    }
+
+    const attachment = entry as Record<string, unknown>;
+    const url = getMeaningfulStringProperty(attachment, urlProbeKeys);
+    const name = getMeaningfulStringProperty(attachment, filenameProbeKeys);
+
+    metadata.attachmentObjectCount += 1;
+    if (url) {
+      metadata.urlPresentCount += 1;
+    } else {
+      metadata.missingUrlCount += 1;
+    }
+
+    if (name) {
+      metadata.namePresentCount += 1;
+      incrementFileCategory(name, metadata);
+    }
+
+    if (hasMeaningfulSizeProperty(attachment)) {
+      metadata.sizePresentCount += 1;
+    }
+  }
+
+  return metadata;
 }
 
 function addProbeObjectKey(key: string, state: ProbeInspectionState): void {
@@ -244,6 +390,7 @@ function getProbeActionField(
 
 function buildProbeFieldMetadata(payload: Record<string, unknown>, fieldName: (typeof probeFieldNames)[number]): ProbeFieldMetadata {
   const { present, value } = getProbeActionField(payload, fieldName);
+  const isString = typeof value === "string";
   const state: ProbeInspectionState = {
     inspectedNodes: 0,
     placeholderIndex: 0,
@@ -259,15 +406,21 @@ function buildProbeFieldMetadata(payload: Record<string, unknown>, fieldName: (t
     inspectProbeValue(value, state, 0);
   }
 
+  const attachmentArrayMetadata = inspectAttachmentArray(value);
+
   return {
     present,
     type: typeof value,
     isArray: Array.isArray(value),
     arrayLength: Array.isArray(value) ? value.length : null,
+    stringLength: isString ? value.length : null,
+    nonEmptyString: isString && value.length > 0,
+    nonWhitespaceString: isString && value.trim().length > 0,
     objectKeys: state.objectKeys,
     urlLikeValuePresent: state.urlLikeValuePresent,
     mimeTypePresent: state.mimeTypePresent,
-    filenamePresent: state.filenamePresent
+    filenamePresent: state.filenamePresent,
+    ...attachmentArrayMetadata
   };
 }
 
