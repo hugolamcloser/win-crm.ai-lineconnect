@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
 import { Router } from "express";
 import { env } from "../config/env";
+import { logger } from "../config/logger";
 import { HttpError } from "../middleware/errors";
+import { getInternalCommentProbeWebhookObservation } from "../services/ghlInternalCommentProbeService";
 import { processGhlOutboundWebhook } from "../services/ghlSyncService";
 import { processGhlWorkflowSendLine, type WorkflowSendLineResponse } from "../services/ghlWorkflowActionService";
 
@@ -85,7 +87,32 @@ ghlWebhookRouter.post(
         throw new HttpError(400, "Invalid outbound webhook payload");
       }
 
-      const result = await processGhlOutboundWebhook(req.body as Record<string, unknown>);
+      const payload = req.body as Record<string, unknown>;
+      const probeObservation = getInternalCommentProbeWebhookObservation(payload);
+
+      if (probeObservation) {
+        logger.warn(
+          {
+            requestId: normalizeWorkflowRequestId(req.id),
+            internalCommentProbeEventObserved: true,
+            providerDispatchStatus: "safety_intercepted",
+            lineResultStatus: "not_attempted",
+            ...probeObservation
+          },
+          "Intercepted an InternalComment Stage 0 webhook before provider delivery"
+        );
+        res.json({
+          ok: true,
+          result: {
+            status: "skipped",
+            reason: "InternalComment Stage 0 safety intercept",
+            eventKind: probeObservation.eventKind
+          }
+        });
+        return;
+      }
+
+      const result = await processGhlOutboundWebhook(payload);
       res.json({ ok: true, result });
     } catch (error) {
       next(error);

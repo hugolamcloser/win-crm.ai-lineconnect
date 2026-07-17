@@ -1,6 +1,6 @@
 import { Router, type RequestHandler } from "express";
 import { env, getEnvPresenceReport } from "../config/env";
-import { requireSharedSecret } from "../middleware/sharedSecret";
+import { requireSharedSecret, requireWinCrmWebhookSecret } from "../middleware/sharedSecret";
 import {
   getGhlInboundSendAuthConfigDebug,
   getGhlProviderConfigDebug,
@@ -25,10 +25,41 @@ import {
   getConfiguredGhlOAuthTokenClaims,
   getOAuthCallbackConfig
 } from "../services/ghlOAuthService";
+import { runInternalCommentProbe } from "../services/ghlInternalCommentProbeService";
 import { getRecentDebugEvents } from "../services/repository";
 import { redactSecrets } from "../utils/redaction";
 
 export const debugRouter = Router();
+
+function normalizeRequestId(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  return typeof value === "number" ? String(value) : undefined;
+}
+
+// This temporary proof uses the Marketplace workflow header and must be registered
+// before the existing production-only /debug middleware, which accepts other aliases.
+debugRouter.post(
+  "/debug/ghl/internal-comment-proof",
+  requireWinCrmWebhookSecret,
+  async (req, res, next) => {
+    try {
+      if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
+        res.status(400).json({ error: "Invalid InternalComment probe payload" });
+        return;
+      }
+
+      const result = await runInternalCommentProbe(
+        req.body as Record<string, unknown>,
+        normalizeRequestId(req.id)
+      );
+      res.status(result.httpStatus).json(result.body);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 const requireSharedSecretInProduction: RequestHandler = (req, res, next) => {
   if (env.NODE_ENV !== "production") {

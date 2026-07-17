@@ -740,6 +740,31 @@ export async function getTenantIdsByLocationId(locationId: string): Promise<stri
     .filter((tenantId): tenantId is string => Boolean(tenantId));
 }
 
+export async function hasLineProfileForGhlContactInTenantIds(
+  tenantIds: string[],
+  contactId: string
+): Promise<boolean> {
+  const normalizedTenantIds = [...new Set(tenantIds.map((tenantId) => tenantId.trim()).filter(Boolean))];
+  const normalizedContactId = contactId.trim();
+
+  if (normalizedTenantIds.length === 0 || !normalizedContactId) {
+    return false;
+  }
+
+  const supabase = getSupabase();
+  const { count, error } = await supabase
+    .from("line_profiles")
+    .select("id", { count: "exact", head: true })
+    .in("tenant_id", normalizedTenantIds)
+    .eq("ghl_contact_id", normalizedContactId);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return (count ?? 0) > 0;
+}
+
 export async function ensureTenantForLocation(locationId: string): Promise<TenantRecord> {
   const normalizedLocationId = locationId.trim();
 
