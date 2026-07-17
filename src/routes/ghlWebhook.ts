@@ -31,7 +31,7 @@ function workflowActionResponse(
   };
 }
 
-function isValidWorkflowActionSecret(headerValue: string | undefined): boolean {
+export function isValidWorkflowActionSecret(headerValue: string | undefined): boolean {
   if (!env.WEBHOOK_SHARED_SECRET || !headerValue) {
     return false;
   }
