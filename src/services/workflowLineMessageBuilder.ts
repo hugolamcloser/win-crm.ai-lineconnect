@@ -23,12 +23,67 @@ export type WorkflowLineImageMessage = {
   inputPresence: WorkflowLineMessageInputPresence;
 };
 
-export type WorkflowLineMessage = WorkflowLineTextMessage | WorkflowLineImageMessage;
+export type WorkflowAttachmentCategory =
+  | "native_image"
+  | "image_link"
+  | "video_link"
+  | "audio_link"
+  | "document_link"
+  | "unknown_link";
+
+export type NormalizedWorkflowAttachment = {
+  url: string;
+  displayName: string;
+  size?: number;
+  category: WorkflowAttachmentCategory;
+};
+
+export type WorkflowAttachmentSummary = {
+  attachmentCount: number;
+  nativeImageCount: number;
+  imageLinkCount: number;
+  videoLinkCount: number;
+  audioLinkCount: number;
+  documentLinkCount: number;
+  unknownLinkCount: number;
+};
+
+export type WorkflowLineAttachmentMessage = {
+  type: "attachments";
+  text?: string;
+  attachments: NormalizedWorkflowAttachment[];
+  attachmentSummary: WorkflowAttachmentSummary;
+  inputPresence: WorkflowLineMessageInputPresence;
+};
+
+export type WorkflowLineMessage =
+  | WorkflowLineTextMessage
+  | WorkflowLineImageMessage
+  | WorkflowLineAttachmentMessage;
 
 export class WorkflowLineMessageValidationError extends Error {}
 
 const lineTextMaxCharacters = 5_000;
 const lineImageUrlMaxCharacters = 2_000;
+const maxWorkflowAttachments = 20;
+const maxWorkflowAttachmentLineMessages = 5;
+const maxNativeImagePreviewBytes = 1_000_000;
+const maxAttachmentDisplayNameCharacters = 120;
+const attachmentAliases = ["attachments", "imageAttachment", "videoAttachment"] as const;
+const nativeImageExtensions = new Set(["jpg", "jpeg", "png"]);
+const videoExtensions = new Set(["mp4", "mov", "m4v", "webm"]);
+const audioExtensions = new Set(["mp3", "m4a", "wav", "aac", "ogg"]);
+const documentExtensions = new Set([
+  "pdf",
+  "doc",
+  "docx",
+  "xls",
+  "xlsx",
+  "csv",
+  "ppt",
+  "pptx",
+  "txt"
+]);
 
 function getRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -47,6 +102,15 @@ function getActionField(payload: Record<string, unknown>, key: string): unknown 
 
 function getTrimmedString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function parseMessageType(value: unknown): WorkflowLineMessageType {
@@ -176,7 +240,7 @@ function isNonPublicIpv6(address: string): boolean {
 
 function validatePublicHttpsUrl(
   value: unknown,
-  fieldName: "originalImageUrl" | "previewImageUrl"
+  fieldName: "originalImageUrl" | "previewImageUrl" | "Attachment URL"
 ): { url: string; hostname: string } {
   const normalized = getTrimmedString(value);
 
@@ -229,6 +293,149 @@ function validatePublicHttpsUrl(
   return { url: normalized, hostname };
 }
 
+function getAttachmentCategory(
+  name: string | undefined,
+  size: number | undefined
+): WorkflowAttachmentCategory {
+  if (!name) {
+    return "unknown_link";
+  }
+
+  const lastPathSegment = name.split(/[\\/]/).at(-1) ?? "";
+  const lastDotIndex = lastPathSegment.lastIndexOf(".");
+  const extension = lastDotIndex > 0 ? lastPathSegment.slice(lastDotIndex + 1).toLowerCase() : "";
+
+  if (nativeImageExtensions.has(extension)) {
+    return size !== undefined && size <= maxNativeImagePreviewBytes
+      ? "native_image"
+      : "image_link";
+  }
+
+  if (videoExtensions.has(extension)) {
+    return "video_link";
+  }
+
+  if (audioExtensions.has(extension)) {
+    return "audio_link";
+  }
+
+  if (documentExtensions.has(extension)) {
+    return "document_link";
+  }
+
+  return "unknown_link";
+}
+
+function getAttachmentDisplayName(name: string | undefined, category: WorkflowAttachmentCategory): string {
+  const fallbackByCategory: Record<WorkflowAttachmentCategory, string> = {
+    native_image: "Image attachment",
+    image_link: "Image attachment",
+    video_link: "Video attachment",
+    audio_link: "Audio attachment",
+    document_link: "Document attachment",
+    unknown_link: "Attachment"
+  };
+
+  if (!name) {
+    return fallbackByCategory[category];
+  }
+
+  const lastPathSegment = name.split(/[\\/]/).at(-1) ?? "";
+  const sanitized = lastPathSegment
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxAttachmentDisplayNameCharacters);
+
+  return sanitized || fallbackByCategory[category];
+}
+
+function normalizeAttachmentObject(value: Record<string, unknown>): NormalizedWorkflowAttachment | undefined {
+  const rawUrl = value.url;
+
+  if (typeof rawUrl !== "string" || rawUrl.trim().length === 0) {
+    return undefined;
+  }
+
+  validatePublicHttpsUrl(rawUrl, "Attachment URL");
+  const rawName = typeof value.name === "string" && value.name.trim().length > 0
+    ? value.name
+    : undefined;
+  const size = typeof value.size === "number" && Number.isFinite(value.size) && value.size >= 0
+    ? value.size
+    : undefined;
+  const category = getAttachmentCategory(rawName, size);
+
+  return {
+    url: rawUrl,
+    displayName: getAttachmentDisplayName(rawName, category),
+    ...(size !== undefined ? { size } : {}),
+    category
+  };
+}
+
+export function normalizeWorkflowAttachments(payload: Record<string, unknown>): NormalizedWorkflowAttachment[] {
+  const normalized: NormalizedWorkflowAttachment[] = [];
+
+  for (const alias of attachmentAliases) {
+    const rawValue = getActionField(payload, alias);
+    const candidates = Array.isArray(rawValue) ? rawValue : [rawValue];
+
+    for (const candidate of candidates) {
+      if (!isPlainRecord(candidate)) {
+        continue;
+      }
+
+      const attachment = normalizeAttachmentObject(candidate);
+      if (!attachment) {
+        continue;
+      }
+
+      if (normalized.length >= maxWorkflowAttachments) {
+        throw new WorkflowLineMessageValidationError(
+          `A maximum of ${maxWorkflowAttachments} attachments is supported`
+        );
+      }
+
+      normalized.push(attachment);
+    }
+  }
+
+  return normalized;
+}
+
+function summarizeWorkflowAttachments(
+  attachments: NormalizedWorkflowAttachment[]
+): WorkflowAttachmentSummary {
+  const summary: WorkflowAttachmentSummary = {
+    attachmentCount: attachments.length,
+    nativeImageCount: 0,
+    imageLinkCount: 0,
+    videoLinkCount: 0,
+    audioLinkCount: 0,
+    documentLinkCount: 0,
+    unknownLinkCount: 0
+  };
+
+  for (const attachment of attachments) {
+    if (attachment.category === "native_image") {
+      summary.nativeImageCount += 1;
+    } else if (attachment.category === "image_link") {
+      summary.imageLinkCount += 1;
+    } else if (attachment.category === "video_link") {
+      summary.videoLinkCount += 1;
+    } else if (attachment.category === "audio_link") {
+      summary.audioLinkCount += 1;
+    } else if (attachment.category === "document_link") {
+      summary.documentLinkCount += 1;
+    } else {
+      summary.unknownLinkCount += 1;
+    }
+  }
+
+  return summary;
+}
+
 export function buildWorkflowLineMessage(payload: Record<string, unknown>): WorkflowLineMessage {
   const rawMessage = getActionField(payload, "message");
   const rawOriginalImageUrl = getActionField(payload, "originalImageUrl");
@@ -242,13 +449,32 @@ export function buildWorkflowLineMessage(payload: Record<string, unknown>): Work
 
   if (messageType === "text") {
     const text = getTrimmedString(rawMessage);
+    const attachments = normalizeWorkflowAttachments(payload);
+
+    if (text && text.length > lineTextMaxCharacters) {
+      throw new WorkflowLineMessageValidationError(`Message must be ${lineTextMaxCharacters} characters or fewer`);
+    }
+
+    if (attachments.length > 0) {
+      const outputMessageCount = attachments.length + (text ? 1 : 0);
+
+      if (outputMessageCount > maxWorkflowAttachmentLineMessages) {
+        throw new WorkflowLineMessageValidationError(
+          `Workflow text and attachments must produce no more than ${maxWorkflowAttachmentLineMessages} LINE messages`
+        );
+      }
+
+      return {
+        type: "attachments",
+        ...(text ? { text } : {}),
+        attachments,
+        attachmentSummary: summarizeWorkflowAttachments(attachments),
+        inputPresence
+      };
+    }
 
     if (!text) {
       throw new WorkflowLineMessageValidationError("Message is required");
-    }
-
-    if (text.length > lineTextMaxCharacters) {
-      throw new WorkflowLineMessageValidationError(`Message must be ${lineTextMaxCharacters} characters or fewer`);
     }
 
     return { type: "text", text, inputPresence };
