@@ -17,14 +17,45 @@ export type Stage1CustomMessagePayload = {
   attachments?: string[];
 };
 
+export type Stage1RejectedFieldDiagnostic = {
+  field: string;
+  message?: string;
+  code?: string;
+};
+
+export type Stage1UpstreamErrorDiagnostic = {
+  statusCode: number;
+  status?: string;
+  error?: string;
+  message?: string;
+  code?: string;
+  rejectedFields: Stage1RejectedFieldDiagnostic[];
+  responseParsed: boolean;
+  responseTruncated: boolean;
+};
+
 export type Stage1GhlRequestResult = {
   ok: boolean;
   statusCode: number;
   messageId?: string;
   conversationId?: string;
+  upstreamError?: Stage1UpstreamErrorDiagnostic;
 };
 
 const messagesEndpoint = "/conversations/messages";
+const maxUpstreamErrorBytes = 32 * 1_024;
+const maxDiagnosticTextLength = 240;
+const maxDiagnosticCodeLength = 80;
+const maxRejectedFieldLength = 120;
+const maxRejectedFields = 20;
+const maxDiagnosticTraversalDepth = 5;
+const maxDiagnosticTraversalNodes = 100;
+const urlPattern = /https?:\/\/[^\s"'<>]+/giu;
+const jwtPattern = /\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/gu;
+const bearerPattern = /\bBearer\s+[^\s,;]+/giu;
+const longIdentifierPattern = /\b(?=[A-Za-z0-9_-]{18,}\b)(?=[A-Za-z0-9_-]*\d)[A-Za-z0-9_-]+\b/gu;
+const filenamePattern = /[^\s"'<>/\\]{1,120}\.(?:jpe?g|png|gif|webp|mp4|mov|m4v|webm|mp3|m4a|wav|aac|ogg|pdf|docx?|xlsx?|csv|pptx?|txt)(?=$|[\s,;:)\]}])/giu;
+const safeFieldPattern = /^[A-Za-z0-9_$.[\]-]{1,120}$/u;
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -58,6 +89,364 @@ async function discardResponseBody(response: Response): Promise<void> {
   } catch {
     // The probe never needs provider error bodies.
   }
+}
+
+function sanitizeDiagnosticText(value: unknown, maximumLength = maxDiagnosticTextLength): string | undefined {
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean") {
+    return undefined;
+  }
+
+  let sanitized = String(value)
+    .replace(/[\u0000-\u001f\u007f]/gu, " ")
+    .replace(urlPattern, "[redacted]")
+    .replace(jwtPattern, "[redacted]")
+    .replace(bearerPattern, "Bearer [redacted]");
+
+  const knownSensitiveValues = [
+    env.STAGE1_GHL_LOCATION_ID,
+    env.STAGE1_GHL_CONTACT_ID,
+    env.STAGE1_GHL_PROVIDER_ID,
+    env.GHL_LOCATION_ID,
+    env.GHL_CUSTOM_PROVIDER_ID,
+    env.WEBHOOK_SHARED_SECRET
+  ]
+    .map((item) => item.trim())
+    .filter((item) => item.length >= 3)
+    .sort((left, right) => right.length - left.length);
+
+  for (const sensitiveValue of knownSensitiveValues) {
+    sanitized = sanitized.split(sensitiveValue).join("[redacted]");
+  }
+
+  sanitized = sanitized
+    .replace(filenamePattern, "[redacted]")
+    .replace(longIdentifierPattern, "[redacted]")
+    .replace(/\s+/gu, " ")
+    .trim();
+
+  if (!sanitized) {
+    return undefined;
+  }
+
+  return sanitized.slice(0, maximumLength);
+}
+
+function sanitizeDiagnosticValue(value: unknown, maximumLength: number): string | undefined {
+  const scalar = sanitizeDiagnosticText(value, maximumLength);
+
+  if (scalar || !Array.isArray(value)) {
+    return scalar;
+  }
+
+  const parts = value
+    .slice(0, maxRejectedFields)
+    .map((item) => sanitizeDiagnosticText(item, maximumLength))
+    .filter((item): item is string => Boolean(item));
+
+  if (parts.length === 0) {
+    return undefined;
+  }
+
+  return parts.join("; ").slice(0, maximumLength);
+}
+
+function sanitizeRejectedField(value: unknown): string | undefined {
+  const field = sanitizeDiagnosticText(value, maxRejectedFieldLength);
+
+  if (!field || !safeFieldPattern.test(field)) {
+    return undefined;
+  }
+
+  return field;
+}
+
+function appendRejectedField(
+  rejectedFields: Stage1RejectedFieldDiagnostic[],
+  seen: Set<string>,
+  candidate: Stage1RejectedFieldDiagnostic
+): void {
+  if (rejectedFields.length >= maxRejectedFields) {
+    return;
+  }
+
+  const key = `${candidate.field}\u0000${candidate.message ?? ""}\u0000${candidate.code ?? ""}`;
+
+  if (seen.has(key)) {
+    return;
+  }
+
+  seen.add(key);
+  rejectedFields.push(candidate);
+}
+
+function collectRejectedFields(value: unknown): Stage1RejectedFieldDiagnostic[] {
+  const rejectedFields: Stage1RejectedFieldDiagnostic[] = [];
+  const seen = new Set<string>();
+  const queue: Array<{ value: unknown; inheritedField?: string; depth: number }> = [
+    { value, depth: 0 }
+  ];
+  let inspectedNodes = 0;
+
+  while (
+    queue.length > 0 &&
+    inspectedNodes < maxDiagnosticTraversalNodes &&
+    rejectedFields.length < maxRejectedFields
+  ) {
+    const current = queue.shift();
+
+    if (!current) {
+      break;
+    }
+
+    inspectedNodes += 1;
+
+    if (current.depth > maxDiagnosticTraversalDepth) {
+      continue;
+    }
+
+    if (Array.isArray(current.value)) {
+      for (const item of current.value.slice(0, maxRejectedFields)) {
+        queue.push({ value: item, inheritedField: current.inheritedField, depth: current.depth + 1 });
+      }
+      continue;
+    }
+
+    const record = getRecord(current.value);
+
+    if (!record) {
+      const message = sanitizeDiagnosticText(current.value);
+
+      if (current.inheritedField && message) {
+        appendRejectedField(rejectedFields, seen, { field: current.inheritedField, message });
+      }
+      continue;
+    }
+
+    const explicitField =
+      sanitizeRejectedField(record.field) ??
+      sanitizeRejectedField(record.property) ??
+      sanitizeRejectedField(record.path) ??
+      sanitizeRejectedField(record.param);
+    const field = explicitField ?? current.inheritedField;
+    const message = sanitizeDiagnosticText(record.message ?? record.error);
+    const code = sanitizeDiagnosticText(record.code ?? record.errorCode ?? record.type, maxDiagnosticCodeLength);
+
+    if (field && (message || code)) {
+      appendRejectedField(rejectedFields, seen, {
+        field,
+        ...(message ? { message } : {}),
+        ...(code ? { code } : {})
+      });
+    }
+
+    const constraints = getRecord(record.constraints);
+
+    if (field && constraints) {
+      for (const [constraintCode, constraintMessage] of Object.entries(constraints).slice(0, maxRejectedFields)) {
+        const safeMessage = sanitizeDiagnosticText(constraintMessage);
+        const safeCode = sanitizeDiagnosticText(constraintCode, maxDiagnosticCodeLength);
+
+        if (safeMessage) {
+          appendRejectedField(rejectedFields, seen, {
+            field,
+            message: safeMessage,
+            ...(safeCode ? { code: safeCode } : {})
+          });
+        }
+      }
+    }
+
+    for (const [key, nestedValue] of Object.entries(record).slice(0, maxRejectedFields)) {
+      if (["field", "property", "path", "param", "message", "error", "code", "errorCode", "type", "constraints"].includes(key)) {
+        continue;
+      }
+
+      const inheritedField =
+        ["children", "validationErrors", "errors"].includes(key)
+          ? field
+          : sanitizeRejectedField(key) ?? field;
+      queue.push({ value: nestedValue, inheritedField, depth: current.depth + 1 });
+    }
+  }
+
+  return rejectedFields;
+}
+
+function findDiagnosticScalar(root: unknown, expectedKey: string): string | undefined {
+  const rootRecord = getRecord(root);
+
+  if (!rootRecord) {
+    return undefined;
+  }
+
+  const records = [
+    rootRecord,
+    getRecord(rootRecord.error),
+    getRecord(rootRecord.response)
+  ].filter((item): item is Record<string, unknown> => Boolean(item));
+
+  for (const record of records) {
+    const sanitized = sanitizeDiagnosticValue(
+      record[expectedKey],
+      expectedKey === "code" ? maxDiagnosticCodeLength : maxDiagnosticTextLength
+    );
+
+    if (sanitized) {
+      return sanitized;
+    }
+  }
+
+  return undefined;
+}
+
+function findValidationContainers(root: unknown): unknown[] {
+  const containers: unknown[] = [];
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: root, depth: 0 }];
+  let inspectedNodes = 0;
+
+  while (
+    queue.length > 0 &&
+    inspectedNodes < maxDiagnosticTraversalNodes &&
+    containers.length < maxRejectedFields
+  ) {
+    const current = queue.shift();
+
+    if (!current) {
+      break;
+    }
+
+    inspectedNodes += 1;
+
+    if (current.depth > maxDiagnosticTraversalDepth) {
+      continue;
+    }
+
+    if (Array.isArray(current.value)) {
+      for (const item of current.value.slice(0, maxRejectedFields)) {
+        queue.push({ value: item, depth: current.depth + 1 });
+      }
+      continue;
+    }
+
+    const record = getRecord(current.value);
+
+    if (!record) {
+      continue;
+    }
+
+    for (const [key, nestedValue] of Object.entries(record).slice(0, maxRejectedFields)) {
+      if (key === "validationErrors" || key === "errors") {
+        containers.push(nestedValue);
+      } else if (typeof nestedValue === "object" && nestedValue !== null) {
+        queue.push({ value: nestedValue, depth: current.depth + 1 });
+      }
+    }
+  }
+
+  return containers;
+}
+
+async function readBoundedResponseBody(response: Response): Promise<{
+  text: string;
+  responseTruncated: boolean;
+}> {
+  if (!response.body) {
+    return { text: "", responseTruncated: false };
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  let responseTruncated = false;
+
+  try {
+    while (true) {
+      const result = await reader.read();
+
+      if (result.done) {
+        break;
+      }
+
+      const value = result.value;
+      const remainingBytes = maxUpstreamErrorBytes - totalBytes;
+
+      if (remainingBytes <= 0) {
+        responseTruncated = true;
+        await reader.cancel();
+        break;
+      }
+
+      if (value.byteLength > remainingBytes) {
+        chunks.push(value.slice(0, remainingBytes));
+        totalBytes += remainingBytes;
+        responseTruncated = true;
+        await reader.cancel();
+        break;
+      }
+
+      chunks.push(value);
+      totalBytes += value.byteLength;
+    }
+  } catch {
+    return { text: "", responseTruncated };
+  } finally {
+    reader.releaseLock();
+  }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  return {
+    text: new TextDecoder().decode(body),
+    responseTruncated
+  };
+}
+
+async function parseUpstreamError(response: Response): Promise<Stage1UpstreamErrorDiagnostic> {
+  const { text, responseTruncated } = await readBoundedResponseBody(response);
+  let parsed: unknown;
+  let responseParsed = false;
+
+  if (text.trim()) {
+    try {
+      parsed = JSON.parse(text.replace(/^\uFEFF/u, ""));
+      responseParsed = true;
+    } catch {
+      // Malformed or truncated upstream bodies are never returned verbatim.
+    }
+  }
+
+  const rejectedFields: Stage1RejectedFieldDiagnostic[] = [];
+  const rejectedFieldKeys = new Set<string>();
+
+  if (responseParsed) {
+    for (const container of findValidationContainers(parsed)) {
+      for (const rejectedField of collectRejectedFields(container)) {
+        appendRejectedField(rejectedFields, rejectedFieldKeys, rejectedField);
+      }
+    }
+  }
+
+  const status = responseParsed ? findDiagnosticScalar(parsed, "status") : undefined;
+  const error = responseParsed ? findDiagnosticScalar(parsed, "error") : undefined;
+  const message = responseParsed ? findDiagnosticScalar(parsed, "message") : undefined;
+  const code = responseParsed ? findDiagnosticScalar(parsed, "code") : undefined;
+
+  return {
+    statusCode: response.status,
+    ...(status ? { status } : {}),
+    ...(error ? { error } : {}),
+    ...(message ? { message } : {}),
+    ...(code ? { code } : {}),
+    rejectedFields,
+    responseParsed,
+    responseTruncated
+  };
 }
 
 async function parseCreatedMessage(response: Response): Promise<{
@@ -104,7 +493,7 @@ async function requestWithOAuthRefresh(
   let response = await performRequest(path, init, auth);
 
   if (response.status === 401) {
-    await discardResponseBody(response);
+    await parseUpstreamError(response);
     auth = await forceRefreshGhlAuthContext(locationId);
     response = await performRequest(path, init, auth);
   }
@@ -122,8 +511,11 @@ export async function createStage1CustomMessage(
   });
 
   if (!response.ok) {
-    await discardResponseBody(response);
-    return { ok: false, statusCode: response.status };
+    return {
+      ok: false,
+      statusCode: response.status,
+      upstreamError: await parseUpstreamError(response)
+    };
   }
 
   const ids = await parseCreatedMessage(response);
@@ -149,6 +541,14 @@ export async function updateStage1CustomMessageStatus(
     }
   );
 
+  if (!response.ok) {
+    return {
+      ok: false,
+      statusCode: response.status,
+      upstreamError: await parseUpstreamError(response)
+    };
+  }
+
   await discardResponseBody(response);
-  return { ok: response.ok, statusCode: response.status };
+  return { ok: true, statusCode: response.status };
 }

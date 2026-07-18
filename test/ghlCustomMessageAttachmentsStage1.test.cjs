@@ -151,6 +151,20 @@ function setupCreateResponses(count = 1) {
   return { requests, expectedCount: count };
 }
 
+function setupUpstreamResponse(body, status = 400) {
+  const requests = [];
+
+  global.fetch = async (url, init) => {
+    requests.push({ url, init });
+    return new Response(body, {
+      status,
+      headers: typeof body === "string" ? { "Content-Type": "application/json" } : undefined
+    });
+  };
+
+  return { requests };
+}
+
 async function runProbe(body, secret = config.env.WEBHOOK_SHARED_SECRET) {
   return requestApp({ path: stage1Path, body, headers: stage1Headers(secret) });
 }
@@ -415,6 +429,215 @@ test("Stage 1 create refreshes exact-location OAuth once after a 401", async () 
   assert.match(requests[0].init.headers.Authorization, /stage1-oauth-token-sensitive/);
   assert.match(requests[1].init.headers.Authorization, /stage1-refreshed-token-sensitive/);
   assert.doesNotMatch(JSON.stringify(response.body), /unauthorized-sensitive-body/);
+});
+
+test("standard JSON 400 returns only allowlisted sanitized error and message fields", async () => {
+  setupOAuth();
+  const logCalls = [];
+  loggerModule.logger.info = (...args) => logCalls.push(args);
+  setupUpstreamResponse(JSON.stringify({
+    statusCode: 999,
+    status: "Bad Request",
+    error: "Validation failed",
+    message: ["conversationProviderId is required"],
+    code: "VALIDATION_ERROR",
+    unknownField: "unknown-upstream-value-sensitive",
+    authorization: "Bearer upstream-authorization-sensitive"
+  }));
+
+  const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, false);
+  assert.deepEqual(response.body.results[0].upstreamError, {
+    statusCode: 400,
+    status: "Bad Request",
+    error: "Validation failed",
+    message: "conversationProviderId is required",
+    code: "VALIDATION_ERROR",
+    rejectedFields: [],
+    responseParsed: true,
+    responseTruncated: false
+  });
+  const exposed = JSON.stringify({ response: response.body, logs: logCalls });
+  assert.doesNotMatch(exposed, /unknown-upstream-value-sensitive|upstream-authorization-sensitive/);
+  assert.match(exposed, /VALIDATION_ERROR/);
+  assert.match(exposed, /upstream_error/);
+  assert.doesNotMatch(JSON.stringify(logCalls), /conversationProviderId is required|Validation failed|Bad Request/);
+});
+
+test("validation error arrays retain only bounded field, message, and code metadata", async () => {
+  setupOAuth();
+  setupUpstreamResponse(JSON.stringify({
+    error: "Bad Request",
+    validationErrors: [
+      { field: "conversationProviderId", message: "must be a valid provider", code: "invalid_provider" },
+      { property: "contactId", message: "must identify a contact", errorCode: "required" }
+    ]
+  }));
+
+  const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  const diagnostic = response.body.results[0].upstreamError;
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(diagnostic.rejectedFields, [
+    { field: "conversationProviderId", message: "must be a valid provider", code: "invalid_provider" },
+    { field: "contactId", message: "must identify a contact", code: "required" }
+  ]);
+  assert.equal(diagnostic.responseParsed, true);
+  assert.equal(diagnostic.responseTruncated, false);
+});
+
+test("nested validation errors and constraints are reduced to rejected field metadata", async () => {
+  setupOAuth();
+  setupUpstreamResponse(JSON.stringify({
+    response: { code: "INVALID_INPUT" },
+    details: {
+      errors: {
+        body: {
+          children: [
+            {
+              property: "conversationProviderId",
+              constraints: {
+                isNotEmpty: "conversationProviderId must not be empty"
+              }
+            }
+          ]
+        }
+      }
+    }
+  }));
+
+  const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  const diagnostic = response.body.results[0].upstreamError;
+
+  assert.equal(diagnostic.code, "INVALID_INPUT");
+  assert.deepEqual(diagnostic.rejectedFields, [
+    {
+      field: "conversationProviderId",
+      message: "conversationProviderId must not be empty",
+      code: "isNotEmpty"
+    }
+  ]);
+});
+
+test("malformed and empty upstream error bodies expose no raw body", async () => {
+  setupOAuth();
+  setupUpstreamResponse("{malformed-json-sensitive");
+
+  const malformed = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  assert.deepEqual(malformed.body.results[0].upstreamError, {
+    statusCode: 400,
+    rejectedFields: [],
+    responseParsed: false,
+    responseTruncated: false
+  });
+  assert.doesNotMatch(JSON.stringify(malformed.body), /malformed-json-sensitive/);
+
+  stage1Service.resetStage1ProbeStateForTests();
+  setupUpstreamResponse(null);
+  const empty = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  assert.deepEqual(empty.body.results[0].upstreamError, {
+    statusCode: 400,
+    rejectedFields: [],
+    responseParsed: false,
+    responseTruncated: false
+  });
+});
+
+test("oversized upstream response is capped, marked truncated, and never returned", async () => {
+  setupOAuth();
+  const oversizedSensitiveValue = `oversized-sensitive-prefix-${"x".repeat(40_000)}`;
+  setupUpstreamResponse(JSON.stringify({ message: oversizedSensitiveValue }));
+
+  const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  const diagnostic = response.body.results[0].upstreamError;
+
+  assert.equal(diagnostic.statusCode, 400);
+  assert.equal(diagnostic.responseParsed, false);
+  assert.equal(diagnostic.responseTruncated, true);
+  assert.deepEqual(diagnostic.rejectedFields, []);
+  assert.doesNotMatch(JSON.stringify(response.body), /oversized-sensitive-prefix/);
+});
+
+test("unknown upstream fields and nested arbitrary messages are discarded", async () => {
+  setupOAuth();
+  setupUpstreamResponse(JSON.stringify({
+    status: "invalid",
+    unknownField: "unknown-sensitive-value",
+    arbitraryWrapper: {
+      message: "nested-arbitrary-message-sensitive",
+      token: "nested-token-sensitive"
+    },
+    anotherUnknown: ["private-array-value"]
+  }));
+
+  const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  const exposed = JSON.stringify(response.body);
+
+  assert.equal(response.body.results[0].upstreamError.status, "invalid");
+  assert.equal(response.body.results[0].upstreamError.message, undefined);
+  assert.doesNotMatch(
+    exposed,
+    /unknown-sensitive-value|nested-arbitrary-message-sensitive|nested-token-sensitive|private-array-value|arbitraryWrapper/
+  );
+});
+
+test("identifiers, URLs, secrets, and complete upstream messages are removed from responses and logs", async () => {
+  setupOAuth();
+  const logCalls = [];
+  loggerModule.logger.info = (...args) => logCalls.push(args);
+  const upstreamMessage = [
+    "Rejected",
+    config.env.STAGE1_GHL_LOCATION_ID,
+    config.env.STAGE1_GHL_CONTACT_ID,
+    config.env.STAGE1_GHL_PROVIDER_ID,
+    assetUrls.image,
+    "private-customer-file.png",
+    config.env.WEBHOOK_SHARED_SECRET,
+    "stage1-oauth-token-sensitive"
+  ].join(" ");
+  setupUpstreamResponse(JSON.stringify({
+    message: upstreamMessage,
+    code: "INVALID_INPUT",
+    errors: [
+      {
+        field: "contactId",
+        message: upstreamMessage,
+        code: "required"
+      }
+    ],
+    headers: { authorization: "Bearer response-token-sensitive" }
+  }));
+
+  const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  const exposed = JSON.stringify({ response: response.body, logs: logCalls });
+
+  assert.equal(response.body.results[0].upstreamError.code, "INVALID_INPUT");
+  assert.equal(response.body.results[0].upstreamError.rejectedFields[0].field, "contactId");
+  assert.match(response.body.results[0].upstreamError.message, /\[redacted\]/);
+  assert.doesNotMatch(
+    exposed,
+    /stage1-location-sensitive|stage1-contact-sensitive|stage1-provider-sensitive|signed-image-sensitive|private-customer-file\.png|stage1-shared-secret-sensitive|stage1-oauth-token-sensitive|response-token-sensitive|https:\/\//
+  );
+  assert.doesNotMatch(JSON.stringify(logCalls), /Rejected|\[redacted\]/);
+  assert.match(JSON.stringify(logCalls), /INVALID_INPUT|validation_error|contactId/);
+});
+
+test("successful 2xx create parsing remains unchanged and has no upstreamError", async () => {
+  setupOAuth();
+  setupCreateResponses();
+
+  const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.results[0], {
+    highLevelHttpStatus: 200,
+    messageIdPresent: true,
+    messageId: "stage1-message-1",
+    conversationIdPresent: true,
+    conversationId: "stage1-conversation-1"
+  });
 });
 
 test("case F performs exactly two identical HighLevel creates and returns both IDs", async () => {

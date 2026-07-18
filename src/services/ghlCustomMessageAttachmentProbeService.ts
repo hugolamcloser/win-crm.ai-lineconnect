@@ -8,7 +8,8 @@ import {
   type Stage1CustomMessagePayload,
   type Stage1FinalStatus,
   type Stage1GhlRequestResult,
-  type Stage1InitialStatus
+  type Stage1InitialStatus,
+  type Stage1UpstreamErrorDiagnostic
 } from "../integrations/ghlCustomMessageAttachmentProbeClient";
 import { HttpError } from "../middleware/errors";
 import { buildShortLogRef } from "../utils/logPrivacy";
@@ -505,7 +506,23 @@ function toSafeCreateResult(result: Stage1GhlRequestResult) {
     messageIdPresent: Boolean(result.messageId),
     ...(result.messageId ? { messageId: result.messageId } : {}),
     conversationIdPresent: Boolean(result.conversationId),
-    ...(result.conversationId ? { conversationId: result.conversationId } : {})
+    ...(result.conversationId ? { conversationId: result.conversationId } : {}),
+    ...(result.upstreamError ? { upstreamError: result.upstreamError } : {})
+  };
+}
+
+function toSafeUpstreamErrorLog(error: Stage1UpstreamErrorDiagnostic | undefined) {
+  if (!error) {
+    return undefined;
+  }
+
+  return {
+    statusCode: error.statusCode,
+    responseParsed: error.responseParsed,
+    responseTruncated: error.responseTruncated,
+    errorCategory: error.rejectedFields.length > 0 ? "validation_error" : "upstream_error",
+    ...(error.code ? { errorCode: error.code } : {}),
+    rejectedFields: error.rejectedFields.map((item) => item.field)
   };
 }
 
@@ -547,6 +564,7 @@ export async function runStage1CustomMessageProbe(input: Stage1ProbeInput) {
       highLevelHttpStatuses: results.map((result) => result.statusCode),
       highLevelMessageIdPresent: results.map((result) => Boolean(result.messageId)),
       highLevelConversationIdPresent: results.map((result) => Boolean(result.conversationId)),
+      upstreamErrors: results.map((result) => toSafeUpstreamErrorLog(result.upstreamError)),
       dispatchStatus: results.every((result) => result.ok) ? "success" : "failed"
     },
     "Stage 1 HighLevel Custom message probe completed"
@@ -579,6 +597,7 @@ export async function updateStage1MessageStatus(messageId: string, status: Stage
       messageIdRef: buildShortLogRef(messageId),
       requestedStatus: status,
       highLevelHttpStatus: result.statusCode,
+      upstreamError: toSafeUpstreamErrorLog(result.upstreamError),
       dispatchStatus: result.ok ? "success" : "failed"
     },
     "Stage 1 HighLevel message status update completed"
