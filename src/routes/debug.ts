@@ -1,6 +1,7 @@
 import { Router, type RequestHandler } from "express";
+import { z } from "zod";
 import { env, getEnvPresenceReport } from "../config/env";
-import { requireSharedSecret } from "../middleware/sharedSecret";
+import { requireSharedSecret, requireWinCrmWebhookSecret } from "../middleware/sharedSecret";
 import {
   getGhlInboundSendAuthConfigDebug,
   getGhlProviderConfigDebug,
@@ -25,10 +26,64 @@ import {
   getConfiguredGhlOAuthTokenClaims,
   getOAuthCallbackConfig
 } from "../services/ghlOAuthService";
+import {
+  getStage1ProbeObservations,
+  runStage1CustomMessageProbe,
+  updateStage1MessageStatus
+} from "../services/ghlCustomMessageAttachmentProbeService";
 import { getRecentDebugEvents } from "../services/repository";
 import { redactSecrets } from "../utils/redaction";
 
 export const debugRouter = Router();
+
+const stage1ProbeInputSchema = z.object({
+  probeRunId: z.string(),
+  case: z.enum(["A", "B", "C", "D", "E", "F"]),
+  initialStatus: z.enum(["pending", "delivered"]).default("pending"),
+  assetUrl: z.string().optional()
+}).strict();
+
+const stage1StatusInputSchema = z.object({
+  status: z.enum(["delivered", "failed"])
+}).strict();
+
+debugRouter.post(
+  "/debug/ghl/custom-message-attachments-stage-1",
+  requireWinCrmWebhookSecret,
+  async (req, res, next) => {
+    try {
+      const input = stage1ProbeInputSchema.parse(req.body);
+      res.json(await runStage1CustomMessageProbe(input));
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+debugRouter.put(
+  "/debug/ghl/custom-message-attachments-stage-1/messages/:messageId/status",
+  requireWinCrmWebhookSecret,
+  async (req, res, next) => {
+    try {
+      const input = stage1StatusInputSchema.parse(req.body);
+      res.json(await updateStage1MessageStatus(req.params.messageId, input.status));
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+debugRouter.get(
+  "/debug/ghl/custom-message-attachments-stage-1/:probeRunId/observations",
+  requireWinCrmWebhookSecret,
+  (req, res, next) => {
+    try {
+      res.json(getStage1ProbeObservations(req.params.probeRunId));
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 const requireSharedSecretInProduction: RequestHandler = (req, res, next) => {
   if (env.NODE_ENV !== "production") {

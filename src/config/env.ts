@@ -57,6 +57,11 @@ const envSchema = z.object({
   GHL_LINE_USER_ID_FIELD_ID: z.string().default(""),
   GHL_LINE_DISPLAY_NAME_FIELD_ID: z.string().default(""),
 
+  STAGE1_GHL_LOCATION_ID: z.string().default(""),
+  STAGE1_GHL_CONTACT_ID: z.string().default(""),
+  STAGE1_GHL_PROVIDER_ID: z.string().default(""),
+  STAGE1_GHL_API_VERSION: z.string().min(1).default("v3"),
+
   WEBHOOK_SHARED_SECRET: z.string().default("")
 });
 
@@ -101,6 +106,10 @@ export const optionalEnvCheckKeys = [
   "GHL_WORKFLOW_LINE_DELIVERY_MODE",
   "GHL_LINE_USER_ID_FIELD_ID",
   "GHL_LINE_DISPLAY_NAME_FIELD_ID",
+  "STAGE1_GHL_LOCATION_ID",
+  "STAGE1_GHL_CONTACT_ID",
+  "STAGE1_GHL_PROVIDER_ID",
+  "STAGE1_GHL_API_VERSION",
   "CUSTOM_PAGE_FRAME_ANCESTORS"
 ] as const;
 

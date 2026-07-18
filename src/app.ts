@@ -10,6 +10,7 @@ import { adminRouter } from "./routes/admin";
 import { appLineRouter } from "./routes/appLine";
 import { debugRouter } from "./routes/debug";
 import { ghlAppInstallWebhookRouter } from "./routes/ghlAppInstallWebhook";
+import { ghlCustomMessageAttachmentProbeCallbackRouter } from "./routes/ghlCustomMessageAttachmentProbeCallback";
 import { ghlWebhookRouter } from "./routes/ghlWebhook";
 import { healthRouter } from "./routes/health";
 import { lineWebhookRouter } from "./routes/lineWebhook";
@@ -203,6 +204,7 @@ export function createApp() {
   app.disable("x-powered-by");
   app.use(helmet());
   app.use(pinoHttp({ logger, serializers: { req: redactRequestSerializer, res: redactResponseSerializer } }));
+  app.use(ghlCustomMessageAttachmentProbeCallbackRouter);
   app.use(jsonBodyParser);
 
   app.use(healthRouter);

@@ -1,0 +1,652 @@
+const { afterEach, test } = require("node:test");
+const assert = require("node:assert/strict");
+const http = require("node:http");
+
+process.env.NODE_ENV = "test";
+process.env.LOG_LEVEL = "silent";
+process.env.SUPABASE_URL = "https://example.supabase.co";
+process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role";
+process.env.WEBHOOK_SHARED_SECRET = "stage1-shared-secret-sensitive";
+process.env.GHL_LOCATION_ID = "production-location-sensitive";
+process.env.GHL_CUSTOM_PROVIDER_ID = "production-provider-sensitive";
+process.env.GHL_API_VERSION = "2021-07-28";
+process.env.STAGE1_GHL_LOCATION_ID = "stage1-location-sensitive";
+process.env.STAGE1_GHL_CONTACT_ID = "stage1-contact-sensitive";
+process.env.STAGE1_GHL_PROVIDER_ID = "stage1-provider-sensitive";
+delete process.env.STAGE1_GHL_API_VERSION;
+
+const config = require("../dist/config/env");
+const loggerModule = require("../dist/config/logger");
+const oauthService = require("../dist/services/ghlOAuthService");
+const signatureVerifier = require("../dist/middleware/ghlWebhookSignature");
+const lineClient = require("../dist/integrations/lineClient");
+const productionCallbackService = require("../dist/services/ghlSyncService");
+const stage1Service = require("../dist/services/ghlCustomMessageAttachmentProbeService");
+const { createApp } = require("../dist/app");
+
+const stage1Path = "/debug/ghl/custom-message-attachments-stage-1";
+const callbackPath = "/webhooks/ghl/stage-1/custom-message-outbound";
+const probeRunIds = {
+  A: "11111111-1111-4111-8111-111111111111",
+  B: "22222222-2222-4222-8222-222222222222",
+  C: "33333333-3333-4333-8333-333333333333",
+  D: "44444444-4444-4444-8444-444444444444",
+  E: "55555555-5555-4555-8555-555555555555",
+  F: "66666666-6666-4666-8666-666666666666"
+};
+const assetUrls = {
+  image: "https://assets.example.test/private/image.png?signature=signed-image-sensitive",
+  pdf: "https://assets.example.test/private/report.pdf?token=signed-pdf-sensitive",
+  mp4: "https://video.example.test/private/movie.mp4?signature=signed-video-sensitive"
+};
+const originalEnv = { ...config.env };
+const originalFetch = global.fetch;
+const patchedFunctions = [
+  [oauthService, "getGhlAuthContext"],
+  [oauthService, "forceRefreshGhlAuthContext"],
+  [signatureVerifier, "verifyGhlWebhookSignature"],
+  [productionCallbackService, "processGhlOutboundWebhook"],
+  [lineClient, "pushLineTextMessage"],
+  [lineClient, "pushLineImageMessage"],
+  [lineClient, "pushLineMessages"],
+  [loggerModule.logger, "info"]
+];
+const originals = patchedFunctions.map(([module, key]) => [module, key, module[key]]);
+
+afterEach(() => {
+  Object.assign(config.env, originalEnv);
+  global.fetch = originalFetch;
+
+  for (const [module, key, value] of originals) {
+    module[key] = value;
+  }
+
+  stage1Service.resetStage1ProbeStateForTests();
+});
+
+function requestApp({ path, method = "POST", body, headers = {} }) {
+  return new Promise((resolve, reject) => {
+    const app = createApp();
+    const server = app.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+      const rawBody = body === undefined ? "" : typeof body === "string" ? body : JSON.stringify(body);
+      const request = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: address.port,
+          path,
+          method,
+          headers: {
+            ...(rawBody ? {
+              "content-type": "application/json",
+              "content-length": Buffer.byteLength(rawBody)
+            } : {}),
+            ...headers
+          }
+        },
+        (response) => {
+          const chunks = [];
+          response.on("data", (chunk) => chunks.push(chunk));
+          response.on("end", () => {
+            const responseText = Buffer.concat(chunks).toString("utf8");
+            server.close((closeError) => {
+              if (closeError) {
+                reject(closeError);
+                return;
+              }
+
+              resolve({
+                status: response.statusCode,
+                body: responseText ? JSON.parse(responseText) : null
+              });
+            });
+          });
+        }
+      );
+      request.on("error", (error) => server.close(() => reject(error)));
+      request.end(rawBody);
+    });
+    server.on("error", reject);
+  });
+}
+
+function stage1Headers(secret = config.env.WEBHOOK_SHARED_SECRET) {
+  return { "x-wincrm-webhook-secret": secret };
+}
+
+function setupOAuth() {
+  const authCalls = [];
+  const refreshCalls = [];
+
+  oauthService.getGhlAuthContext = async (locationId, options) => {
+    authCalls.push({ locationId, options });
+    return { mode: "oauth", accessToken: "stage1-oauth-token-sensitive", locationId };
+  };
+  oauthService.forceRefreshGhlAuthContext = async (locationId) => {
+    refreshCalls.push(locationId);
+    return { mode: "oauth", accessToken: "stage1-refreshed-token-sensitive", locationId };
+  };
+
+  return { authCalls, refreshCalls };
+}
+
+function setupCreateResponses(count = 1) {
+  const requests = [];
+  let sequence = 0;
+
+  global.fetch = async (url, init) => {
+    sequence += 1;
+    requests.push({ url, init, payload: JSON.parse(init.body) });
+    return new Response(JSON.stringify({
+      messageId: `stage1-message-${sequence}`,
+      conversationId: `stage1-conversation-${sequence}`,
+      ignoredSensitiveBody: "must-not-be-returned"
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  return { requests, expectedCount: count };
+}
+
+async function runProbe(body, secret = config.env.WEBHOOK_SHARED_SECRET) {
+  return requestApp({ path: stage1Path, body, headers: stage1Headers(secret) });
+}
+
+test("Stage 1 driver rejects missing and invalid x-wincrm-webhook-secret", async () => {
+  let fetchCount = 0;
+  global.fetch = async () => {
+    fetchCount += 1;
+    throw new Error("fetch must not run");
+  };
+
+  const missing = await requestApp({
+    path: stage1Path,
+    body: { probeRunId: probeRunIds.A, case: "A" }
+  });
+  const invalid = await runProbe({ probeRunId: probeRunIds.A, case: "A" }, "invalid-secret");
+
+  assert.equal(missing.status, 401);
+  assert.equal(invalid.status, 401);
+  assert.equal(fetchCount, 0);
+});
+
+test("Stage 1 shared-secret middleware preserves missing-configuration 503", async () => {
+  config.env.WEBHOOK_SHARED_SECRET = "";
+  let fetchCount = 0;
+  global.fetch = async () => {
+    fetchCount += 1;
+    throw new Error("fetch must not run");
+  };
+
+  const response = await requestApp({
+    path: stage1Path,
+    body: { probeRunId: probeRunIds.A, case: "A" },
+    headers: { "x-wincrm-webhook-secret": "unused-sensitive-secret" }
+  });
+
+  assert.equal(response.status, 503);
+  assert.equal(response.body.error, "WEBHOOK_SHARED_SECRET is not configured");
+  assert.equal(fetchCount, 0);
+});
+
+test("Stage 1 API version defaults to v3 independently of production GHL_API_VERSION", async () => {
+  setupOAuth();
+  const { requests } = setupCreateResponses();
+
+  const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  const presence = config.getEnvPresenceReport();
+
+  assert.equal(response.status, 200);
+  assert.equal(config.env.GHL_API_VERSION, "2021-07-28");
+  assert.equal(config.env.STAGE1_GHL_API_VERSION, "v3");
+  assert.equal(requests[0].init.headers.Version, "v3");
+  assert.ok(Object.prototype.hasOwnProperty.call(presence.optional, "STAGE1_GHL_API_VERSION"));
+});
+
+test("Stage 1 routes fail closed when dedicated configuration is incomplete", async () => {
+  config.env.STAGE1_GHL_PROVIDER_ID = "";
+  let fetchCount = 0;
+  global.fetch = async () => {
+    fetchCount += 1;
+    throw new Error("fetch must not run");
+  };
+
+  const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+
+  assert.equal(response.status, 503);
+  assert.equal(response.body.error, "Stage 1 HighLevel probe configuration is incomplete");
+  assert.equal(fetchCount, 0);
+});
+
+test("Stage 1 refuses the configured production location or provider", async () => {
+  let fetchCount = 0;
+  global.fetch = async () => {
+    fetchCount += 1;
+    throw new Error("fetch must not run");
+  };
+  config.env.STAGE1_GHL_PROVIDER_ID = config.env.GHL_CUSTOM_PROVIDER_ID;
+
+  const providerResponse = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  assert.equal(providerResponse.status, 503);
+  assert.match(providerResponse.body.error, /provider must be isolated/);
+
+  config.env.STAGE1_GHL_PROVIDER_ID = originalEnv.STAGE1_GHL_PROVIDER_ID;
+  config.env.STAGE1_GHL_LOCATION_ID = config.env.GHL_LOCATION_ID;
+  const locationResponse = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  assert.equal(locationResponse.status, 503);
+  assert.match(locationResponse.body.error, /location must be isolated/);
+  assert.equal(fetchCount, 0);
+});
+
+test("invalid probeRunId is rejected before OAuth or HighLevel access", async () => {
+  let oauthCount = 0;
+  oauthService.getGhlAuthContext = async () => {
+    oauthCount += 1;
+    throw new Error("OAuth must not run");
+  };
+
+  const response = await runProbe({ probeRunId: "not-a-uuid", case: "A" });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "probeRunId must be a UUID");
+  assert.equal(oauthCount, 0);
+});
+
+test("arbitrary location, contact, and provider identifiers are rejected", async () => {
+  let fetchCount = 0;
+  global.fetch = async () => {
+    fetchCount += 1;
+    throw new Error("fetch must not run");
+  };
+
+  const response = await runProbe({
+    probeRunId: probeRunIds.A,
+    case: "A",
+    locationId: "arbitrary-location-sensitive",
+    contactId: "arbitrary-contact-sensitive",
+    providerId: "arbitrary-provider-sensitive"
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "validation_error");
+  assert.equal(fetchCount, 0);
+});
+
+for (const fixture of [
+  { case: "A", expected: { message: `Stage 1 A ${probeRunIds.A}` } },
+  { case: "B", assetUrl: assetUrls.image, expected: { attachments: [assetUrls.image] } },
+  {
+    case: "C",
+    assetUrl: assetUrls.image,
+    expected: { message: `Stage 1 C ${probeRunIds.C}`, attachments: [assetUrls.image] }
+  },
+  { case: "D", assetUrl: assetUrls.pdf, expected: { attachments: [assetUrls.pdf] } },
+  { case: "E", assetUrl: assetUrls.mp4, expected: { attachments: [assetUrls.mp4] } }
+]) {
+  test(`Stage 1 case ${fixture.case} creates the exact Custom payload`, async () => {
+    const { authCalls } = setupOAuth();
+    const { requests } = setupCreateResponses();
+    const response = await runProbe({
+      probeRunId: probeRunIds[fixture.case],
+      case: fixture.case,
+      ...(fixture.assetUrl ? { assetUrl: fixture.assetUrl } : {})
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.initialStatus, "pending");
+    assert.equal(response.body.createRequestCount, 1);
+    assert.deepEqual(requests[0].payload, {
+      type: "Custom",
+      contactId: config.env.STAGE1_GHL_CONTACT_ID,
+      conversationProviderId: config.env.STAGE1_GHL_PROVIDER_ID,
+      status: "pending",
+      ...fixture.expected
+    });
+    assert.equal(requests[0].payload.type, "Custom");
+    assert.notEqual(requests[0].payload.type, "InternalComment");
+    assert.equal(authCalls[0].locationId, config.env.STAGE1_GHL_LOCATION_ID);
+    assert.deepEqual(authCalls[0].options, { allowPrivateFallback: false });
+    assert.equal(requests[0].init.headers.Version, "v3");
+    assert.equal(response.body.results[0].messageId, "stage1-message-1");
+    assert.equal(response.body.results[0].conversationId, "stage1-conversation-1");
+    assert.equal(JSON.stringify(response.body).includes("must-not-be-returned"), false);
+  });
+}
+
+test("signed attachment URL is preserved byte-for-byte and delivered control is supported", async () => {
+  setupOAuth();
+  const { requests } = setupCreateResponses();
+
+  const response = await runProbe({
+    probeRunId: probeRunIds.B,
+    case: "B",
+    initialStatus: "delivered",
+    assetUrl: assetUrls.image
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.initialStatus, "delivered");
+  assert.equal(response.body.statusUpdateRequired, false);
+  assert.equal(requests[0].payload.attachments[0], assetUrls.image);
+});
+
+test("asset URL validation rejects unsafe values before OAuth", async () => {
+  let oauthCount = 0;
+  oauthService.getGhlAuthContext = async () => {
+    oauthCount += 1;
+    throw new Error("OAuth must not run");
+  };
+
+  for (const assetUrl of [
+    "http://assets.example.test/image.png",
+    "https://localhost/image.png",
+    "https://127.0.0.1/image.png",
+    "https://[::1]/image.png",
+    "https://user:password@assets.example.test/image.png",
+    "https://assets.example.test/unencoded image.png"
+  ]) {
+    const response = await runProbe({ probeRunId: probeRunIds.B, case: "B", assetUrl });
+    assert.equal(response.status, 400);
+  }
+
+  assert.equal(oauthCount, 0);
+});
+
+test("assetUrl is required for attachment cases but not case A", async () => {
+  let oauthCount = 0;
+  oauthService.getGhlAuthContext = async () => {
+    oauthCount += 1;
+    throw new Error("OAuth must not run for missing attachment URL");
+  };
+
+  const response = await runProbe({ probeRunId: probeRunIds.B, case: "B" });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "assetUrl is required for this Stage 1 probe case");
+  assert.equal(oauthCount, 0);
+});
+
+test("asset URL length is bounded before OAuth", async () => {
+  let oauthCount = 0;
+  oauthService.getGhlAuthContext = async () => {
+    oauthCount += 1;
+    throw new Error("OAuth must not run");
+  };
+  const oversizedUrl = `https://assets.example.test/${"a".repeat(2_000)}`;
+
+  const response = await runProbe({
+    probeRunId: probeRunIds.B,
+    case: "B",
+    assetUrl: oversizedUrl
+  });
+
+  assert.equal(response.status, 400);
+  assert.match(response.body.error, /2000 characters or fewer/);
+  assert.equal(oauthCount, 0);
+});
+
+test("Stage 1 create refreshes exact-location OAuth once after a 401", async () => {
+  const { authCalls, refreshCalls } = setupOAuth();
+  const requests = [];
+
+  global.fetch = async (url, init) => {
+    requests.push({ url, init });
+
+    if (requests.length === 1) {
+      return new Response("unauthorized-sensitive-body", { status: 401 });
+    }
+
+    return new Response(JSON.stringify({ messageId: "stage1-message-refreshed" }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+
+  assert.equal(response.status, 200);
+  assert.equal(requests.length, 2);
+  assert.equal(authCalls.length, 1);
+  assert.deepEqual(refreshCalls, [config.env.STAGE1_GHL_LOCATION_ID]);
+  assert.match(requests[0].init.headers.Authorization, /stage1-oauth-token-sensitive/);
+  assert.match(requests[1].init.headers.Authorization, /stage1-refreshed-token-sensitive/);
+  assert.doesNotMatch(JSON.stringify(response.body), /unauthorized-sensitive-body/);
+});
+
+test("case F performs exactly two identical HighLevel creates and returns both IDs", async () => {
+  setupOAuth();
+  const { requests } = setupCreateResponses(2);
+
+  const response = await runProbe({
+    probeRunId: probeRunIds.F,
+    case: "F",
+    assetUrl: assetUrls.image
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.createRequestCount, 2);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].payload, requests[1].payload);
+  assert.deepEqual(response.body.results.map((result) => result.messageId), [
+    "stage1-message-1",
+    "stage1-message-2"
+  ]);
+});
+
+test("protected status endpoint sends only the allowed status with exact-location OAuth", async () => {
+  const { authCalls } = setupOAuth();
+  let request;
+  global.fetch = async (url, init) => {
+    request = { url, init };
+    return new Response(null, { status: 200 });
+  };
+
+  const response = await requestApp({
+    path: `${stage1Path}/messages/stage1-message-status/status`,
+    method: "PUT",
+    headers: stage1Headers(),
+    body: { status: "delivered" }
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(request.init.body), { status: "delivered" });
+  assert.match(request.url, /\/conversations\/messages\/stage1-message-status\/status$/);
+  assert.deepEqual(authCalls[0].options, { allowPrivateFallback: false });
+});
+
+test("invalid callback signature is rejected before JSON parsing or interception", async () => {
+  let productionCalls = 0;
+  let lineCalls = 0;
+  signatureVerifier.verifyGhlWebhookSignature = ({ rawBody, ghlSignature }) => {
+    assert.ok(Buffer.isBuffer(rawBody));
+    assert.equal(ghlSignature, "invalid-signature-sensitive");
+    return false;
+  };
+  productionCallbackService.processGhlOutboundWebhook = async () => {
+    productionCalls += 1;
+  };
+  lineClient.pushLineMessages = async () => {
+    lineCalls += 1;
+  };
+
+  const response = await requestApp({
+    path: callbackPath,
+    body: "not-json-sensitive-content",
+    headers: { "x-ghl-signature": "invalid-signature-sensitive" }
+  });
+
+  assert.equal(response.status, 401);
+  assert.equal(productionCalls, 0);
+  assert.equal(lineCalls, 0);
+});
+
+test("missing callback signature is rejected", async () => {
+  signatureVerifier.verifyGhlWebhookSignature = ({ rawBody, ghlSignature }) => {
+    assert.ok(Buffer.isBuffer(rawBody));
+    assert.equal(ghlSignature, undefined);
+    return false;
+  };
+
+  const response = await requestApp({
+    path: callbackPath,
+    body: { type: "Custom", messageId: "stage1-message-unsigned" }
+  });
+
+  assert.equal(response.status, 401);
+  assert.equal(response.body.error, "Invalid HighLevel callback signature");
+});
+
+test("valid signed callback is structurally recorded and never reaches production or LINE", async () => {
+  setupOAuth();
+  setupCreateResponses();
+  const logCalls = [];
+  const sensitiveMessage = "private Stage 1 customer message sensitive";
+  const sensitiveFilename = "private-customer-file.png";
+  const callbackBody = JSON.stringify({
+    type: "Custom",
+    locationId: config.env.STAGE1_GHL_LOCATION_ID,
+    contactId: config.env.STAGE1_GHL_CONTACT_ID,
+    messageId: "stage1-message-1",
+    conversationId: "stage1-conversation-1",
+    message: sensitiveMessage,
+    attachments: [{ url: assetUrls.image, name: sensitiveFilename }],
+    nested: { providerToken: "provider-token-sensitive" }
+  });
+  let productionCalls = 0;
+  let lineCalls = 0;
+  let verifiedRawBody;
+
+  loggerModule.logger.info = (...args) => logCalls.push(args);
+  productionCallbackService.processGhlOutboundWebhook = async () => {
+    productionCalls += 1;
+    throw new Error("production callback must not run");
+  };
+  for (const key of ["pushLineTextMessage", "pushLineImageMessage", "pushLineMessages"]) {
+    lineClient[key] = async () => {
+      lineCalls += 1;
+      throw new Error("LINE must not run");
+    };
+  }
+  signatureVerifier.verifyGhlWebhookSignature = ({ rawBody, ghlSignature, legacySignature }) => {
+    verifiedRawBody = rawBody;
+    assert.equal(ghlSignature, "valid-signature-sensitive");
+    assert.equal(legacySignature, undefined);
+    return true;
+  };
+
+  await runProbe({ probeRunId: probeRunIds.B, case: "B", assetUrl: assetUrls.image });
+  const callbackResponse = await requestApp({
+    path: callbackPath,
+    body: callbackBody,
+    headers: { "x-ghl-signature": "valid-signature-sensitive" }
+  });
+  const observations = await requestApp({
+    path: `${stage1Path}/${probeRunIds.B}/observations`,
+    method: "GET",
+    headers: stage1Headers()
+  });
+
+  assert.equal(verifiedRawBody.toString("utf8"), callbackBody);
+  assert.equal(callbackResponse.status, 200);
+  assert.deepEqual(callbackResponse.body, { ok: true, intercepted: true, callbackReceived: true });
+  assert.equal(productionCalls, 0);
+  assert.equal(lineCalls, 0);
+  assert.equal(observations.status, 200);
+  assert.equal(observations.body.providerCallbackCount, 1);
+  assert.equal(observations.body.genericOutboundObservationConfigured, false);
+  assert.equal(observations.body.genericOutboundCallbackCount, null);
+  assert.equal(observations.body.genericOutboundObservationStatus, "not_observed");
+  assert.equal(observations.body.unmatchedCallbackCount, 0);
+  assert.equal(observations.body.observations[0].correlationStatus, "matched_by_message_id");
+  assert.equal(observations.body.observations[0].messagePresent, true);
+  assert.equal(observations.body.observations[0].messageLength, sensitiveMessage.length);
+  assert.equal(observations.body.observations[0].attachmentArrayLength, 1);
+  assert.deepEqual(observations.body.observations[0].attachmentElementTypes, ["object"]);
+  assert.deepEqual(observations.body.observations[0].attachmentUrlHostnames, ["assets.example.test"]);
+  assert.equal(observations.body.observations[0].timingRelativeToCreateResponse, "after");
+  const exposed = JSON.stringify({ response: callbackResponse.body, observations: observations.body, logs: logCalls });
+  assert.doesNotMatch(
+    exposed,
+    /private Stage 1 customer message sensitive|private-customer-file\.png|signed-image-sensitive|provider-token-sensitive|stage1-location-sensitive|stage1-contact-sensitive|stage1-provider-sensitive|stage1-shared-secret-sensitive|valid-signature-sensitive|stage1-oauth-token-sensitive/
+  );
+  assert.doesNotMatch(exposed, /https:\/\/assets\.example\.test\/private/);
+  assert.match(exposed, /assets\.example\.test/);
+  assert.match(exposed, /dispatchStatus/);
+  assert.match(exposed, /lineDeliveryAttempted/);
+});
+
+test("valid callback without messageId is retained by single active run fallback", async () => {
+  setupOAuth();
+  setupCreateResponses();
+  signatureVerifier.verifyGhlWebhookSignature = ({ rawBody }) => Buffer.isBuffer(rawBody);
+
+  await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  const callbackResponse = await requestApp({
+    path: callbackPath,
+    body: {
+      type: "Custom",
+      message: "sensitive callback content that must not be retained",
+      attachments: [assetUrls.image]
+    },
+    headers: { "x-ghl-signature": "valid-signature-sensitive" }
+  });
+  const observations = await requestApp({
+    path: `${stage1Path}/${probeRunIds.A}/observations`,
+    method: "GET",
+    headers: stage1Headers()
+  });
+
+  assert.equal(callbackResponse.status, 200);
+  assert.equal(observations.status, 200);
+  assert.equal(observations.body.providerCallbackCount, 1);
+  assert.equal(observations.body.unmatchedCallbackCount, 0);
+  assert.equal(observations.body.observations[0].messageIdPresent, false);
+  assert.equal(observations.body.observations[0].correlationStatus, "single_active_run_fallback");
+  const exposed = JSON.stringify(observations.body);
+  assert.doesNotMatch(exposed, /sensitive callback content|signed-image-sensitive|https:\/\//);
+  assert.match(exposed, /assets\.example\.test/);
+});
+
+test("ambiguous messageId-less callbacks remain sanitized and bounded as unmatched", async () => {
+  setupOAuth();
+  setupCreateResponses();
+  signatureVerifier.verifyGhlWebhookSignature = ({ rawBody }) => Buffer.isBuffer(rawBody);
+
+  await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  await runProbe({ probeRunId: probeRunIds.B, case: "B", assetUrl: assetUrls.image });
+
+  for (let index = 0; index < 25; index += 1) {
+    const response = await requestApp({
+      path: callbackPath,
+      body: {
+        type: "OutboundMessage",
+        message: `sensitive unmatched content ${index}`,
+        attachments: [{ url: assetUrls.image, name: `private-${index}.png` }]
+      },
+      headers: { "x-ghl-signature": "valid-signature-sensitive" }
+    });
+    assert.equal(response.status, 200);
+  }
+
+  const observations = await requestApp({
+    path: `${stage1Path}/${probeRunIds.A}/observations`,
+    method: "GET",
+    headers: stage1Headers()
+  });
+
+  assert.equal(observations.status, 200);
+  assert.equal(observations.body.genericOutboundObservationConfigured, false);
+  assert.equal(observations.body.genericOutboundCallbackCount, null);
+  assert.equal(observations.body.unmatchedCallbackCount, 20);
+  assert.equal(observations.body.unmatchedObservations.length, 20);
+  assert.ok(observations.body.unmatchedObservations.every(
+    (item) => item.correlationStatus === "unmatched" && item.callbackKind === "provider"
+  ));
+  const exposed = JSON.stringify(observations.body);
+  assert.doesNotMatch(exposed, /sensitive unmatched content|private-\d+\.png|signed-image-sensitive|https:\/\//);
+  assert.match(exposed, /assets\.example\.test/);
+});
