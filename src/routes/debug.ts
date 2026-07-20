@@ -27,6 +27,7 @@ import {
   getOAuthCallbackConfig
 } from "../services/ghlOAuthService";
 import {
+  bootstrapStage1ProviderContact,
   getStage1ProbeObservations,
   runStage1CustomMessageProbe,
   updateStage1MessageStatus
@@ -47,6 +48,8 @@ const stage1StatusInputSchema = z.object({
   status: z.enum(["delivered", "failed"])
 }).strict();
 
+const stage1BootstrapInputSchema = z.object({}).strict();
+
 debugRouter.post(
   "/debug/ghl/custom-message-attachments-stage-1",
   requireWinCrmWebhookSecret,
@@ -54,6 +57,19 @@ debugRouter.post(
     try {
       const input = stage1ProbeInputSchema.parse(req.body);
       res.json(await runStage1CustomMessageProbe(input));
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+debugRouter.post(
+  "/debug/ghl/custom-message-attachments-stage-1/bootstrap",
+  requireWinCrmWebhookSecret,
+  async (req, res, next) => {
+    try {
+      stage1BootstrapInputSchema.parse(req.body ?? {});
+      res.json(await bootstrapStage1ProviderContact());
     } catch (error) {
       next(error);
     }

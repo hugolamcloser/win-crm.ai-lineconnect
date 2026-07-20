@@ -3,11 +3,13 @@ import { isIP } from "node:net";
 import { env } from "../config/env";
 import { logger } from "../config/logger";
 import {
+  createStage1InboundBootstrapMessage,
   createStage1CustomMessage,
   updateStage1CustomMessageStatus,
   type Stage1CustomMessagePayload,
   type Stage1FinalStatus,
   type Stage1GhlRequestResult,
+  type Stage1InboundBootstrapPayload,
   type Stage1InitialStatus,
   type Stage1UpstreamErrorDiagnostic
 } from "../integrations/ghlCustomMessageAttachmentProbeClient";
@@ -89,6 +91,9 @@ const maxObservationsPerRun = 20;
 const maxPendingMessageDigests = 20;
 const maxPendingObservationsPerDigest = 5;
 const maxUnmatchedObservations = 20;
+const stage1BootstrapMessage = "Stage 1 provider-contact bootstrap";
+const stage1BootstrapExternalConversationId = "stage1-provider-contact-bootstrap";
+const stage1BootstrapExternalMessageId = "stage1-provider-contact-bootstrap";
 const unsafeUrlCharacterPattern = /[\u0000-\u0020\u007f]/u;
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const safeMessageIdPattern = /^[A-Za-z0-9_-]{1,200}$/;
@@ -523,6 +528,46 @@ function toSafeUpstreamErrorLog(error: Stage1UpstreamErrorDiagnostic | undefined
     errorCategory: error.rejectedFields.length > 0 ? "validation_error" : "upstream_error",
     ...(error.code ? { errorCode: error.code } : {}),
     rejectedFields: error.rejectedFields.map((item) => item.field)
+  };
+}
+
+export async function bootstrapStage1ProviderContact() {
+  const config = requireStage1Config();
+  const payload: Stage1InboundBootstrapPayload = {
+    locationId: config.locationId,
+    contactId: config.contactId,
+    conversationProviderId: config.providerId,
+    externalConversationId: stage1BootstrapExternalConversationId,
+    externalMessageId: stage1BootstrapExternalMessageId,
+    type: "SMS",
+    message: stage1BootstrapMessage
+  };
+  const result = await createStage1InboundBootstrapMessage(config.locationId, payload);
+
+  logger.info(
+    {
+      stage1Bootstrap: true,
+      locationIdPresent: true,
+      contactIdPresent: true,
+      conversationProviderIdPresent: true,
+      messagePresent: true,
+      messageLength: stage1BootstrapMessage.length,
+      highLevelHttpStatus: result.statusCode,
+      messageIdPresent: Boolean(result.messageId),
+      conversationIdPresent: Boolean(result.conversationId),
+      upstreamError: toSafeUpstreamErrorLog(result.upstreamError),
+      dispatchStatus: result.ok ? "success" : "failed",
+      lineDeliveryAttempted: false
+    },
+    "Stage 1 provider-contact association probe completed"
+  );
+
+  return {
+    ok: result.ok,
+    highLevelHttpStatus: result.statusCode,
+    messageIdPresent: Boolean(result.messageId),
+    conversationIdPresent: Boolean(result.conversationId),
+    ...(result.upstreamError ? { upstreamError: result.upstreamError } : {})
   };
 }
 

@@ -21,10 +21,12 @@ const oauthService = require("../dist/services/ghlOAuthService");
 const signatureVerifier = require("../dist/middleware/ghlWebhookSignature");
 const lineClient = require("../dist/integrations/lineClient");
 const productionCallbackService = require("../dist/services/ghlSyncService");
+const productionWorkflowService = require("../dist/services/ghlWorkflowActionService");
 const stage1Service = require("../dist/services/ghlCustomMessageAttachmentProbeService");
 const { createApp } = require("../dist/app");
 
 const stage1Path = "/debug/ghl/custom-message-attachments-stage-1";
+const bootstrapPath = `${stage1Path}/bootstrap`;
 const callbackPath = "/webhooks/ghl/stage-1/custom-message-outbound";
 const probeRunIds = {
   A: "11111111-1111-4111-8111-111111111111",
@@ -46,6 +48,7 @@ const patchedFunctions = [
   [oauthService, "forceRefreshGhlAuthContext"],
   [signatureVerifier, "verifyGhlWebhookSignature"],
   [productionCallbackService, "processGhlOutboundWebhook"],
+  [productionWorkflowService, "processGhlWorkflowSendLine"],
   [lineClient, "pushLineTextMessage"],
   [lineClient, "pushLineImageMessage"],
   [lineClient, "pushLineMessages"],
@@ -169,6 +172,10 @@ async function runProbe(body, secret = config.env.WEBHOOK_SHARED_SECRET) {
   return requestApp({ path: stage1Path, body, headers: stage1Headers(secret) });
 }
 
+async function runBootstrap(body = {}, secret = config.env.WEBHOOK_SHARED_SECRET) {
+  return requestApp({ path: bootstrapPath, body, headers: stage1Headers(secret) });
+}
+
 test("Stage 1 driver rejects missing and invalid x-wincrm-webhook-secret", async () => {
   let fetchCount = 0;
   global.fetch = async () => {
@@ -181,9 +188,13 @@ test("Stage 1 driver rejects missing and invalid x-wincrm-webhook-secret", async
     body: { probeRunId: probeRunIds.A, case: "A" }
   });
   const invalid = await runProbe({ probeRunId: probeRunIds.A, case: "A" }, "invalid-secret");
+  const missingBootstrap = await requestApp({ path: bootstrapPath, body: {} });
+  const invalidBootstrap = await runBootstrap({}, "invalid-secret");
 
   assert.equal(missing.status, 401);
   assert.equal(invalid.status, 401);
+  assert.equal(missingBootstrap.status, 401);
+  assert.equal(invalidBootstrap.status, 401);
   assert.equal(fetchCount, 0);
 });
 
@@ -220,6 +231,186 @@ test("Stage 1 API version defaults to v3 independently of production GHL_API_VER
   assert.ok(Object.prototype.hasOwnProperty.call(presence.optional, "STAGE1_GHL_API_VERSION"));
 });
 
+test("Stage 1 bootstrap creates the exact isolated inbound SMS payload without production or LINE calls", async () => {
+  const { authCalls } = setupOAuth();
+  const requests = [];
+  const logCalls = [];
+  let productionCallbackCalls = 0;
+  let productionWorkflowCalls = 0;
+  let lineCalls = 0;
+
+  loggerModule.logger.info = (...args) => logCalls.push(args);
+  productionCallbackService.processGhlOutboundWebhook = async () => {
+    productionCallbackCalls += 1;
+  };
+  productionWorkflowService.processGhlWorkflowSendLine = async () => {
+    productionWorkflowCalls += 1;
+  };
+  for (const key of ["pushLineTextMessage", "pushLineImageMessage", "pushLineMessages"]) {
+    lineClient[key] = async () => {
+      lineCalls += 1;
+    };
+  }
+  global.fetch = async (url, init) => {
+    requests.push({ url, init, payload: JSON.parse(init.body) });
+    return new Response(JSON.stringify({
+      messageId: "bootstrap-message-sensitive",
+      conversationId: "bootstrap-conversation-sensitive"
+    }), {
+      status: 201,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  const response = await runBootstrap();
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body, {
+    ok: true,
+    highLevelHttpStatus: 201,
+    messageIdPresent: true,
+    conversationIdPresent: true
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(
+    requests[0].url,
+    "https://services.leadconnectorhq.com/conversations/messages/inbound"
+  );
+  assert.equal(requests[0].init.method, "POST");
+  assert.equal(requests[0].init.headers.Version, "v3");
+  assert.deepEqual(requests[0].payload, {
+    locationId: config.env.STAGE1_GHL_LOCATION_ID,
+    contactId: config.env.STAGE1_GHL_CONTACT_ID,
+    conversationProviderId: config.env.STAGE1_GHL_PROVIDER_ID,
+    externalConversationId: "stage1-provider-contact-bootstrap",
+    externalMessageId: "stage1-provider-contact-bootstrap",
+    type: "SMS",
+    message: "Stage 1 provider-contact bootstrap"
+  });
+  assert.equal(authCalls.length, 1);
+  assert.equal(authCalls[0].locationId, config.env.STAGE1_GHL_LOCATION_ID);
+  assert.deepEqual(authCalls[0].options, { allowPrivateFallback: false });
+  assert.equal(productionCallbackCalls, 0);
+  assert.equal(productionWorkflowCalls, 0);
+  assert.equal(lineCalls, 0);
+  const exposed = JSON.stringify({ response: response.body, logs: logCalls });
+  assert.doesNotMatch(
+    exposed,
+    /stage1-location-sensitive|stage1-contact-sensitive|stage1-provider-sensitive|stage1-shared-secret-sensitive|stage1-oauth-token-sensitive|bootstrap-message-sensitive|bootstrap-conversation-sensitive|Stage 1 provider-contact bootstrap/
+  );
+  assert.match(exposed, /messageIdPresent|conversationIdPresent|lineDeliveryAttempted/);
+});
+
+test("Stage 1 bootstrap rejects attempts to override server-controlled values", async () => {
+  let oauthCalls = 0;
+  let fetchCalls = 0;
+  oauthService.getGhlAuthContext = async () => {
+    oauthCalls += 1;
+    throw new Error("OAuth must not run");
+  };
+  global.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("HighLevel request must not run");
+  };
+
+  const response = await runBootstrap({
+    locationId: "override-location-sensitive",
+    contactId: "override-contact-sensitive",
+    providerId: "override-provider-sensitive",
+    conversationProviderId: "override-conversation-provider-sensitive",
+    oauthToken: "override-token-sensitive",
+    message: "override-message-sensitive"
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error, "validation_error");
+  assert.equal(oauthCalls, 0);
+  assert.equal(fetchCalls, 0);
+});
+
+test("Stage 1 bootstrap refreshes exact-location OAuth once after a 401", async () => {
+  const { authCalls, refreshCalls } = setupOAuth();
+  const requests = [];
+
+  global.fetch = async (url, init) => {
+    requests.push({ url, init, payload: JSON.parse(init.body) });
+
+    if (requests.length === 1) {
+      return new Response(JSON.stringify({
+        message: "expired token response-sensitive-body",
+        token: "response-token-sensitive"
+      }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    return new Response(JSON.stringify({ messageId: "bootstrap-message-refreshed" }), {
+      status: 201,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  const response = await runBootstrap();
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, true);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].payload, requests[1].payload);
+  assert.equal(authCalls.length, 1);
+  assert.deepEqual(refreshCalls, [config.env.STAGE1_GHL_LOCATION_ID]);
+  assert.match(requests[0].init.headers.Authorization, /stage1-oauth-token-sensitive/);
+  assert.match(requests[1].init.headers.Authorization, /stage1-refreshed-token-sensitive/);
+  assert.doesNotMatch(JSON.stringify(response.body), /response-sensitive-body|response-token-sensitive/);
+});
+
+test("Stage 1 bootstrap returns sanitized 400 diagnostics and logs no IDs or secrets", async () => {
+  setupOAuth();
+  const logCalls = [];
+  loggerModule.logger.info = (...args) => logCalls.push(args);
+  setupUpstreamResponse(JSON.stringify({
+    status: "Bad Request",
+    error: "Validation failed",
+    message: `Provider ${config.env.STAGE1_GHL_PROVIDER_ID} rejected ${config.env.STAGE1_GHL_CONTACT_ID} at ${assetUrls.image}`,
+    code: "PROVIDER_CONTACT_UNSUPPORTED",
+    validationErrors: [
+      {
+        field: "conversationProviderId",
+        message: `Invalid ${config.env.STAGE1_GHL_PROVIDER_ID}`,
+        code: "unsupported"
+      }
+    ],
+    locationId: config.env.STAGE1_GHL_LOCATION_ID,
+    authorization: "Bearer upstream-token-sensitive"
+  }));
+
+  const response = await runBootstrap();
+  const diagnostic = response.body.upstreamError;
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.ok, false);
+  assert.equal(response.body.highLevelHttpStatus, 400);
+  assert.equal(response.body.messageIdPresent, false);
+  assert.equal(response.body.conversationIdPresent, false);
+  assert.equal(diagnostic.statusCode, 400);
+  assert.equal(diagnostic.code, "PROVIDER_CONTACT_UNSUPPORTED");
+  assert.deepEqual(diagnostic.rejectedFields, [
+    {
+      field: "conversationProviderId",
+      message: "Invalid [redacted]",
+      code: "unsupported"
+    }
+  ]);
+  assert.match(diagnostic.message, /\[redacted\]/);
+  const exposed = JSON.stringify({ response: response.body, logs: logCalls });
+  assert.doesNotMatch(
+    exposed,
+    /stage1-location-sensitive|stage1-contact-sensitive|stage1-provider-sensitive|signed-image-sensitive|upstream-token-sensitive|stage1-shared-secret-sensitive|stage1-oauth-token-sensitive|https:\/\//
+  );
+  assert.doesNotMatch(JSON.stringify(logCalls), /Provider |Invalid \[redacted\]|Bad Request|Validation failed/);
+  assert.match(JSON.stringify(logCalls), /PROVIDER_CONTACT_UNSUPPORTED|conversationProviderId|validation_error/);
+});
+
 test("Stage 1 routes fail closed when dedicated configuration is incomplete", async () => {
   config.env.STAGE1_GHL_PROVIDER_ID = "";
   let fetchCount = 0;
@@ -229,9 +420,12 @@ test("Stage 1 routes fail closed when dedicated configuration is incomplete", as
   };
 
   const response = await runProbe({ probeRunId: probeRunIds.A, case: "A" });
+  const bootstrapResponse = await runBootstrap();
 
   assert.equal(response.status, 503);
   assert.equal(response.body.error, "Stage 1 HighLevel probe configuration is incomplete");
+  assert.equal(bootstrapResponse.status, 503);
+  assert.equal(bootstrapResponse.body.error, "Stage 1 HighLevel probe configuration is incomplete");
   assert.equal(fetchCount, 0);
 });
 

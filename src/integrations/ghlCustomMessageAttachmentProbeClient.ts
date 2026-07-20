@@ -17,6 +17,16 @@ export type Stage1CustomMessagePayload = {
   attachments?: string[];
 };
 
+export type Stage1InboundBootstrapPayload = {
+  locationId: string;
+  contactId: string;
+  conversationProviderId: string;
+  externalConversationId: string;
+  externalMessageId: string;
+  type: "SMS";
+  message: string;
+};
+
 export type Stage1RejectedFieldDiagnostic = {
   field: string;
   message?: string;
@@ -43,6 +53,7 @@ export type Stage1GhlRequestResult = {
 };
 
 const messagesEndpoint = "/conversations/messages";
+const inboundMessagesEndpoint = `${messagesEndpoint}/inbound`;
 const maxUpstreamErrorBytes = 32 * 1_024;
 const maxDiagnosticTextLength = 240;
 const maxDiagnosticCodeLength = 80;
@@ -506,6 +517,32 @@ export async function createStage1CustomMessage(
   payload: Stage1CustomMessagePayload
 ): Promise<Stage1GhlRequestResult> {
   const response = await requestWithOAuthRefresh(locationId, messagesEndpoint, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    return {
+      ok: false,
+      statusCode: response.status,
+      upstreamError: await parseUpstreamError(response)
+    };
+  }
+
+  const ids = await parseCreatedMessage(response);
+
+  return {
+    ok: true,
+    statusCode: response.status,
+    ...ids
+  };
+}
+
+export async function createStage1InboundBootstrapMessage(
+  locationId: string,
+  payload: Stage1InboundBootstrapPayload
+): Promise<Stage1GhlRequestResult> {
+  const response = await requestWithOAuthRefresh(locationId, inboundMessagesEndpoint, {
     method: "POST",
     body: JSON.stringify(payload)
   });
