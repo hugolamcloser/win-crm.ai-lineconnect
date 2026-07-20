@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { logger } from "../config/logger";
 import { env } from "../config/env";
 import {
+  createWorkflowAttachmentProviderMessage,
   mirrorWorkflowOutboundMessageToGhl,
   type GhlWorkflowOutboundMirrorResult
 } from "../integrations/ghlWorkflowOutboundMirrorClient";
@@ -559,6 +560,185 @@ async function resolveLineProfileByLocationAndGhlContact(
   return { tenantIds, mapping };
 }
 
+async function dispatchWorkflowAttachmentsThroughProvider(input: {
+  context: WorkflowSendLineContext;
+  locationId: string;
+  contactId: string;
+  workflowId?: string;
+  mapping: LineProfileRecord;
+  message?: string;
+  attachments: string[];
+  eventPayload: Record<string, unknown>;
+  inputLogMetadata: Record<string, unknown>;
+  selectedMessageType: "attachments" | "image";
+}): Promise<WorkflowSendLineResult> {
+  try {
+    const tenant = await getTenantById(input.mapping.tenant_id);
+    const tenantLocationId = tenant?.location_id?.trim();
+    const conversationProviderId = tenant?.ghl_provider_id?.trim();
+
+    if (!tenant) {
+      throw new Error("Resolved tenant was not found");
+    }
+
+    if (!tenantLocationId || tenantLocationId !== input.locationId) {
+      throw new Error("Resolved tenant does not belong to the workflow locationId");
+    }
+
+    if (!conversationProviderId) {
+      throw new Error("Resolved tenant has no HighLevel conversation provider");
+    }
+
+    const lineChannelSelection = await resolveLineChannelForOutbound(
+      input.mapping.tenant_id,
+      input.mapping
+    );
+    const dispatchResult = await createWorkflowAttachmentProviderMessage({
+      ...(input.context.requestId ? { requestId: input.context.requestId } : {}),
+      locationId: input.locationId,
+      contactId: input.contactId,
+      conversationProviderId,
+      ...(input.message ? { message: input.message } : {}),
+      attachments: input.attachments,
+      workflowId: input.workflowId,
+      existingGhlConversationId: input.mapping.ghl_conversation_id
+    });
+    const dispatchStatus = dispatchResult.ok ? "success" : "failed";
+    const safePayload = {
+      ...input.eventPayload,
+      messagePresent: Boolean(input.message),
+      attachmentCount: input.attachments.length
+    };
+    const requestPayload = {
+      ...input.eventPayload,
+      source: "ghl_workflow_provider_dispatch",
+      tenantId: input.mapping.tenant_id,
+      lineChannelId: lineChannelSelection.lineChannelId ?? null,
+      channelTokenSource: lineChannelSelection.channelTokenSource,
+      channelConnected: true,
+      conversationProviderIdPresent: true,
+      endpoint: dispatchResult.endpoint,
+      method: dispatchResult.method,
+      authMode: dispatchResult.authMode,
+      statusCode: dispatchResult.statusCode ?? null,
+      canonicalCode: dispatchResult.canonicalCode ?? null,
+      providerDispatchStatus: dispatchStatus,
+      request_body: dispatchResult.requestBody,
+      messagePresent: Boolean(input.message),
+      attachmentCount: input.attachments.length
+    };
+
+    let auditPersistenceStatus: "stored" | "failed" = "stored";
+
+    try {
+      await saveMessageEvent({
+        tenantId: input.mapping.tenant_id,
+        provider: "ghl",
+        direction: "outbound",
+        externalMessageId: buildProviderDispatchExternalMessageId({
+          ghlMessageId: dispatchResult.ghlMessageId
+        }),
+        lineUserId: input.mapping.line_user_id,
+        ghlMessageId: dispatchResult.ghlMessageId,
+        ghlConversationId:
+          dispatchResult.ghlConversationId ?? input.mapping.ghl_conversation_id ?? undefined,
+        payload: safePayload,
+        status: dispatchStatus,
+        errorMessage: dispatchResult.ok
+          ? undefined
+          : dispatchResult.errorMessage ?? "HighLevel attachment provider dispatch failed",
+        ghlStatusCode: dispatchResult.statusCode,
+        ghlResponseBody: stringifyForStorage(dispatchResult.responseBody),
+        requestPayload
+      });
+    } catch {
+      auditPersistenceStatus = "failed";
+      logger.error(
+        {
+          ...buildWorkflowIdentifierLogContext({
+            requestId: input.context.requestId,
+            locationId: input.locationId,
+            contactId: input.contactId,
+            workflowId: input.workflowId,
+            mapping: input.mapping,
+            ghlMessageId: dispatchResult.ghlMessageId,
+            ghlConversationId: dispatchResult.ghlConversationId
+          }),
+          selectedMessageType: input.selectedMessageType,
+          auditPersistenceStatus
+        },
+        "HighLevel workflow attachment provider dispatch audit persistence failed"
+      );
+    }
+
+    logger.info(
+      {
+        ...buildWorkflowIdentifierLogContext({
+          requestId: input.context.requestId,
+          locationId: input.locationId,
+          contactId: input.contactId,
+          workflowId: input.workflowId,
+          mapping: input.mapping,
+          lineChannelId: lineChannelSelection.lineChannelId,
+          ghlMessageId: dispatchResult.ghlMessageId,
+          ghlConversationId: dispatchResult.ghlConversationId
+        }),
+        ...input.inputLogMetadata,
+        selectedMessageType: input.selectedMessageType,
+        channelConnected: true,
+        channelTokenSource: lineChannelSelection.channelTokenSource,
+        conversationProviderIdPresent: true,
+        providerDispatchStatus: dispatchStatus,
+        statusCode: dispatchResult.statusCode,
+        mirrorResultStatus: dispatchResult.ok ? "pending" : "failed",
+        auditPersistenceStatus
+      },
+      "HighLevel workflow attachment provider dispatch completed"
+    );
+
+    return dispatchResult.ok
+      ? buildResponse(200, "sent")
+      : buildResponse(
+          200,
+          "failed",
+          dispatchResult.errorMessage ?? "HighLevel attachment provider dispatch failed"
+        );
+  } catch (error) {
+    const isDisconnected = isLineChannelNotConnectedError(error);
+    const errorMessage = isDisconnected
+      ? error.message
+      : error instanceof Error
+        ? error.message
+        : "Unknown HighLevel attachment provider dispatch error";
+
+    logger[isDisconnected ? "warn" : "error"](
+      {
+        ...buildWorkflowIdentifierLogContext({
+          requestId: input.context.requestId,
+          locationId: input.locationId,
+          contactId: input.contactId,
+          workflowId: input.workflowId,
+          mapping: input.mapping,
+          lineChannelId: isDisconnected
+            ? error.lineChannelId ?? input.mapping.line_channel_id
+            : input.mapping.line_channel_id
+        }),
+        ...input.inputLogMetadata,
+        selectedMessageType: input.selectedMessageType,
+        channelConnected: false,
+        providerDispatchStatus: "failed",
+        errorPresent: true,
+        errorCategory: isDisconnected ? "channel_not_connected" : "provider_dispatch"
+      },
+      "Failed to dispatch HighLevel workflow attachments through the conversation provider"
+    );
+
+    return isDisconnected
+      ? buildResponse(409, "failed", errorMessage)
+      : buildResponse(200, "failed", errorMessage);
+  }
+}
+
 async function deliverWorkflowAttachments(input: {
   context: WorkflowSendLineContext;
   locationId: string;
@@ -937,6 +1117,21 @@ export async function processGhlWorkflowSendLine(
   }
 
   if (workflowMessage.type === "attachments") {
+    if (env.GHL_WORKFLOW_LINE_DELIVERY_MODE === "provider_first") {
+      return dispatchWorkflowAttachmentsThroughProvider({
+        context,
+        locationId,
+        contactId,
+        workflowId,
+        mapping,
+        message: workflowMessage.text,
+        attachments: workflowMessage.attachments.map((attachment) => attachment.url),
+        eventPayload,
+        inputLogMetadata,
+        selectedMessageType: "attachments"
+      });
+    }
+
     return deliverWorkflowAttachments({
       context,
       locationId,
