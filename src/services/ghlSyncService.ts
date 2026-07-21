@@ -1,5 +1,5 @@
 import { logger } from "../config/logger";
-import { pushLineMessages, pushLineTextMessage } from "../integrations/lineClient";
+import { pushLineMessages } from "../integrations/lineClient";
 import { updateWorkflowProviderMessageStatus } from "../integrations/ghlWorkflowOutboundMirrorClient";
 import { HttpError } from "../middleware/errors";
 import type { NormalizedGhlOutboundMessage } from "../types/ghl";
@@ -11,6 +11,7 @@ import {
   claimGhlOutboundProviderDelivery,
   finalizeGhlOutboundProviderDelivery,
   findLineProfileByGhlIdsForTenantIds,
+  findWorkflowProviderDispatchMessageEvent,
   findWorkflowOutboundMirrorMessageEventForTenantIds,
   getTenantById,
   getTenantIdsByLocationId,
@@ -73,10 +74,6 @@ export function normalizeGhlOutboundMessage(payload: Record<string, unknown>): N
     attachments: getAttachments(payload.attachments),
     raw: payload
   };
-}
-
-function isAttachmentCapableProviderCallback(message: NormalizedGhlOutboundMessage): boolean {
-  return message.attachments.length > 0 || !message.message;
 }
 
 function buildSanitizedProviderCallbackPayload(
@@ -184,7 +181,7 @@ async function resolveLineProfileForGhlOutbound(
   return contactFallback;
 }
 
-async function processAttachmentCapableProviderCallback(input: {
+async function processProviderCallback(input: {
   message: NormalizedGhlOutboundMessage;
   tenantIds: string[];
   mapping: LineProfileRecord;
@@ -202,7 +199,7 @@ async function processAttachmentCapableProviderCallback(input: {
         providerValidationStatus: "failed",
         errorCategory: error instanceof Error ? error.name : "unknown"
       },
-      "Failed to resolve tenant for attachment-capable provider callback"
+      "Failed to resolve tenant for provider callback"
     );
     throw new HttpError(503, "Unable to validate outbound conversation provider");
   }
@@ -211,12 +208,69 @@ async function processAttachmentCapableProviderCallback(input: {
   const tenantLocationMatches = tenant?.location_id?.trim() === message.locationId;
   const callbackProviderPresent = hasLogValue(message.conversationProviderId);
   const configuredProviderPresent = hasLogValue(configuredProviderId);
-  const providerMatches =
+  const callbackProviderMatches =
     callbackProviderPresent &&
     configuredProviderPresent &&
     message.conversationProviderId === configuredProviderId;
+  let providerValidationMode: "exact_provider_id" | "exact_provider_dispatch" | undefined;
+  let providerDispatchEventPresent = false;
 
-  if (!tenant || !tenantLocationMatches || !providerMatches) {
+  if (tenant && tenantLocationMatches && configuredProviderPresent) {
+    if (callbackProviderPresent) {
+      if (callbackProviderMatches) {
+        providerValidationMode = "exact_provider_id";
+      }
+    } else if (message.message && message.attachments.length === 0) {
+      try {
+        const expectedConversationId =
+          message.conversationId ?? mapping.ghl_conversation_id ?? undefined;
+        const providerDispatchEvent = await findWorkflowProviderDispatchMessageEvent({
+          tenantId,
+          ghlMessageId: message.messageId as string,
+          lineUserId: mapping.line_user_id,
+          ...(message.contactId || mapping.ghl_contact_id
+            ? { ghlContactId: message.contactId ?? mapping.ghl_contact_id ?? undefined }
+            : {}),
+          ...(expectedConversationId
+            ? { ghlConversationId: expectedConversationId }
+            : {})
+        });
+        providerDispatchEventPresent = Boolean(
+          providerDispatchEvent &&
+          providerDispatchEvent.tenant_id === tenantId &&
+          providerDispatchEvent.ghl_message_id === message.messageId &&
+          providerDispatchEvent.line_user_id === mapping.line_user_id &&
+          (!expectedConversationId ||
+            providerDispatchEvent.ghl_conversation_id === expectedConversationId)
+        );
+
+        if (providerDispatchEventPresent) {
+          providerValidationMode = "exact_provider_dispatch";
+        }
+      } catch (error) {
+        logger.error(
+          {
+            ...buildProviderCallbackLogContext(message, {
+              tenantId,
+              tenantCount: tenantIds.length
+            }),
+            callbackProviderPresent: false,
+            providerDispatchEventPresent: false,
+            providerValidationPassed: false,
+            deliveryClaimStatus: "not_attempted",
+            lineResultStatus: "not_attempted",
+            errorCategory: error instanceof Error ? error.name : "unknown"
+          },
+          "Failed to validate provider callback against its workflow provider dispatch"
+        );
+        throw new HttpError(503, "Unable to validate outbound conversation provider");
+      }
+    }
+  }
+
+  const providerValidationPassed = providerValidationMode !== undefined;
+
+  if (!tenant || !tenantLocationMatches || !providerValidationPassed) {
     logger.warn(
       {
         ...buildProviderCallbackLogContext(message, { tenantId, tenantCount: tenantIds.length }),
@@ -224,22 +278,31 @@ async function processAttachmentCapableProviderCallback(input: {
         tenantLocationMatches,
         configuredProviderPresent,
         callbackProviderPresent,
-        providerMatches: false,
+        providerDispatchEventPresent,
+        providerValidationPassed: false,
         deliveryClaimStatus: "not_attempted",
         lineResultStatus: "not_attempted"
       },
-      "Rejected attachment-capable provider callback for an unverified conversation provider"
+      "Rejected provider callback for an unverified conversation provider"
     );
 
     return { status: "skipped", reason: "Conversation provider validation failed" };
   }
 
-  const sanitizedPayload = buildSanitizedProviderCallbackPayload(message);
+  const providerValidationEvidence = {
+    providerValidationMode,
+    callbackProviderPresent,
+    providerValidationPassed: true,
+    providerDispatchEventPresent
+  };
+  const sanitizedPayload = {
+    ...buildSanitizedProviderCallbackPayload(message),
+    ...providerValidationEvidence
+  };
   const claimedRequestPayload = {
     ...sanitizedPayload,
     deliveryState: "claimed",
     tenantVerified: true,
-    providerMatches: true,
     lineProfileFound: true,
     channelConnected: false
   };
@@ -266,7 +329,7 @@ async function processAttachmentCapableProviderCallback(input: {
         lineResultStatus: "not_attempted",
         errorCategory: error instanceof Error ? error.name : "unknown"
       },
-      "Failed to claim attachment-capable outbound provider delivery"
+      "Failed to claim outbound provider delivery"
     );
     throw new HttpError(503, "Unable to claim outbound provider delivery");
   }
@@ -282,7 +345,7 @@ async function processAttachmentCapableProviderCallback(input: {
         deliveryClaimStatus: "already_claimed",
         lineResultStatus: "not_attempted"
       },
-      "Skipped attachment-capable provider callback because delivery is already claimed"
+      "Skipped provider callback because delivery is already claimed"
     );
     return { status: "skipped", reason: "Already claimed" };
   }
@@ -317,7 +380,7 @@ async function processAttachmentCapableProviderCallback(input: {
           failureCategory: input.failureCategory,
           errorCategory: error instanceof Error ? error.name : "unknown"
         },
-        "Failed to finalize attachment-capable provider callback claim"
+        "Failed to finalize provider callback claim"
       );
     }
 
@@ -345,7 +408,7 @@ async function processAttachmentCapableProviderCallback(input: {
   } catch (error) {
     const failure = await finalizeFailure({
       failureCategory: "invalid_content",
-      errorMessage: "Invalid outbound provider attachment content"
+      errorMessage: "Invalid outbound provider content"
     });
 
     logger.warn(
@@ -360,9 +423,9 @@ async function processAttachmentCapableProviderCallback(input: {
         statusUpdateHttpStatusCode: failure.statusUpdateHttpStatusCode,
         errorCategory: error instanceof Error ? error.name : "unknown"
       },
-      "Handled invalid attachment-capable provider callback without LINE delivery"
+      "Handled invalid provider callback without LINE delivery"
     );
-    return { status: "processed", reason: "Invalid outbound provider attachment content" };
+    return { status: "processed", reason: "Invalid outbound provider content" };
   }
 
   let lineChannelSelection;
@@ -372,7 +435,7 @@ async function processAttachmentCapableProviderCallback(input: {
   } catch (error) {
     const failure = await finalizeFailure({
       failureCategory: "channel_resolution",
-      errorMessage: "LINE channel resolution failed for attachment provider delivery",
+      errorMessage: "LINE channel resolution failed for provider delivery",
       requestPayload: {
         channelConnected: false,
         channelTokenSource: isLineChannelNotConnectedError(error) ? error.channelTokenSource : null
@@ -395,7 +458,7 @@ async function processAttachmentCapableProviderCallback(input: {
           ? "channel_not_connected"
           : "channel_resolution"
       },
-      "Handled attachment-capable provider callback with unavailable LINE channel"
+      "Handled provider callback with unavailable LINE channel"
     );
     return { status: "processed", reason: "LINE channel resolution failed" };
   }
@@ -412,7 +475,7 @@ async function processAttachmentCapableProviderCallback(input: {
       channelTokenSource: lineChannelSelection.channelTokenSource,
       deliveryClaimStatus: "claimed"
     },
-    "Selected LINE channel for claimed attachment-capable provider callback"
+    "Selected LINE channel for claimed provider callback"
   );
 
   let lineResult;
@@ -426,7 +489,7 @@ async function processAttachmentCapableProviderCallback(input: {
   } catch (error) {
     const failure = await finalizeFailure({
       failureCategory: "line_delivery",
-      errorMessage: "LINE attachment provider delivery failed",
+      errorMessage: "LINE provider delivery failed",
       requestPayload: {
         channelConnected: true,
         channelTokenSource: lineChannelSelection.channelTokenSource,
@@ -454,7 +517,7 @@ async function processAttachmentCapableProviderCallback(input: {
         statusUpdateHttpStatusCode: failure.statusUpdateHttpStatusCode,
         errorCategory: error instanceof Error ? error.name : "unknown"
       },
-      "LINE attachment provider delivery failed after atomic claim"
+      "LINE provider delivery failed after atomic claim"
     );
     throw new HttpError(502, "LINE delivery failed after outbound provider claim");
   }
@@ -489,7 +552,7 @@ async function processAttachmentCapableProviderCallback(input: {
         finalizationStatus: "failed",
         errorCategory: error instanceof Error ? error.name : "unknown"
       },
-      "LINE attachment delivery succeeded but claim finalization failed"
+      "LINE delivery succeeded but claim finalization failed"
     );
   }
 
@@ -524,7 +587,7 @@ async function processAttachmentCapableProviderCallback(input: {
       statusUpdateStatus: statusResult.ok ? "success" : "failed",
       statusUpdateHttpStatusCode: statusResult.statusCode
     },
-    "HighLevel attachment provider callback sent one LINE message plan"
+    "HighLevel provider callback sent one LINE message plan"
   );
 
   if (finalizationFailed) {
@@ -539,10 +602,7 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
   reason?: string;
 }> {
   const message = normalizeGhlOutboundMessage(payload);
-  const attachmentCapableCallback = isAttachmentCapableProviderCallback(message);
-  const persistedCallbackPayload = attachmentCapableCallback
-    ? buildSanitizedProviderCallbackPayload(message)
-    : payload;
+  const persistedCallbackPayload = buildSanitizedProviderCallbackPayload(message);
   const tenantIds = await resolveTenantIdsForGhlOutboundWebhook(message);
 
   if (tenantIds.length === 0) {
@@ -556,7 +616,8 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
     {
       ...buildProviderCallbackLogContext(message, { tenantCount: tenantIds.length }),
       tenantCount: tenantIds.length,
-      attachmentCapableCallback
+      messagePresent: hasLogValue(message.message),
+      attachmentCount: message.attachments.length
     },
     "HighLevel outbound provider webhook accepted"
   );
@@ -588,20 +649,11 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
       payload: persistedCallbackPayload,
       status: "skipped",
       errorMessage: "Skipped workflow outbound mirror echo to avoid duplicate LINE delivery",
-      requestPayload: attachmentCapableCallback
-        ? {
-            ...buildSanitizedProviderCallbackPayload(message),
-            skipReason: "workflow_outbound_mirror_echo",
-            mirrorMessageEventIdPresent: true
-          }
-        : {
-            source: "ghl_outbound_provider",
-            skipReason: "workflow_outbound_mirror_echo",
-            mirrorMessageEventId: mirroredWorkflowMessage.id,
-            ghlMessageId: message.messageId ?? null,
-            conversationId: message.conversationId ?? null,
-            contactId: message.contactId ?? null
-          }
+      requestPayload: {
+        ...buildSanitizedProviderCallbackPayload(message),
+        skipReason: "workflow_outbound_mirror_echo",
+        mirrorMessageEventIdPresent: true
+      }
     });
 
     logger.warn(
@@ -643,206 +695,5 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
     return { status: "skipped", reason: "No LINE mapping found" };
   }
 
-  if (attachmentCapableCallback) {
-    return processAttachmentCapableProviderCallback({ message, tenantIds, mapping });
-  }
-
-  const tenantId = mapping.tenant_id;
-
-  const lineChannelSelection = await resolveLineChannelForOutbound(tenantId, mapping).catch(async (error) => {
-    if (!isLineChannelNotConnectedError(error)) {
-      throw error;
-    }
-
-    await saveMessageEvent({
-      tenantId,
-      provider: "ghl",
-      direction: "outbound",
-      externalMessageId: `ghl-provider-channel-failure:${message.messageId}`,
-      lineUserId: mapping.line_user_id,
-      ghlMessageId: message.messageId,
-      ghlConversationId: message.conversationId,
-      payload,
-      status: "failed",
-      errorMessage: error.message,
-      requestPayload: {
-        source: "ghl_outbound_provider",
-        contactId: message.contactId ?? mapping.ghl_contact_id ?? null,
-        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? null,
-        lineChannelId: error.lineChannelId ?? mapping.line_channel_id ?? null,
-        channelTokenSource: error.channelTokenSource,
-        channelConnected: false
-      }
-    });
-
-    logger.warn(
-      {
-        tenantId,
-        contactId: message.contactId ?? mapping.ghl_contact_id ?? undefined,
-        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
-        lineProfileFound: true,
-        lineChannelId: error.lineChannelId ?? mapping.line_channel_id ?? undefined,
-        channelTokenSource: error.channelTokenSource
-      },
-      "Blocked HighLevel outbound message because LINE channel is not connected"
-    );
-
-    throw new HttpError(409, error.message);
-  });
-
-  logger.info(
-    {
-      tenantId,
-      contactId: message.contactId ?? mapping.ghl_contact_id ?? undefined,
-      lineProfileFound: true,
-      lineChannelId: lineChannelSelection.lineChannelId,
-      channelTokenSource: lineChannelSelection.channelTokenSource
-    },
-    "Selected LINE channel token source for HighLevel outbound message"
-  );
-
-  const claimedRequestPayload = {
-    source: "ghl_outbound_provider",
-    deliveryState: "claimed",
-    contactId: message.contactId ?? mapping.ghl_contact_id ?? null,
-    conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? null,
-    lineChannelId: lineChannelSelection.lineChannelId ?? null,
-    channelTokenSource: lineChannelSelection.channelTokenSource,
-    channelConnected: true
-  };
-  let claim: GhlOutboundProviderDeliveryClaimResult;
-
-  try {
-    claim = await claimGhlOutboundProviderDelivery({
-      tenantId,
-      lineUserId: mapping.line_user_id,
-      ghlMessageId: message.messageId,
-      ghlConversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
-      payload,
-      requestPayload: claimedRequestPayload
-    });
-  } catch (error) {
-    logger.error(
-      {
-        tenantId,
-        contactId: message.contactId ?? mapping.ghl_contact_id ?? undefined,
-        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
-        ghlMessageId: message.messageId,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      },
-      "Failed to claim HighLevel outbound provider delivery"
-    );
-
-    throw new HttpError(503, "Unable to claim outbound provider delivery");
-  }
-
-  if (!claim.claimed) {
-    logger.info(
-      {
-        tenantId,
-        contactId: message.contactId ?? mapping.ghl_contact_id ?? undefined,
-        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
-        ghlMessageId: message.messageId,
-        externalMessageId: claim.externalMessageId
-      },
-      "Skipped HighLevel outbound provider callback because delivery is already claimed"
-    );
-
-    return { status: "skipped", reason: "Already claimed" };
-  }
-
-  let lineResult;
-
-  try {
-    lineResult = await pushLineTextMessage(
-      mapping.line_user_id,
-      message.message as string,
-      lineChannelSelection.channelAccessToken
-    );
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Unknown LINE push error";
-
-    try {
-      await finalizeGhlOutboundProviderDelivery({
-        eventId: claim.eventId,
-        tenantId,
-        status: "failed",
-        lineUserId: mapping.line_user_id,
-        ghlMessageId: message.messageId,
-        ghlConversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
-        errorMessage,
-        requestPayload: {
-          ...claimedRequestPayload,
-          deliveryState: "failed"
-        }
-      });
-    } catch (finalizeError) {
-      logger.error(
-        {
-          tenantId,
-          ghlMessageId: message.messageId,
-          deliveryClaimEventId: claim.eventId,
-          errorMessage: finalizeError instanceof Error ? finalizeError.message : String(finalizeError)
-        },
-        "Failed to mark outbound provider delivery claim as failed"
-      );
-    }
-
-    logger.error(
-      {
-        tenantId,
-        contactId: message.contactId ?? mapping.ghl_contact_id ?? undefined,
-        conversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
-        ghlMessageId: message.messageId,
-        deliveryClaimEventId: claim.eventId,
-        errorMessage
-      },
-      "LINE push failed after outbound provider delivery was claimed; later callbacks will be skipped"
-    );
-
-    throw new HttpError(502, "LINE delivery failed after outbound provider claim");
-  }
-
-  try {
-    await finalizeGhlOutboundProviderDelivery({
-      eventId: claim.eventId,
-      tenantId,
-      status: "sent",
-      lineUserId: mapping.line_user_id,
-      ghlMessageId: message.messageId,
-      ghlConversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
-      requestPayload: {
-        ...claimedRequestPayload,
-        deliveryState: "sent",
-        lineMessageId: lineResult.messageId ?? null
-      }
-    });
-  } catch (error) {
-    logger.error(
-      {
-        tenantId,
-        ghlMessageId: message.messageId,
-        deliveryClaimEventId: claim.eventId,
-        lineMessageId: lineResult.messageId,
-        errorMessage: error instanceof Error ? error.message : String(error)
-      },
-      "LINE push succeeded but outbound provider delivery claim finalization failed; later callbacks will be skipped"
-    );
-
-    throw new HttpError(500, "LINE delivery claim finalization failed");
-  }
-
-  logger.info(
-    {
-      lineUserId: mapping.line_user_id,
-      contactId: message.contactId,
-      conversationId: message.conversationId,
-      ghlMessageId: message.messageId,
-      deliveryClaimEventId: claim.eventId,
-      lineMessageId: lineResult.messageId
-    },
-    "HighLevel outbound message sent to LINE"
-  );
-
-  return { status: "processed" };
+  return processProviderCallback({ message, tenantIds, mapping });
 }

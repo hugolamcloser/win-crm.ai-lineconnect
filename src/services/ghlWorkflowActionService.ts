@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import { logger } from "../config/logger";
 import { env } from "../config/env";
 import {
-  createWorkflowAttachmentProviderMessage,
+  createWorkflowProviderMessage,
   mirrorWorkflowOutboundMessageToGhl,
   type GhlWorkflowOutboundMirrorResult
 } from "../integrations/ghlWorkflowOutboundMirrorClient";
@@ -560,7 +560,7 @@ async function resolveLineProfileByLocationAndGhlContact(
   return { tenantIds, mapping };
 }
 
-async function dispatchWorkflowAttachmentsThroughProvider(input: {
+async function dispatchWorkflowProviderMessage(input: {
   context: WorkflowSendLineContext;
   locationId: string;
   contactId: string;
@@ -570,7 +570,7 @@ async function dispatchWorkflowAttachmentsThroughProvider(input: {
   attachments: string[];
   eventPayload: Record<string, unknown>;
   inputLogMetadata: Record<string, unknown>;
-  selectedMessageType: "attachments" | "image";
+  selectedMessageType: "text" | "attachments" | "image";
 }): Promise<WorkflowSendLineResult> {
   try {
     const tenant = await getTenantById(input.mapping.tenant_id);
@@ -593,7 +593,7 @@ async function dispatchWorkflowAttachmentsThroughProvider(input: {
       input.mapping.tenant_id,
       input.mapping
     );
-    const dispatchResult = await createWorkflowAttachmentProviderMessage({
+    const dispatchResult = await createWorkflowProviderMessage({
       ...(input.context.requestId ? { requestId: input.context.requestId } : {}),
       locationId: input.locationId,
       contactId: input.contactId,
@@ -646,7 +646,7 @@ async function dispatchWorkflowAttachmentsThroughProvider(input: {
         status: dispatchStatus,
         errorMessage: dispatchResult.ok
           ? undefined
-          : dispatchResult.errorMessage ?? "HighLevel attachment provider dispatch failed",
+          : dispatchResult.errorMessage ?? "HighLevel provider message dispatch failed",
         ghlStatusCode: dispatchResult.statusCode,
         ghlResponseBody: stringifyForStorage(dispatchResult.responseBody),
         requestPayload
@@ -667,7 +667,7 @@ async function dispatchWorkflowAttachmentsThroughProvider(input: {
           selectedMessageType: input.selectedMessageType,
           auditPersistenceStatus
         },
-        "HighLevel workflow attachment provider dispatch audit persistence failed"
+        "HighLevel workflow provider dispatch audit persistence failed"
       );
     }
 
@@ -693,7 +693,7 @@ async function dispatchWorkflowAttachmentsThroughProvider(input: {
         mirrorResultStatus: dispatchResult.ok ? "pending" : "failed",
         auditPersistenceStatus
       },
-      "HighLevel workflow attachment provider dispatch completed"
+      "HighLevel workflow provider dispatch completed"
     );
 
     return dispatchResult.ok
@@ -701,7 +701,7 @@ async function dispatchWorkflowAttachmentsThroughProvider(input: {
       : buildResponse(
           200,
           "failed",
-          dispatchResult.errorMessage ?? "HighLevel attachment provider dispatch failed"
+          dispatchResult.errorMessage ?? "HighLevel provider message dispatch failed"
         );
   } catch (error) {
     const isDisconnected = isLineChannelNotConnectedError(error);
@@ -709,7 +709,7 @@ async function dispatchWorkflowAttachmentsThroughProvider(input: {
       ? error.message
       : error instanceof Error
         ? error.message
-        : "Unknown HighLevel attachment provider dispatch error";
+        : "Unknown HighLevel provider dispatch error";
 
     logger[isDisconnected ? "warn" : "error"](
       {
@@ -730,7 +730,7 @@ async function dispatchWorkflowAttachmentsThroughProvider(input: {
         errorPresent: true,
         errorCategory: isDisconnected ? "channel_not_connected" : "provider_dispatch"
       },
-      "Failed to dispatch HighLevel workflow attachments through the conversation provider"
+      "Failed to dispatch HighLevel workflow message through the conversation provider"
     );
 
     return isDisconnected
@@ -1118,7 +1118,7 @@ export async function processGhlWorkflowSendLine(
 
   if (workflowMessage.type === "attachments") {
     if (env.GHL_WORKFLOW_LINE_DELIVERY_MODE === "provider_first") {
-      return dispatchWorkflowAttachmentsThroughProvider({
+      return dispatchWorkflowProviderMessage({
         context,
         locationId,
         contactId,
@@ -1340,157 +1340,18 @@ export async function processGhlWorkflowSendLine(
   }
 
   if (env.GHL_WORKFLOW_LINE_DELIVERY_MODE === "provider_first") {
-    try {
-      const tenant = await getTenantById(mapping.tenant_id);
-      const tenantLocationId = tenant?.location_id?.trim();
-      const conversationProviderId = tenant?.ghl_provider_id?.trim();
-
-      if (!tenant) {
-        throw new Error(`Tenant ${mapping.tenant_id} was not found`);
-      }
-
-      if (!tenantLocationId || tenantLocationId !== locationId) {
-        throw new Error("Resolved tenant does not belong to the workflow locationId");
-      }
-
-      if (!conversationProviderId) {
-        throw new Error(`Tenant ${mapping.tenant_id} has no ghl_provider_id`);
-      }
-
-      const lineChannelSelection = await resolveLineChannelForOutbound(mapping.tenant_id, mapping);
-      const dispatchResult = await mirrorWorkflowOutboundMessageToGhl({
-        ...(context.requestId ? { requestId: context.requestId } : {}),
-        locationId,
-        contactId,
-        message: workflowMessage.text,
-        conversationProviderId,
-        workflowId,
-        lineMessageId: null,
-        existingGhlConversationId: mapping.ghl_conversation_id
-      });
-      const dispatchStatus = dispatchResult.ok ? "success" : "failed";
-      const requestPayload = {
-        ...eventPayload,
-        source: "ghl_workflow_provider_dispatch",
-        tenantId: mapping.tenant_id,
-        lineUserId: mapping.line_user_id,
-        existingGhlConversationId: mapping.ghl_conversation_id ?? null,
-        lineChannelId: lineChannelSelection.lineChannelId ?? null,
-        channelTokenSource: lineChannelSelection.channelTokenSource,
-        channelConnected: true,
-        conversationProviderId,
-        endpoint: dispatchResult.endpoint,
-        method: dispatchResult.method,
-        authMode: dispatchResult.authMode,
-        statusCode: dispatchResult.statusCode ?? null,
-        canonicalCode: dispatchResult.canonicalCode ?? null,
-        dispatchStatus,
-        request_body: dispatchResult.requestBody
-      };
-
-      await saveMessageEvent({
-        tenantId: mapping.tenant_id,
-        provider: "ghl",
-        direction: "outbound",
-        externalMessageId: buildProviderDispatchExternalMessageId({
-          externalMessageId,
-          ghlMessageId: dispatchResult.ghlMessageId
-        }),
-        lineUserId: mapping.line_user_id,
-        ghlMessageId: dispatchResult.ghlMessageId,
-        ghlConversationId: dispatchResult.ghlConversationId ?? mapping.ghl_conversation_id ?? undefined,
-        payload,
-        status: dispatchStatus,
-        errorMessage: dispatchResult.ok
-          ? undefined
-          : dispatchResult.errorMessage ?? "HighLevel workflow provider dispatch failed",
-        ghlStatusCode: dispatchResult.statusCode,
-        ghlResponseBody: stringifyForStorage(dispatchResult.responseBody),
-        requestPayload
-      });
-
-      logger.info(
-        {
-          ...buildWorkflowIdentifierLogContext({
-            requestId: context.requestId,
-            locationId,
-            contactId,
-            workflowId,
-            mapping,
-            lineChannelId: lineChannelSelection.lineChannelId,
-            ghlMessageId: dispatchResult.ghlMessageId,
-            ghlConversationId: dispatchResult.ghlConversationId
-          }),
-          ...inputLogMetadata,
-          metaKeyPresent: hasLogValue(metaKey),
-          channelConnected: true,
-          channelTokenSource: lineChannelSelection.channelTokenSource,
-          conversationProviderIdPresent: true,
-          providerDispatchStatus: dispatchStatus,
-          statusCode: dispatchResult.statusCode
-        },
-        "HighLevel workflow provider dispatch completed"
-      );
-
-      return dispatchResult.ok
-        ? buildResponse(200, "sent")
-        : buildResponse(200, "failed", dispatchResult.errorMessage ?? "HighLevel workflow provider dispatch failed");
-    } catch (error) {
-      const isDisconnected = isLineChannelNotConnectedError(error);
-      const errorMessage = error instanceof Error ? error.message : "Unknown HighLevel provider dispatch error";
-      const requestPayload = {
-        ...eventPayload,
-        source: "ghl_workflow_provider_dispatch",
-        tenantId: mapping.tenant_id,
-        lineUserId: mapping.line_user_id,
-        existingGhlConversationId: mapping.ghl_conversation_id ?? null,
-        lineChannelId: isDisconnected
-          ? error.lineChannelId ?? mapping.line_channel_id ?? null
-          : mapping.line_channel_id ?? null,
-        channelTokenSource: isDisconnected ? error.channelTokenSource : null,
-        channelConnected: false,
-        dispatchStatus: "failed"
-      };
-
-      await saveMessageEvent({
-        tenantId: mapping.tenant_id,
-        provider: "ghl",
-        direction: "outbound",
-        externalMessageId: buildProviderDispatchExternalMessageId({ externalMessageId }),
-        lineUserId: mapping.line_user_id,
-        ghlConversationId: mapping.ghl_conversation_id ?? undefined,
-        payload,
-        status: "failed",
-        errorMessage,
-        requestPayload
-      });
-
-      const logContext = {
-        ...buildWorkflowIdentifierLogContext({
-          requestId: context.requestId,
-          locationId,
-          contactId,
-          workflowId,
-          mapping,
-          lineChannelId: requestPayload.lineChannelId
-        }),
-        ...inputLogMetadata,
-        metaKeyPresent: hasLogValue(metaKey),
-        channelConnected: false,
-        channelTokenSource: requestPayload.channelTokenSource,
-        providerDispatchStatus: "failed",
-        errorPresent: true,
-        errorCategory: isDisconnected ? "channel_not_connected" : "provider_dispatch"
-      };
-
-      if (isDisconnected) {
-        logger.warn(logContext, "Blocked HighLevel workflow provider dispatch because LINE channel is not connected");
-        return buildResponse(409, "failed", errorMessage);
-      }
-
-      logger.error(logContext, "Failed to dispatch HighLevel workflow message through the conversation provider");
-      return buildResponse(200, "failed", errorMessage);
-    }
+    return dispatchWorkflowProviderMessage({
+      context,
+      locationId,
+      contactId,
+      workflowId,
+      mapping,
+      message: workflowMessage.text,
+      attachments: [],
+      eventPayload,
+      inputLogMetadata,
+      selectedMessageType: "text"
+    });
   }
 
   try {

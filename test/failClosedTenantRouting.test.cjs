@@ -15,6 +15,7 @@ process.env.GHL_SEND_CONVERSATION_PROVIDER_ID = "true";
 const repository = require("../dist/services/repository");
 const ghlLocationClient = require("../dist/integrations/ghlLocationClient");
 const ghlInboundMessageClient = require("../dist/integrations/ghlInboundMessageClient");
+const workflowOutboundClient = require("../dist/integrations/ghlWorkflowOutboundMirrorClient");
 const lineClient = require("../dist/integrations/lineClient");
 const lineOutboundChannelService = require("../dist/services/lineOutboundChannelService");
 const lineSyncService = require("../dist/services/lineSyncService");
@@ -36,8 +37,10 @@ const patchedExports = [
   [ghlLocationClient, "createGhlContact"],
   [ghlLocationClient, "ensureGhlContactLineMetadata"],
   [ghlInboundMessageClient, "sendInboundMessageToGhl"],
+  [workflowOutboundClient, "updateWorkflowProviderMessageStatus"],
   [lineClient, "getLineProfile"],
   [lineClient, "pushLineTextMessage"],
+  [lineClient, "pushLineMessages"],
   [lineOutboundChannelService, "resolveLineChannelForOutbound"]
 ];
 const originals = patchedExports.map(([module, key]) => [module, key, module[key]]);
@@ -254,6 +257,11 @@ function setupGhlOutboundHarness() {
     calls.mirrorGuardTenantIds.push(input.tenantIds);
     return null;
   };
+  repository.getTenantById = async () => ({
+    id: "tenant_exact",
+    location_id: "location_exact",
+    ghl_provider_id: "provider_exact"
+  });
   repository.claimGhlOutboundProviderDelivery = async (input) => {
     calls.claimTenantIds.push(input.tenantId);
     return {
@@ -288,11 +296,16 @@ function setupGhlOutboundHarness() {
       channelTokenSource: "tenant_active_channel"
     };
   };
-  lineClient.pushLineTextMessage = async (_lineUserId, _message, channelAccessToken) => {
+  lineClient.pushLineMessages = async (_lineUserId, _messages, channelAccessToken) => {
     calls.linePush += 1;
     assert.equal(channelAccessToken, "line_token_exact");
-    return { messageId: "line_message_exact" };
+    return { messageId: "line_message_exact", statusCode: 200 };
   };
+  workflowOutboundClient.updateWorkflowProviderMessageStatus = async () => ({
+    ok: true,
+    authMode: "oauth",
+    statusCode: 200
+  });
 
   return { calls, messageEvents };
 }
@@ -325,7 +338,8 @@ test("GHL outbound payload with locationId selects only the exact tenant", async
     locationId: "location_exact",
     contactId: "contact_exact",
     conversationId: "conversation_exact",
-    messageId: "ghl_message_exact"
+    messageId: "ghl_message_exact",
+    conversationProviderId: "provider_exact"
   });
 
   assert.equal(result.status, "processed");

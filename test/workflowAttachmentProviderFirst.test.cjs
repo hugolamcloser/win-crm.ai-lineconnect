@@ -27,6 +27,7 @@ const patchedExports = [
   [repository, "getTenantIdsByLocationId"],
   [repository, "findLineProfileByGhlIdsForTenantIds"],
   [repository, "getTenantById"],
+  [repository, "findWorkflowProviderDispatchMessageEvent"],
   [repository, "findWorkflowOutboundMirrorMessageEventForTenantIds"],
   [repository, "claimGhlOutboundProviderDelivery"],
   [repository, "finalizeGhlOutboundProviderDelivery"],
@@ -35,7 +36,7 @@ const patchedExports = [
   [oauthService, "forceRefreshGhlAuthContext"],
   [signatureVerifier, "verifyGhlWebhookSignature"],
   [outboundClient, "mirrorWorkflowOutboundMessageToGhl"],
-  [outboundClient, "createWorkflowAttachmentProviderMessage"],
+  [outboundClient, "createWorkflowProviderMessage"],
   [outboundClient, "updateWorkflowProviderMessageStatus"],
   [lineClient, "pushLineMessages"],
   [lineClient, "pushLineTextMessage"],
@@ -73,7 +74,7 @@ function setupWorkflowHarness() {
     profiles: [],
     tenants: [],
     channels: [],
-    attachmentCreates: [],
+    providerCreates: [],
     textCreates: [],
     lineBatches: [],
     events: [],
@@ -120,8 +121,8 @@ function setupWorkflowHarness() {
       channelTokenSource: "profile_channel"
     };
   };
-  outboundClient.createWorkflowAttachmentProviderMessage = async (input) => {
-    calls.attachmentCreates.push(input);
+  outboundClient.createWorkflowProviderMessage = async (input) => {
+    calls.providerCreates.push(input);
     return {
       ok: true,
       endpoint: "/conversations/messages",
@@ -132,7 +133,7 @@ function setupWorkflowHarness() {
         type: "Custom",
         status: "pending",
         messagePresent: Boolean(input.message),
-        attachmentCount: input.attachments.length
+        attachmentCount: input.attachments?.length ?? 0
       },
       ghlMessageId: "ghl-created-message-sensitive",
       ghlConversationId: "conversation-provider-sensitive"
@@ -181,6 +182,7 @@ function setupCallbackHarness() {
     textPushes: [],
     statusUpdates: [],
     events: [],
+    providerDispatchLookups: [],
     tenants: [],
     channels: [],
     logs: []
@@ -192,10 +194,15 @@ function setupCallbackHarness() {
   let configuredProviderId = "provider-callback-sensitive";
   let configuredTenantLocationId = "location-callback-sensitive";
   let mappingFound = true;
+  let providerDispatchEvent = null;
 
   repository.getTenantIdsByLocationId = async (locationId) =>
     locationId === "location-callback-sensitive" ? ["tenant-callback-sensitive"] : [];
   repository.findWorkflowOutboundMirrorMessageEventForTenantIds = async () => null;
+  repository.findWorkflowProviderDispatchMessageEvent = async (input) => {
+    calls.providerDispatchLookups.push(input);
+    return providerDispatchEvent;
+  };
   repository.getTenantById = async (tenantId) => {
     calls.tenants.push(tenantId);
     return {
@@ -288,6 +295,9 @@ function setupCallbackHarness() {
       },
       setMappingFound(value) {
         mappingFound = value;
+      },
+      setProviderDispatchEvent(value) {
+        providerDispatchEvent = value;
       }
     }
   };
@@ -339,7 +349,7 @@ function requestApp(input) {
   });
 }
 
-test("attachment provider client creates the exact pending Custom payload with exact-location OAuth", async () => {
+test("provider message client creates the exact pending Custom attachment payload with exact-location OAuth", async () => {
   const { authCalls } = setupOAuth();
   const requests = [];
   const signedUrl = "https://assets.example.test/private/image.png?signature=preserved-sensitive";
@@ -351,7 +361,7 @@ test("attachment provider client creates the exact pending Custom payload with e
     }), { status: 201, headers: { "Content-Type": "application/json" } });
   };
 
-  const result = await outboundClient.createWorkflowAttachmentProviderMessage({
+  const result = await outboundClient.createWorkflowProviderMessage({
     locationId: "location-create-sensitive",
     contactId: "contact-create-sensitive",
     conversationProviderId: "provider-create-sensitive",
@@ -378,6 +388,65 @@ test("attachment provider client creates the exact pending Custom payload with e
   assert.doesNotMatch(JSON.stringify(result.requestBody), /private workflow text|https:\/\/|preserved-sensitive/);
 });
 
+test("provider message client creates v3 pending Custom text without phone or attachments", async () => {
+  const { authCalls } = setupOAuth();
+  const requests = [];
+  global.fetch = async (url, init) => {
+    requests.push({ url, init, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify({
+      messageId: "created-text-message-sensitive",
+      conversationId: "created-text-conversation-sensitive"
+    }), { status: 201, headers: { "Content-Type": "application/json" } });
+  };
+
+  const result = await outboundClient.createWorkflowProviderMessage({
+    locationId: "location-create-text-sensitive",
+    contactId: "contact-create-text-sensitive",
+    conversationProviderId: "provider-create-text-sensitive",
+    message: "private provider-first text"
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, "https://services.leadconnectorhq.com/conversations/messages");
+  assert.equal(requests[0].init.headers.Version, "v3");
+  assert.deepEqual(requests[0].body, {
+    type: "Custom",
+    contactId: "contact-create-text-sensitive",
+    status: "pending",
+    conversationProviderId: "provider-create-text-sensitive",
+    message: "private provider-first text"
+  });
+  assert.equal("attachments" in requests[0].body, false);
+  assert.equal("phone" in requests[0].body, false);
+  assert.deepEqual(authCalls, [{
+    locationId: "location-create-text-sensitive",
+    options: { allowPrivateFallback: false }
+  }]);
+  assert.doesNotMatch(JSON.stringify(result.requestBody), /private provider-first text/);
+});
+
+test("provider message client rejects empty text and attachments before OAuth or HTTP", async () => {
+  const { authCalls } = setupOAuth();
+  let fetchCalls = 0;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error("unexpected HTTP request");
+  };
+
+  await assert.rejects(
+    () => outboundClient.createWorkflowProviderMessage({
+      locationId: "location-empty-sensitive",
+      contactId: "contact-empty-sensitive",
+      conversationProviderId: "provider-empty-sensitive",
+      attachments: []
+    }),
+    /requires text or at least one attachment/
+  );
+  assert.equal(authCalls.length, 0);
+  assert.equal(fetchCalls, 0);
+});
+
 test("provider_first image-only and text-plus-image create one HighLevel message and no direct LINE push", async () => {
   const calls = setupWorkflowHarness();
   const signedUrl = "https://assets.example.test/private/image.png?signature=unchanged-sensitive";
@@ -392,11 +461,11 @@ test("provider_first image-only and text-plus-image create one HighLevel message
 
   assert.equal(imageOnly.body.status, "sent");
   assert.equal(textAndImage.body.status, "sent");
-  assert.equal(calls.attachmentCreates.length, 2);
-  assert.equal(calls.attachmentCreates[0].message, undefined);
-  assert.equal(calls.attachmentCreates[1].message, "text before image");
-  assert.deepEqual(calls.attachmentCreates[0].attachments, [signedUrl]);
-  assert.equal(calls.attachmentCreates[0].conversationProviderId, "provider-tenant-sensitive");
+  assert.equal(calls.providerCreates.length, 2);
+  assert.equal(calls.providerCreates[0].message, undefined);
+  assert.equal(calls.providerCreates[1].message, "text before image");
+  assert.deepEqual(calls.providerCreates[0].attachments, [signedUrl]);
+  assert.equal(calls.providerCreates[0].conversationProviderId, "provider-tenant-sensitive");
   assert.equal(calls.lineBatches.length, 0);
   assert.deepEqual(calls.tenants, ["tenant-provider-sensitive", "tenant-provider-sensitive"]);
   assert.equal(calls.channels.length, 2);
@@ -417,7 +486,7 @@ test("successful HighLevel attachment creation remains sent when audit persisten
   assert.equal(result.httpStatus, 200);
   assert.equal(result.body.ok, true);
   assert.equal(result.body.status, "sent");
-  assert.equal(calls.attachmentCreates.length, 1);
+  assert.equal(calls.providerCreates.length, 1);
   assert.equal(calls.events.length, 1);
   assert.equal(calls.lineBatches.length, 0);
   const auditLogs = calls.logs.filter(({ args }) =>
@@ -444,21 +513,30 @@ test("provider_first video, audio, and document URLs are preserved for the HighL
     ]
   }));
 
-  assert.deepEqual(calls.attachmentCreates[0].attachments, urls);
+  assert.deepEqual(calls.providerCreates[0].attachments, urls);
   assert.equal(calls.lineBatches.length, 0);
 });
 
-test("existing text-only provider-first path remains unchanged", async () => {
+test("provider_first text-only uses the pending provider message path and no direct LINE push", async () => {
   const calls = setupWorkflowHarness();
   const result = await workflowService.processGhlWorkflowSendLine(workflowPayload({
     message: "existing provider-first text"
   }));
 
   assert.equal(result.body.status, "sent");
-  assert.equal(calls.textCreates.length, 1);
-  assert.equal(calls.textCreates[0].message, "existing provider-first text");
-  assert.equal(calls.attachmentCreates.length, 0);
+  assert.equal(calls.textCreates.length, 0);
+  assert.equal(calls.providerCreates.length, 1);
+  assert.equal(calls.providerCreates[0].message, "existing provider-first text");
+  assert.deepEqual(calls.providerCreates[0].attachments, []);
+  assert.equal(calls.providerCreates[0].conversationProviderId, "provider-tenant-sensitive");
   assert.equal(calls.lineBatches.length, 0);
+  assert.equal(calls.events.length, 1);
+  assert.equal(calls.events[0].tenantId, "tenant-provider-sensitive");
+  assert.equal(calls.events[0].ghlMessageId, "ghl-created-message-sensitive");
+  assert.equal(calls.events[0].lineUserId, "line-user-provider-sensitive");
+  assert.equal(calls.events[0].ghlConversationId, "conversation-provider-sensitive");
+  assert.equal(calls.events[0].requestPayload.source, "ghl_workflow_provider_dispatch");
+  assert.equal(calls.events[0].requestPayload.contactId, "contact-provider-sensitive");
 });
 
 test("direct_legacy retains the current direct attachment rollback path", async () => {
@@ -474,7 +552,7 @@ test("direct_legacy retains the current direct attachment rollback path", async 
   }));
 
   assert.equal(result.body.status, "sent");
-  assert.equal(calls.attachmentCreates.length, 0);
+  assert.equal(calls.providerCreates.length, 0);
   assert.equal(calls.lineBatches.length, 1);
 });
 
@@ -569,7 +647,7 @@ test("attachment callback accepts message and conversation nested provider IDs w
       finalizations: calls.finalizations.map(({ requestPayload }) => ({ requestPayload }))
     });
     assert.doesNotMatch(observableMetadata, /provider-callback-sensitive/);
-    assert.match(observableMetadata, /conversationProviderIdPresent|providerMatches/);
+    assert.match(observableMetadata, /conversationProviderIdPresent|providerValidationPassed/);
   }
 });
 
@@ -596,8 +674,154 @@ test("attachment callback rejects a mapped tenant from another location before c
   );
   assert.match(
     serializedLogs,
-    /locationIdPresent|locationRef|contactIdPresent|contactRef|tenantRef|providerRef|tenantLocationMatches|providerMatches/
+    /locationIdPresent|locationRef|contactIdPresent|contactRef|tenantRef|providerRef|tenantLocationMatches|providerValidationPassed/
   );
+});
+
+test("text callback with an explicit wrong provider fails even when an exact dispatch record exists", async () => {
+  const { calls, controls } = setupCallbackHarness();
+  controls.setProviderDispatchEvent({
+    id: "dispatch-event-sensitive",
+    tenant_id: "tenant-callback-sensitive",
+    line_user_id: "line-user-callback-sensitive",
+    ghl_message_id: "message-text-wrong-provider",
+    ghl_conversation_id: "conversation-callback-sensitive",
+    request_payload: { source: "ghl_workflow_provider_dispatch" },
+    created_at: "2026-01-01T00:00:00.000Z"
+  });
+
+  const result = await syncService.processGhlOutboundWebhook(callbackPayload({
+    messageId: "message-text-wrong-provider",
+    message: "private wrong-provider text",
+    attachments: [],
+    conversationProviderId: "provider-wrong-sensitive"
+  }));
+
+  assert.equal(result.status, "skipped");
+  assert.equal(result.reason, "Conversation provider validation failed");
+  assert.equal(calls.providerDispatchLookups.length, 0);
+  assert.equal(calls.claims.length, 0);
+  assert.equal(calls.channels.length, 0);
+  assert.equal(calls.lineBatches.length, 0);
+  assert.equal(calls.statusUpdates.length, 0);
+});
+
+test("text callback without provider ID requires its exact same-tenant provider dispatch", async () => {
+  const { calls, controls } = setupCallbackHarness();
+  controls.setProviderDispatchEvent({
+    id: "dispatch-event-sensitive",
+    tenant_id: "tenant-callback-sensitive",
+    line_user_id: "line-user-callback-sensitive",
+    ghl_message_id: "message-text-dispatch-match",
+    ghl_conversation_id: "conversation-callback-sensitive",
+    request_payload: { source: "ghl_workflow_provider_dispatch" },
+    created_at: "2026-01-01T00:00:00.000Z"
+  });
+
+  const result = await syncService.processGhlOutboundWebhook(callbackPayload({
+    messageId: "message-text-dispatch-match",
+    message: "private dispatch-matched text",
+    attachments: [],
+    conversationProviderId: undefined
+  }));
+
+  assert.equal(result.status, "processed");
+  assert.equal(calls.providerDispatchLookups.length, 1);
+  assert.deepEqual(calls.providerDispatchLookups[0], {
+    tenantId: "tenant-callback-sensitive",
+    ghlMessageId: "message-text-dispatch-match",
+    lineUserId: "line-user-callback-sensitive",
+    ghlContactId: "contact-callback-sensitive",
+    ghlConversationId: "conversation-callback-sensitive"
+  });
+  assert.equal(calls.claims.length, 1);
+  assert.equal(calls.lineBatches.length, 1);
+  assert.equal(calls.statusUpdates[0].status, "delivered");
+  assert.equal(calls.claims[0].payload.providerValidationMode, "exact_provider_dispatch");
+  assert.equal(calls.claims[0].payload.callbackProviderPresent, false);
+  assert.equal(calls.claims[0].payload.providerDispatchEventPresent, true);
+  assert.equal(calls.claims[0].payload.providerValidationPassed, true);
+  const observableMetadata = JSON.stringify({
+    logs: calls.logs,
+    claims: calls.claims.map(({ payload, requestPayload }) => ({ payload, requestPayload })),
+    finalizations: calls.finalizations.map(({ requestPayload }) => ({ requestPayload }))
+  });
+  assert.doesNotMatch(
+    observableMetadata,
+    /private dispatch-matched text|dispatch-event-sensitive|location-callback-sensitive|contact-callback-sensitive|conversation-callback-sensitive|message-text-dispatch-match|tenant-callback-sensitive|provider-callback-sensitive|line-user-callback-sensitive|line-channel-callback-sensitive/
+  );
+  assert.match(
+    observableMetadata,
+    /exact_provider_dispatch|callbackProviderPresent|providerDispatchEventPresent|providerValidationPassed/
+  );
+});
+
+test("text callback without provider ID and without an exact dispatch fails before claim", async () => {
+  const { calls } = setupCallbackHarness();
+
+  const result = await syncService.processGhlOutboundWebhook(callbackPayload({
+    messageId: "message-text-no-dispatch",
+    message: "private unproven text",
+    attachments: [],
+    conversationProviderId: undefined
+  }));
+
+  assert.equal(result.status, "skipped");
+  assert.equal(result.reason, "Conversation provider validation failed");
+  assert.equal(calls.providerDispatchLookups.length, 1);
+  assert.equal(calls.claims.length, 0);
+  assert.equal(calls.channels.length, 0);
+  assert.equal(calls.lineBatches.length, 0);
+});
+
+test("text callback cannot use another tenant's provider dispatch", async () => {
+  const { calls, controls } = setupCallbackHarness();
+  controls.setProviderDispatchEvent({
+    id: "dispatch-event-other-tenant-sensitive",
+    tenant_id: "tenant-other-sensitive",
+    line_user_id: "line-user-callback-sensitive",
+    ghl_message_id: "message-text-other-tenant",
+    ghl_conversation_id: "conversation-callback-sensitive",
+    request_payload: { source: "ghl_workflow_provider_dispatch" },
+    created_at: "2026-01-01T00:00:00.000Z"
+  });
+
+  const result = await syncService.processGhlOutboundWebhook(callbackPayload({
+    messageId: "message-text-other-tenant",
+    message: "private cross-tenant text",
+    attachments: [],
+    conversationProviderId: undefined
+  }));
+
+  assert.equal(result.status, "skipped");
+  assert.equal(result.reason, "Conversation provider validation failed");
+  assert.equal(calls.claims.length, 0);
+  assert.equal(calls.channels.length, 0);
+  assert.equal(calls.lineBatches.length, 0);
+});
+
+test("attachment callback cannot substitute provider-dispatch evidence for an exact provider ID", async () => {
+  const { calls, controls } = setupCallbackHarness();
+  controls.setProviderDispatchEvent({
+    id: "dispatch-event-attachment-sensitive",
+    tenant_id: "tenant-callback-sensitive",
+    line_user_id: "line-user-callback-sensitive",
+    ghl_message_id: "message-attachment-no-provider",
+    ghl_conversation_id: "conversation-callback-sensitive",
+    request_payload: { source: "ghl_workflow_provider_dispatch" },
+    created_at: "2026-01-01T00:00:00.000Z"
+  });
+
+  const result = await syncService.processGhlOutboundWebhook(callbackPayload({
+    messageId: "message-attachment-no-provider",
+    conversationProviderId: undefined
+  }));
+
+  assert.equal(result.status, "skipped");
+  assert.equal(result.reason, "Conversation provider validation failed");
+  assert.equal(calls.providerDispatchLookups.length, 0);
+  assert.equal(calls.claims.length, 0);
+  assert.equal(calls.lineBatches.length, 0);
 });
 
 test("callback maps document, video, audio, and unknown attachments to ordered clickable links", async () => {
@@ -637,7 +861,7 @@ test("callback enforces the five-message limit after optional text and fails det
   }));
 
   assert.equal(result.status, "processed");
-  assert.match(result.reason, /Invalid outbound provider attachment content/);
+  assert.match(result.reason, /Invalid outbound provider content/);
   assert.equal(calls.claims.length, 1);
   assert.equal(calls.lineBatches.length, 0);
   assert.equal(calls.finalizations[0].status, "failed");
@@ -736,7 +960,7 @@ test("status-update failure cannot resend LINE on a repeated callback", async ()
   assert.equal(calls.statusUpdates.length, 1);
 });
 
-test("text-only callback still uses the existing single text push", async () => {
+test("text-only callback uses one atomic claim, one LINE text plan, and delivered status", async () => {
   const { calls } = setupCallbackHarness();
   const result = await syncService.processGhlOutboundWebhook(callbackPayload({
     messageId: "message-text-only",
@@ -745,9 +969,98 @@ test("text-only callback still uses the existing single text push", async () => 
   }));
 
   assert.equal(result.status, "processed");
-  assert.equal(calls.textPushes.length, 1);
-  assert.equal(calls.lineBatches.length, 0);
-  assert.equal(calls.statusUpdates.length, 0);
+  assert.equal(calls.claims.length, 1);
+  assert.equal(calls.textPushes.length, 0);
+  assert.equal(calls.lineBatches.length, 1);
+  assert.deepEqual(calls.lineBatches[0][1], [{ type: "text", text: "existing callback text" }]);
+  assert.equal(calls.finalizations.length, 1);
+  assert.equal(calls.finalizations[0].status, "sent");
+  assert.equal(calls.statusUpdates.length, 1);
+  assert.equal(calls.statusUpdates[0].status, "delivered");
+  assert.equal(calls.claims[0].payload.providerValidationMode, "exact_provider_id");
+  assert.equal(calls.claims[0].payload.callbackProviderPresent, true);
+  assert.equal(calls.claims[0].payload.providerDispatchEventPresent, false);
+});
+
+test("text-only LINE failure finalizes failed and updates HighLevel failed", async () => {
+  const { calls, controls } = setupCallbackHarness();
+  controls.setLineError(new Error("private failure detail"));
+
+  await assert.rejects(
+    () => syncService.processGhlOutboundWebhook(callbackPayload({
+      messageId: "message-text-line-failed",
+      message: "private failed text",
+      attachments: []
+    })),
+    (error) => error.statusCode === 502
+  );
+
+  assert.equal(calls.claims.length, 1);
+  assert.equal(calls.lineBatches.length, 1);
+  assert.equal(calls.finalizations[0].status, "failed");
+  assert.equal(calls.statusUpdates[0].status, "failed");
+});
+
+test("text-only status-update failure cannot duplicate LINE on repeated callback", async () => {
+  const { calls, controls } = setupCallbackHarness();
+  controls.setStatusUpdateOk(false);
+  const payload = callbackPayload({
+    messageId: "message-text-status-failed",
+    message: "private status text",
+    attachments: []
+  });
+
+  const first = await syncService.processGhlOutboundWebhook(payload);
+  const second = await syncService.processGhlOutboundWebhook(payload);
+
+  assert.equal(first.status, "processed");
+  assert.equal(second.reason, "Already claimed");
+  assert.equal(calls.lineBatches.length, 1);
+  assert.equal(calls.finalizations.length, 1);
+  assert.equal(calls.statusUpdates.length, 1);
+});
+
+test("concurrent and repeated text-only callbacks make one LINE push", async () => {
+  const { calls } = setupCallbackHarness();
+  const payload = callbackPayload({
+    messageId: "message-text-concurrent",
+    message: "private concurrent text",
+    attachments: []
+  });
+
+  const [first, second] = await Promise.all([
+    syncService.processGhlOutboundWebhook(payload),
+    syncService.processGhlOutboundWebhook(payload)
+  ]);
+  const third = await syncService.processGhlOutboundWebhook(payload);
+
+  assert.equal([first, second].filter((result) => result.status === "processed").length, 1);
+  assert.equal([first, second].filter((result) => result.reason === "Already claimed").length, 1);
+  assert.equal(third.reason, "Already claimed");
+  assert.equal(calls.claims.length, 3);
+  assert.equal(calls.lineBatches.length, 1);
+  assert.equal(calls.finalizations.length, 1);
+  assert.equal(calls.statusUpdates.length, 1);
+});
+
+test("text-only callback logs and claim storage contain metadata without private content", async () => {
+  const { calls } = setupCallbackHarness();
+  await syncService.processGhlOutboundWebhook(callbackPayload({
+    messageId: "message-text-privacy-sensitive",
+    message: "private text callback content",
+    attachments: []
+  }));
+
+  const observableMetadata = JSON.stringify({
+    logs: calls.logs,
+    claims: calls.claims.map(({ payload, requestPayload }) => ({ payload, requestPayload })),
+    finalizations: calls.finalizations.map(({ requestPayload }) => ({ requestPayload }))
+  });
+  assert.doesNotMatch(
+    observableMetadata,
+    /private text callback content|message-text-privacy-sensitive|location-callback-sensitive|contact-callback-sensitive|conversation-callback-sensitive|tenant-callback-sensitive|provider-callback-sensitive|line-user-callback-sensitive|line-channel-callback-sensitive|line-token-callback-sensitive/
+  );
+  assert.match(observableMetadata, /messagePresent|messageLength|attachmentCount|deliveryState/);
 });
 
 test("status updater uses v3 exact-location OAuth and refreshes once after 401", async () => {

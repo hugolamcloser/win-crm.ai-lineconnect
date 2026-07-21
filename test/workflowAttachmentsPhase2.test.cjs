@@ -22,6 +22,7 @@ const patchedExports = [
   [repository, "getTenantById"],
   [repository, "saveMessageEvent"],
   [workflowOutboundClient, "mirrorWorkflowOutboundMessageToGhl"],
+  [workflowOutboundClient, "createWorkflowProviderMessage"],
   [lineOutboundChannelService, "resolveLineChannelForOutbound"],
   [lineClient, "pushLineMessages"],
   [lineClient, "pushLineImageMessage"],
@@ -99,7 +100,7 @@ function setupHarness() {
       channelTokenSource: "profile_channel"
     };
   };
-  workflowOutboundClient.mirrorWorkflowOutboundMessageToGhl = async (input) => {
+  workflowOutboundClient.createWorkflowProviderMessage = async (input) => {
     calls.providerDispatches.push(input);
     return {
       ok: true,
@@ -111,7 +112,7 @@ function setupHarness() {
         type: "Custom",
         contactId: input.contactId,
         message: input.message,
-        status: "delivered",
+        status: "pending",
         conversationProviderId: input.conversationProviderId
       },
       ghlMessageId: "ghl_message_phase_2_sensitive",

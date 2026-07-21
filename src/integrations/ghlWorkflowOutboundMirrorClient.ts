@@ -12,13 +12,13 @@ type GhlWorkflowOutboundMirrorPayload = {
   conversationProviderId?: string;
 };
 
-type GhlWorkflowAttachmentProviderPayload = {
+type GhlWorkflowProviderPayload = {
   type: "Custom";
   contactId: string;
   status: "pending";
   conversationProviderId: string;
   message?: string;
-  attachments: string[];
+  attachments?: string[];
 };
 
 export type GhlWorkflowOutboundMirrorInput = {
@@ -32,13 +32,13 @@ export type GhlWorkflowOutboundMirrorInput = {
   existingGhlConversationId?: string | null;
 };
 
-export type GhlWorkflowAttachmentProviderInput = {
+export type GhlWorkflowProviderInput = {
   requestId?: string;
   locationId: string;
   contactId: string;
   conversationProviderId: string;
   message?: string;
-  attachments: string[];
+  attachments?: string[];
   workflowId?: string;
   existingGhlConversationId?: string | null;
 };
@@ -69,16 +69,19 @@ export type GhlWorkflowOutboundMirrorResult = {
 
 const endpoint = "/conversations/messages";
 const method = "POST";
+const maxProviderAttachments = 5;
 
-function buildAttachmentProviderLogContext(
-  input: GhlWorkflowAttachmentProviderInput
+function buildProviderMessageLogContext(
+  input: GhlWorkflowProviderInput
 ): Record<string, unknown> {
+  const attachmentCount = input.attachments?.length ?? 0;
+
   return {
     requestId: input.requestId,
-    selectedMessageType: "attachments",
+    selectedMessageType: attachmentCount > 0 ? "attachments" : "text",
     messagePresent: hasLogValue(input.message),
     messageLength: input.message?.length ?? 0,
-    attachmentCount: input.attachments.length,
+    attachmentCount,
     locationIdPresent: hasLogValue(input.locationId),
     locationRef: buildShortLogRef(input.locationId),
     contactIdPresent: hasLogValue(input.contactId),
@@ -399,34 +402,53 @@ export async function mirrorWorkflowOutboundMessageToGhl(
   }
 }
 
-export async function createWorkflowAttachmentProviderMessage(
-  input: GhlWorkflowAttachmentProviderInput
+export async function createWorkflowProviderMessage(
+  input: GhlWorkflowProviderInput
 ): Promise<GhlWorkflowOutboundMirrorResult> {
-  const payload: GhlWorkflowAttachmentProviderPayload = {
+  const messagePresent = typeof input.message === "string" && input.message.trim().length > 0;
+  const attachments = input.attachments ?? [];
+
+  if (input.message !== undefined && !messagePresent) {
+    throw new TypeError("HighLevel provider message must be non-empty when supplied");
+  }
+
+  if (attachments.length > maxProviderAttachments) {
+    throw new TypeError(`HighLevel provider message supports at most ${maxProviderAttachments} attachments`);
+  }
+
+  if (attachments.some((attachment) => typeof attachment !== "string" || attachment.length === 0)) {
+    throw new TypeError("HighLevel provider attachments must be non-empty strings");
+  }
+
+  if (!messagePresent && attachments.length === 0) {
+    throw new TypeError("HighLevel provider message requires text or at least one attachment");
+  }
+
+  const payload: GhlWorkflowProviderPayload = {
     type: "Custom",
     contactId: input.contactId,
     status: "pending",
     conversationProviderId: input.conversationProviderId,
-    ...(input.message ? { message: input.message } : {}),
-    attachments: input.attachments
+    ...(messagePresent ? { message: input.message } : {}),
+    ...(attachments.length > 0 ? { attachments } : {})
   };
   const safeRequestBody = {
     type: payload.type,
     contactIdPresent: true,
     status: payload.status,
     conversationProviderIdPresent: true,
-    messagePresent: Boolean(input.message),
-    attachmentCount: input.attachments.length
+    messagePresent,
+    attachmentCount: attachments.length
   };
 
   logger.info(
     {
       endpoint,
       method,
-      ...buildAttachmentProviderLogContext(input),
+      ...buildProviderMessageLogContext(input),
       providerDispatchStatus: "preparing"
     },
-    "Preparing HighLevel attachment provider dispatch"
+    "Preparing HighLevel provider message dispatch"
   );
 
   try {
@@ -454,14 +476,14 @@ export async function createWorkflowAttachmentProviderMessage(
         endpoint,
         method,
         authMode: auth.mode,
-        ...buildAttachmentProviderLogContext(input),
+        ...buildProviderMessageLogContext(input),
         ghlConversationIdPresent: hasLogValue(parsed.ghlConversationId),
         ghlMessageIdPresent: hasLogValue(parsed.ghlMessageId),
         providerDispatchStatus: response.ok ? "success" : "failed",
         statusCode: response.status,
         canonicalCode: parsed.canonicalCode
       },
-      "HighLevel attachment provider dispatch completed"
+      "HighLevel provider message dispatch completed"
     );
 
     return {
@@ -478,7 +500,7 @@ export async function createWorkflowAttachmentProviderMessage(
       },
       errorMessage: response.ok
         ? undefined
-        : `HighLevel attachment provider dispatch was rejected with status ${response.status}`,
+        : `HighLevel provider message dispatch was rejected with status ${response.status}`,
       requestBody: safeRequestBody,
       ghlMessageId: parsed.ghlMessageId,
       ghlConversationId: parsed.ghlConversationId
@@ -488,12 +510,12 @@ export async function createWorkflowAttachmentProviderMessage(
       {
         endpoint,
         method,
-        ...buildAttachmentProviderLogContext(input),
+        ...buildProviderMessageLogContext(input),
         providerDispatchStatus: "failed_before_response",
         errorPresent: true,
         errorCategory: error instanceof Error ? error.name : "unknown"
       },
-      "HighLevel attachment provider dispatch failed before receiving a response"
+      "HighLevel provider message dispatch failed before receiving a response"
     );
 
     return {
@@ -501,7 +523,7 @@ export async function createWorkflowAttachmentProviderMessage(
       endpoint,
       method,
       authMode: "unknown",
-      errorMessage: "HighLevel attachment provider dispatch failed before receiving a response",
+      errorMessage: "HighLevel provider message dispatch failed before receiving a response",
       requestBody: safeRequestBody
     };
   }
