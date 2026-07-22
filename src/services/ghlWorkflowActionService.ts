@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { logger } from "../config/logger";
-import { env } from "../config/env";
+import { env, getWorkflowProviderFirstV3TenantRollout } from "../config/env";
 import {
   createWorkflowProviderMessage,
   mirrorWorkflowOutboundMessageToGhl,
@@ -739,6 +739,164 @@ async function dispatchWorkflowProviderMessage(input: {
   }
 }
 
+async function dispatchLegacyWorkflowProviderText(input: {
+  context: WorkflowSendLineContext;
+  locationId: string;
+  contactId: string;
+  workflowId?: string;
+  externalMessageId?: string;
+  mapping: LineProfileRecord;
+  message: string;
+  eventPayload: Record<string, unknown>;
+  inputLogMetadata: Record<string, unknown>;
+}): Promise<WorkflowSendLineResult> {
+  try {
+    const tenant = await getTenantById(input.mapping.tenant_id);
+    const tenantLocationId = tenant?.location_id?.trim();
+    const conversationProviderId = tenant?.ghl_provider_id?.trim();
+
+    if (!tenant) {
+      throw new Error("Resolved tenant was not found");
+    }
+
+    if (!tenantLocationId || tenantLocationId !== input.locationId) {
+      throw new Error("Resolved tenant does not belong to the workflow locationId");
+    }
+
+    if (!conversationProviderId) {
+      throw new Error("Resolved tenant has no HighLevel conversation provider");
+    }
+
+    const lineChannelSelection = await resolveLineChannelForOutbound(
+      input.mapping.tenant_id,
+      input.mapping
+    );
+    const dispatchResult = await mirrorWorkflowOutboundMessageToGhl({
+      ...(input.context.requestId ? { requestId: input.context.requestId } : {}),
+      locationId: input.locationId,
+      contactId: input.contactId,
+      message: input.message,
+      conversationProviderId,
+      workflowId: input.workflowId,
+      lineMessageId: null,
+      existingGhlConversationId: input.mapping.ghl_conversation_id
+    });
+    const dispatchStatus = dispatchResult.ok ? "success" : "failed";
+    const safePayload = {
+      ...input.eventPayload,
+      messagePresent: true,
+      messageLength: input.message.length,
+      attachmentCount: 0
+    };
+    const requestPayload = {
+      ...input.eventPayload,
+      source: "ghl_workflow_provider_dispatch",
+      tenantId: input.mapping.tenant_id,
+      lineChannelId: lineChannelSelection.lineChannelId ?? null,
+      channelTokenSource: lineChannelSelection.channelTokenSource,
+      channelConnected: true,
+      conversationProviderIdPresent: true,
+      endpoint: dispatchResult.endpoint,
+      method: dispatchResult.method,
+      authMode: dispatchResult.authMode,
+      statusCode: dispatchResult.statusCode ?? null,
+      canonicalCode: dispatchResult.canonicalCode ?? null,
+      providerDispatchStatus: dispatchStatus,
+      messagePresent: true,
+      attachmentCount: 0,
+      lifecycle: "provider_first_legacy"
+    };
+
+    await saveMessageEvent({
+      tenantId: input.mapping.tenant_id,
+      provider: "ghl",
+      direction: "outbound",
+      externalMessageId: buildProviderDispatchExternalMessageId({
+        externalMessageId: input.externalMessageId,
+        ghlMessageId: dispatchResult.ghlMessageId
+      }),
+      lineUserId: input.mapping.line_user_id,
+      ghlMessageId: dispatchResult.ghlMessageId,
+      ghlConversationId:
+        dispatchResult.ghlConversationId ?? input.mapping.ghl_conversation_id ?? undefined,
+      payload: safePayload,
+      status: dispatchStatus,
+      errorMessage: dispatchResult.ok
+        ? undefined
+        : dispatchResult.errorMessage ?? "HighLevel workflow provider dispatch failed",
+      ghlStatusCode: dispatchResult.statusCode,
+      ghlResponseBody: stringifyForStorage(dispatchResult.responseBody),
+      requestPayload
+    });
+
+    logger.info(
+      {
+        ...buildWorkflowIdentifierLogContext({
+          requestId: input.context.requestId,
+          locationId: input.locationId,
+          contactId: input.contactId,
+          workflowId: input.workflowId,
+          mapping: input.mapping,
+          lineChannelId: lineChannelSelection.lineChannelId,
+          ghlMessageId: dispatchResult.ghlMessageId,
+          ghlConversationId: dispatchResult.ghlConversationId
+        }),
+        ...input.inputLogMetadata,
+        selectedMessageType: "text",
+        channelConnected: true,
+        channelTokenSource: lineChannelSelection.channelTokenSource,
+        conversationProviderIdPresent: true,
+        providerDispatchStatus: dispatchStatus,
+        statusCode: dispatchResult.statusCode,
+        selectedLifecycle: "provider_first_legacy"
+      },
+      "HighLevel legacy workflow provider dispatch completed"
+    );
+
+    return dispatchResult.ok
+      ? buildResponse(200, "sent")
+      : buildResponse(
+          200,
+          "failed",
+          dispatchResult.errorMessage ?? "HighLevel provider message dispatch failed"
+        );
+  } catch (error) {
+    const isDisconnected = isLineChannelNotConnectedError(error);
+    const errorMessage = isDisconnected
+      ? error.message
+      : error instanceof Error
+        ? error.message
+        : "Unknown HighLevel provider dispatch error";
+
+    logger[isDisconnected ? "warn" : "error"](
+      {
+        ...buildWorkflowIdentifierLogContext({
+          requestId: input.context.requestId,
+          locationId: input.locationId,
+          contactId: input.contactId,
+          workflowId: input.workflowId,
+          mapping: input.mapping,
+          lineChannelId: isDisconnected
+            ? error.lineChannelId ?? input.mapping.line_channel_id
+            : input.mapping.line_channel_id
+        }),
+        ...input.inputLogMetadata,
+        selectedMessageType: "text",
+        channelConnected: false,
+        providerDispatchStatus: "failed",
+        selectedLifecycle: "provider_first_legacy",
+        errorPresent: true,
+        errorCategory: isDisconnected ? "channel_not_connected" : "provider_dispatch"
+      },
+      "Failed to dispatch legacy HighLevel workflow message through the conversation provider"
+    );
+
+    return isDisconnected
+      ? buildResponse(409, "failed", errorMessage)
+      : buildResponse(200, "failed", errorMessage);
+  }
+}
+
 async function deliverWorkflowAttachments(input: {
   context: WorkflowSendLineContext;
   locationId: string;
@@ -1116,8 +1274,36 @@ export async function processGhlWorkflowSendLine(
     return buildResponse(200, "skipped", "No LINE mapping found for contact");
   }
 
+  const rollout = getWorkflowProviderFirstV3TenantRollout(mapping.tenant_id);
+  const useProviderFirstV3 =
+    env.GHL_WORKFLOW_LINE_DELIVERY_MODE === "provider_first" && rollout.tenantAllowlisted;
+  const selectedLifecycle =
+    env.GHL_WORKFLOW_LINE_DELIVERY_MODE === "direct_legacy"
+      ? "direct_legacy"
+      : useProviderFirstV3
+        ? "provider_first_v3"
+        : "provider_first_legacy";
+
+  logger.info(
+    {
+      ...buildWorkflowIdentifierLogContext({
+        requestId: context.requestId,
+        locationId,
+        contactId,
+        workflowId,
+        mapping
+      }),
+      rolloutMode: env.GHL_WORKFLOW_LINE_DELIVERY_MODE,
+      allowlistConfigured: rollout.allowlistConfigured,
+      tenantAllowlistMatch: rollout.tenantAllowlisted,
+      tenantRef: buildShortLogRef(mapping.tenant_id),
+      selectedLifecycle
+    },
+    "Selected GHL workflow LINE delivery lifecycle"
+  );
+
   if (workflowMessage.type === "attachments") {
-    if (env.GHL_WORKFLOW_LINE_DELIVERY_MODE === "provider_first") {
+    if (useProviderFirstV3) {
       return dispatchWorkflowProviderMessage({
         context,
         locationId,
@@ -1340,18 +1526,30 @@ export async function processGhlWorkflowSendLine(
   }
 
   if (env.GHL_WORKFLOW_LINE_DELIVERY_MODE === "provider_first") {
-    return dispatchWorkflowProviderMessage({
-      context,
-      locationId,
-      contactId,
-      workflowId,
-      mapping,
-      message: workflowMessage.text,
-      attachments: [],
-      eventPayload,
-      inputLogMetadata,
-      selectedMessageType: "text"
-    });
+    return useProviderFirstV3
+      ? dispatchWorkflowProviderMessage({
+          context,
+          locationId,
+          contactId,
+          workflowId,
+          mapping,
+          message: workflowMessage.text,
+          attachments: [],
+          eventPayload,
+          inputLogMetadata,
+          selectedMessageType: "text"
+        })
+      : dispatchLegacyWorkflowProviderText({
+          context,
+          locationId,
+          contactId,
+          workflowId,
+          externalMessageId,
+          mapping,
+          message: workflowMessage.text,
+          eventPayload,
+          inputLogMetadata
+        });
   }
 
   try {

@@ -7,6 +7,8 @@ process.env.LOG_LEVEL = "silent";
 process.env.SUPABASE_URL = "https://example.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role";
 process.env.GHL_WORKFLOW_LINE_DELIVERY_MODE = "provider_first";
+process.env.GHL_WORKFLOW_PROVIDER_FIRST_V3_TENANT_ALLOWLIST =
+  "tenant-provider-sensitive,tenant-callback-sensitive";
 process.env.GHL_CUSTOM_PROVIDER_SECRET = "";
 
 const config = require("../dist/config/env");

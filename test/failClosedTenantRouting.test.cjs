@@ -11,6 +11,8 @@ process.env.GHL_LOCATION_API_AUTH_MODE = "private_integration";
 process.env.GHL_PRIVATE_INTEGRATION_TOKEN = "test-private-token";
 process.env.GHL_INBOUND_MESSAGE_TYPE = "Custom";
 process.env.GHL_SEND_CONVERSATION_PROVIDER_ID = "true";
+process.env.GHL_WORKFLOW_LINE_DELIVERY_MODE = "provider_first";
+process.env.GHL_WORKFLOW_PROVIDER_FIRST_V3_TENANT_ALLOWLIST = "tenant_exact";
 
 const repository = require("../dist/services/repository");
 const ghlLocationClient = require("../dist/integrations/ghlLocationClient");

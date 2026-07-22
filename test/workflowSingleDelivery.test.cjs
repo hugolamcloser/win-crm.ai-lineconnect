@@ -7,6 +7,7 @@ process.env.SUPABASE_URL = "https://example.supabase.co";
 process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role";
 process.env.GHL_CUSTOM_PROVIDER_ID = "global_provider_must_not_be_used";
 process.env.GHL_WORKFLOW_LINE_DELIVERY_MODE = "provider_first";
+process.env.GHL_WORKFLOW_PROVIDER_FIRST_V3_TENANT_ALLOWLIST = "tenant_exact";
 
 const config = require("../dist/config/env");
 const supabaseConfig = require("../dist/config/supabase");

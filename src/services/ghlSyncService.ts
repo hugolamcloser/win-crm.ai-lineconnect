@@ -1,5 +1,6 @@
 import { logger } from "../config/logger";
-import { pushLineMessages } from "../integrations/lineClient";
+import { env, getWorkflowProviderFirstV3TenantRollout } from "../config/env";
+import { pushLineMessages, pushLineTextMessage } from "../integrations/lineClient";
 import { updateWorkflowProviderMessageStatus } from "../integrations/ghlWorkflowOutboundMirrorClient";
 import { HttpError } from "../middleware/errors";
 import type { NormalizedGhlOutboundMessage } from "../types/ghl";
@@ -597,6 +598,246 @@ async function processProviderCallback(input: {
   return { status: "processed" };
 }
 
+async function processLegacyProviderCallback(input: {
+  message: NormalizedGhlOutboundMessage;
+  tenantIds: string[];
+  mapping: LineProfileRecord;
+}): Promise<{ status: "processed" | "skipped"; reason?: string }> {
+  const { message, tenantIds, mapping } = input;
+  const tenantId = mapping.tenant_id;
+
+  if (!message.message) {
+    logger.warn(
+      {
+        ...buildProviderCallbackLogContext(message, { tenantId, tenantCount: tenantIds.length }),
+        selectedLifecycle: "provider_first_legacy",
+        messagePresent: false,
+        deliveryClaimStatus: "not_attempted",
+        lineResultStatus: "not_attempted"
+      },
+      "Rejected legacy HighLevel provider callback because text is missing"
+    );
+    throw new Error("Outbound GHL webhook did not include a text message");
+  }
+
+  const sanitizedPayload = buildSanitizedProviderCallbackPayload(message);
+  const lineChannelSelection = await resolveLineChannelForOutbound(tenantId, mapping).catch(
+    async (error) => {
+      if (!isLineChannelNotConnectedError(error)) {
+        throw error;
+      }
+
+      await saveMessageEvent({
+        tenantId,
+        provider: "ghl",
+        direction: "outbound",
+        externalMessageId: `ghl-provider-channel-failure:${message.messageId}`,
+        lineUserId: mapping.line_user_id,
+        ghlMessageId: message.messageId,
+        ghlConversationId: message.conversationId,
+        payload: sanitizedPayload,
+        status: "failed",
+        errorMessage: error.message,
+        requestPayload: {
+          ...sanitizedPayload,
+          selectedLifecycle: "provider_first_legacy",
+          channelTokenSource: error.channelTokenSource,
+          channelConnected: false
+        }
+      });
+
+      logger.warn(
+        {
+          ...buildProviderCallbackLogContext(message, {
+            tenantId,
+            tenantCount: tenantIds.length,
+            lineChannelId: error.lineChannelId ?? mapping.line_channel_id,
+            lineUserId: mapping.line_user_id
+          }),
+          selectedLifecycle: "provider_first_legacy",
+          lineProfileFound: true,
+          channelTokenSource: error.channelTokenSource,
+          channelConnected: false
+        },
+        "Blocked legacy HighLevel outbound message because LINE channel is not connected"
+      );
+
+      throw new HttpError(409, error.message);
+    }
+  );
+
+  logger.info(
+    {
+      ...buildProviderCallbackLogContext(message, {
+        tenantId,
+        tenantCount: tenantIds.length,
+        lineChannelId: lineChannelSelection.lineChannelId,
+        lineUserId: mapping.line_user_id
+      }),
+      selectedLifecycle: "provider_first_legacy",
+      lineProfileFound: true,
+      channelTokenSource: lineChannelSelection.channelTokenSource,
+      channelConnected: true
+    },
+    "Selected LINE channel for legacy HighLevel outbound message"
+  );
+
+  const claimedRequestPayload = {
+    ...sanitizedPayload,
+    selectedLifecycle: "provider_first_legacy",
+    deliveryState: "claimed",
+    channelTokenSource: lineChannelSelection.channelTokenSource,
+    channelConnected: true
+  };
+  let claim: GhlOutboundProviderDeliveryClaimResult;
+
+  try {
+    claim = await claimGhlOutboundProviderDelivery({
+      tenantId,
+      lineUserId: mapping.line_user_id,
+      ghlMessageId: message.messageId as string,
+      ghlConversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
+      payload: sanitizedPayload,
+      requestPayload: claimedRequestPayload
+    });
+  } catch (error) {
+    logger.error(
+      {
+        ...buildProviderCallbackLogContext(message, {
+          tenantId,
+          tenantCount: tenantIds.length,
+          lineUserId: mapping.line_user_id
+        }),
+        selectedLifecycle: "provider_first_legacy",
+        deliveryClaimStatus: "failed",
+        lineResultStatus: "not_attempted",
+        errorCategory: error instanceof Error ? error.name : "unknown"
+      },
+      "Failed to claim legacy HighLevel outbound provider delivery"
+    );
+    throw new HttpError(503, "Unable to claim outbound provider delivery");
+  }
+
+  if (!claim.claimed) {
+    logger.info(
+      {
+        ...buildProviderCallbackLogContext(message, {
+          tenantId,
+          tenantCount: tenantIds.length,
+          lineUserId: mapping.line_user_id
+        }),
+        selectedLifecycle: "provider_first_legacy",
+        deliveryClaimStatus: "already_claimed",
+        lineResultStatus: "not_attempted"
+      },
+      "Skipped legacy provider callback because delivery is already claimed"
+    );
+    return { status: "skipped", reason: "Already claimed" };
+  }
+
+  let lineResult;
+
+  try {
+    lineResult = await pushLineTextMessage(
+      mapping.line_user_id,
+      message.message,
+      lineChannelSelection.channelAccessToken
+    );
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : "Unknown LINE push error";
+
+    try {
+      await finalizeGhlOutboundProviderDelivery({
+        eventId: claim.eventId,
+        tenantId,
+        status: "failed",
+        lineUserId: mapping.line_user_id,
+        ghlMessageId: message.messageId as string,
+        ghlConversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
+        errorMessage,
+        requestPayload: {
+          ...claimedRequestPayload,
+          deliveryState: "failed"
+        }
+      });
+    } catch (finalizeError) {
+      logger.error(
+        {
+          ...buildProviderCallbackLogContext(message, { tenantId, tenantCount: tenantIds.length }),
+          selectedLifecycle: "provider_first_legacy",
+          deliveryClaimEventIdPresent: true,
+          finalizationStatus: "failed",
+          errorCategory: finalizeError instanceof Error ? finalizeError.name : "unknown"
+        },
+        "Failed to mark legacy outbound provider delivery claim as failed"
+      );
+    }
+
+    logger.error(
+      {
+        ...buildProviderCallbackLogContext(message, {
+          tenantId,
+          tenantCount: tenantIds.length,
+          lineUserId: mapping.line_user_id
+        }),
+        selectedLifecycle: "provider_first_legacy",
+        deliveryClaimEventIdPresent: true,
+        lineResultStatus: "failed",
+        errorCategory: error instanceof Error ? error.name : "unknown"
+      },
+      "LINE push failed after legacy outbound provider delivery was claimed"
+    );
+    throw new HttpError(502, "LINE delivery failed after outbound provider claim");
+  }
+
+  try {
+    await finalizeGhlOutboundProviderDelivery({
+      eventId: claim.eventId,
+      tenantId,
+      status: "sent",
+      lineUserId: mapping.line_user_id,
+      ghlMessageId: message.messageId as string,
+      ghlConversationId: message.conversationId ?? mapping.ghl_conversation_id ?? undefined,
+      requestPayload: {
+        ...claimedRequestPayload,
+        deliveryState: "sent",
+        lineMessageIdPresent: hasLogValue(lineResult.messageId)
+      }
+    });
+  } catch (error) {
+    logger.error(
+      {
+        ...buildProviderCallbackLogContext(message, { tenantId, tenantCount: tenantIds.length }),
+        selectedLifecycle: "provider_first_legacy",
+        lineMessageIdPresent: hasLogValue(lineResult.messageId),
+        deliveryClaimEventIdPresent: true,
+        finalizationStatus: "failed",
+        errorCategory: error instanceof Error ? error.name : "unknown"
+      },
+      "LINE push succeeded but legacy delivery claim finalization failed"
+    );
+    throw new HttpError(500, "LINE delivery claim finalization failed");
+  }
+
+  logger.info(
+    {
+      ...buildProviderCallbackLogContext(message, {
+        tenantId,
+        tenantCount: tenantIds.length,
+        lineChannelId: lineChannelSelection.lineChannelId,
+        lineUserId: mapping.line_user_id
+      }),
+      selectedLifecycle: "provider_first_legacy",
+      lineMessageIdPresent: hasLogValue(lineResult.messageId),
+      deliveryClaimStatus: "sent",
+      lineResultStatus: "sent"
+    },
+    "Legacy HighLevel outbound message sent to LINE"
+  );
+
+  return { status: "processed" };
+}
+
 export async function processGhlOutboundWebhook(payload: Record<string, unknown>): Promise<{
   status: "processed" | "skipped";
   reason?: string;
@@ -695,5 +936,26 @@ export async function processGhlOutboundWebhook(payload: Record<string, unknown>
     return { status: "skipped", reason: "No LINE mapping found" };
   }
 
-  return processProviderCallback({ message, tenantIds, mapping });
+  const rollout = getWorkflowProviderFirstV3TenantRollout(mapping.tenant_id);
+  const useProviderFirstV3 =
+    env.GHL_WORKFLOW_LINE_DELIVERY_MODE === "provider_first" && rollout.tenantAllowlisted;
+
+  logger.info(
+    {
+      ...buildProviderCallbackLogContext(message, {
+        tenantId: mapping.tenant_id,
+        tenantCount: tenantIds.length
+      }),
+      rolloutMode: env.GHL_WORKFLOW_LINE_DELIVERY_MODE,
+      allowlistConfigured: rollout.allowlistConfigured,
+      tenantAllowlistMatch: rollout.tenantAllowlisted,
+      tenantRef: buildShortLogRef(mapping.tenant_id),
+      selectedLifecycle: useProviderFirstV3 ? "provider_first_v3" : "provider_first_legacy"
+    },
+    "Selected HighLevel provider callback lifecycle"
+  );
+
+  return useProviderFirstV3
+    ? processProviderCallback({ message, tenantIds, mapping })
+    : processLegacyProviderCallback({ message, tenantIds, mapping });
 }
