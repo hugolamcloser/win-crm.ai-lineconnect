@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { resolveReconciliationFieldPolicy } from "../config/lineContactReconciliationFieldPolicy";
+import { env } from "../config/env";
 import { logger } from "../config/logger";
 import {
   GhlReconciliationReadError,
@@ -15,11 +16,13 @@ import {
 import {
   reconciliationRiskKeys,
   type GhlReconciliationContact,
+  type LineIdentityTagState,
   type LineContactReconciliationPreviewRequest,
   type LineContactReconciliationPreviewResponse,
   type ReconciliationDecision,
   type ReconciliationReadStatus,
-  type ReconciliationRiskKey
+  type ReconciliationRiskKey,
+  type TransferInventoryCounts
 } from "../types/lineContactReconciliation";
 
 const DEFAULT_PREVIEW_DEADLINE_MS = 8_000;
@@ -35,7 +38,12 @@ type PreviewDependencies = {
   readClient: GhlReconciliationReadClient;
   now: () => number;
   overallDeadlineMs: number;
+  getPreviewKeySecret: () => string;
 };
+
+type TransferInventory = LineContactReconciliationPreviewResponse["transferInventory"];
+
+const lineIdentityTagPattern = /^line:([A-Za-z0-9_-]+)$/i;
 
 function emptyRiskStatuses(status: ReconciliationReadStatus = "UNAVAILABLE"): Record<ReconciliationRiskKey, ReconciliationReadStatus> {
   return Object.fromEntries(reconciliationRiskKeys.map((key) => [key, status])) as Record<
@@ -64,14 +72,29 @@ function normalizeComparableValue(value: unknown): string | undefined {
   }
 
   if (Array.isArray(value)) {
-    return value.length > 0 ? JSON.stringify(value) : undefined;
+    return value.length > 0 ? stableSerialize(value) : undefined;
   }
 
   if (value && typeof value === "object") {
-    return Object.keys(value as object).length > 0 ? JSON.stringify(value) : undefined;
+    return Object.keys(value as object).length > 0 ? stableSerialize(value) : undefined;
   }
 
   return undefined;
+}
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableSerialize).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => `${JSON.stringify(key)}:${stableSerialize(entry)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value);
 }
 
 function buildPreviewKey(input: {
@@ -80,12 +103,130 @@ function buildPreviewKey(input: {
   source: string;
   email?: string;
   phone?: string;
-}): string {
+}, secret: string): string {
   return crypto
-    .createHash("sha256")
-    .update([input.locationId, input.currentContactId, input.source, input.email ?? "", input.phone ?? ""].join("\u001f"))
+    .createHmac("sha256", secret)
+    .update("wincrm:line-contact-reconciliation-preview:v1\u0000")
+    .update(stableSerialize([
+      input.locationId,
+      input.currentContactId,
+      input.source,
+      input.email ?? "",
+      input.phone ?? ""
+    ]))
     .digest("hex")
-    .slice(0, 20);
+    .slice(0, 32);
+}
+
+function emptyInventoryCounts(): TransferInventoryCounts {
+  return { masterOnly: null, candidateOnly: null, equal: null, conflicting: null };
+}
+
+function emptyTransferInventory(): TransferInventory {
+  return {
+    standardFields: emptyInventoryCounts(),
+    customFields: emptyInventoryCounts(),
+    candidateOnlyNonIdentityTags: null
+  };
+}
+
+function countValueInventory(
+  masterValues: Map<string, string | undefined>,
+  candidateValues: Map<string, string | undefined>,
+  excludedIds: Set<string> = new Set()
+): TransferInventoryCounts {
+  const counts = { masterOnly: 0, candidateOnly: 0, equal: 0, conflicting: 0 };
+
+  for (const fieldId of new Set([...masterValues.keys(), ...candidateValues.keys()])) {
+    if (excludedIds.has(fieldId)) {
+      continue;
+    }
+
+    const masterValue = masterValues.get(fieldId);
+    const candidateValue = candidateValues.get(fieldId);
+
+    if (masterValue && !candidateValue) {
+      counts.masterOnly += 1;
+    } else if (!masterValue && candidateValue) {
+      counts.candidateOnly += 1;
+    } else if (masterValue && candidateValue && masterValue === candidateValue) {
+      counts.equal += 1;
+    } else if (masterValue && candidateValue) {
+      counts.conflicting += 1;
+    }
+  }
+
+  return counts;
+}
+
+function buildStandardFieldInventory(
+  master: GhlReconciliationContact,
+  candidate: GhlReconciliationContact
+): TransferInventoryCounts {
+  const masterValues = new Map(
+    Object.entries(master.standardFields ?? {}).map(([key, value]) => [key, normalizeComparableValue(value)])
+  );
+  const candidateValues = new Map(
+    Object.entries(candidate.standardFields ?? {}).map(([key, value]) => [key, normalizeComparableValue(value)])
+  );
+  return countValueInventory(masterValues, candidateValues);
+}
+
+function analyzeLineIdentityTags(tags: string[], lineUserId: string): LineIdentityTagState {
+  const identityValues = new Set(
+    tags.flatMap((tag) => {
+      const match = lineIdentityTagPattern.exec(tag.trim());
+      return match?.[1] ? [match[1]] : [];
+    })
+  );
+
+  if (identityValues.size === 0) {
+    return "NONE";
+  }
+
+  if (identityValues.size > 1) {
+    return "AMBIGUOUS";
+  }
+
+  return identityValues.has(lineUserId) ? "MATCH" : "DIFFERENT";
+}
+
+function countCandidateOnlyNonIdentityTags(masterTags: string[], candidateTags: string[]): number {
+  const nonIdentityTags = (tags: string[]): Set<string> => new Set(
+    tags
+      .map((tag) => tag.trim())
+      .filter((tag) => tag && !lineIdentityTagPattern.test(tag))
+      .map((tag) => tag.toLowerCase())
+  );
+  const master = nonIdentityTags(masterTags);
+  return [...nonIdentityTags(candidateTags)].filter((tag) => !master.has(tag)).length;
+}
+
+function collectCustomFieldValues(
+  fields: Array<{ id: string; value: unknown }>
+): { malformed: boolean; values: Map<string, string | undefined> } {
+  const values = new Map<string, string | undefined>();
+
+  if (!Array.isArray(fields)) {
+    return { malformed: true, values };
+  }
+
+  for (const field of fields) {
+    if (!field || typeof field !== "object" || typeof field.id !== "string" || !field.id.trim()) {
+      return { malformed: true, values };
+    }
+
+    const fieldId = field.id.trim();
+    const normalizedValue = normalizeComparableValue(field.value);
+
+    if (values.has(fieldId) && values.get(fieldId) !== normalizedValue) {
+      return { malformed: true, values };
+    }
+
+    values.set(fieldId, normalizedValue);
+  }
+
+  return { malformed: false, values };
 }
 
 function contactMatchesIdentity(contact: GhlReconciliationContact, email?: string, phone?: string): boolean {
@@ -138,6 +279,9 @@ function createResponse(input: {
   fieldStatus?: ReconciliationReadStatus;
   lineIdentityConflict?: boolean | null;
   protectedBusinessConflict?: boolean | null;
+  masterLineIdentityTagState?: LineIdentityTagState;
+  candidateLineIdentityTagState?: LineIdentityTagState;
+  transferInventory?: TransferInventory;
 }): LineContactReconciliationPreviewResponse {
   const riskStatuses = input.riskStatuses ?? emptyRiskStatuses();
 
@@ -152,8 +296,13 @@ function createResponse(input: {
       phoneSupplied: input.phoneSupplied
     },
     distinctCandidateCount: input.distinctCandidateCount ?? null,
-    scopeAvailability: { ...riskStatuses },
+    riskReadStatuses: { ...riskStatuses },
     associatedRecords: { ...riskStatuses },
+    lineIdentityTags: {
+      master: input.masterLineIdentityTagState ?? "NOT_EVALUATED",
+      candidate: input.candidateLineIdentityTagState ?? "NOT_EVALUATED"
+    },
+    transferInventory: input.transferInventory ?? emptyTransferInventory(),
     fieldPolicy: {
       status: input.fieldStatus ?? "UNAVAILABLE",
       lineIdentityConflict: input.lineIdentityConflict ?? null,
@@ -163,6 +312,10 @@ function createResponse(input: {
 }
 
 function auditResult(response: LineContactReconciliationPreviewResponse): LineContactReconciliationPreviewResponse {
+  return response;
+}
+
+function logCompletion(response: LineContactReconciliationPreviewResponse): LineContactReconciliationPreviewResponse {
   logger.info(
     {
       previewKey: response.previewKey,
@@ -180,15 +333,50 @@ function evaluateFieldPolicy(input: {
   master: GhlReconciliationContact;
   candidate: GhlReconciliationContact;
   definitions: Awaited<ReturnType<Awaited<ReturnType<GhlReconciliationReadClient["openSession"]>>["getCustomFieldDefinitions"]>>;
-}): { status: ReconciliationReadStatus; lineIdentityConflict: boolean; protectedBusinessConflict: boolean } {
-  const policy = resolveReconciliationFieldPolicy(input.definitions);
+  configuredLineUserFieldId?: string;
+}): {
+  status: ReconciliationReadStatus;
+  lineIdentityConflict: boolean;
+  protectedBusinessConflict: boolean;
+  inventory: TransferInventoryCounts;
+} {
+  const masterCollection = collectCustomFieldValues(input.master.customFields);
+  const candidateCollection = collectCustomFieldValues(input.candidate.customFields);
+
+  if (masterCollection.malformed || candidateCollection.malformed) {
+    return {
+      status: "MALFORMED",
+      lineIdentityConflict: false,
+      protectedBusinessConflict: false,
+      inventory: emptyInventoryCounts()
+    };
+  }
+
+  let policy;
+
+  try {
+    policy = resolveReconciliationFieldPolicy(input.definitions, input.configuredLineUserFieldId);
+  } catch {
+    return {
+      status: "MALFORMED",
+      lineIdentityConflict: false,
+      protectedBusinessConflict: false,
+      inventory: emptyInventoryCounts()
+    };
+  }
+
   const definedIds = new Set(input.definitions.map((definition) => definition.id));
-  const masterValues = new Map(input.master.customFields.map((field) => [field.id, normalizeComparableValue(field.value)]));
-  const candidateValues = new Map(input.candidate.customFields.map((field) => [field.id, normalizeComparableValue(field.value)]));
+  const masterValues = masterCollection.values;
+  const candidateValues = candidateCollection.values;
   const presentIds = new Set([...masterValues.keys(), ...candidateValues.keys()]);
 
   if ([...presentIds].some((fieldId) => !definedIds.has(fieldId))) {
-    return { status: "MALFORMED", lineIdentityConflict: false, protectedBusinessConflict: false };
+    return {
+      status: "MALFORMED",
+      lineIdentityConflict: false,
+      protectedBusinessConflict: false,
+      inventory: emptyInventoryCounts()
+    };
   }
 
   let lineIdentityConflict = false;
@@ -212,7 +400,8 @@ function evaluateFieldPolicy(input: {
   return {
     status: lineIdentityConflict || protectedBusinessConflict ? "FOUND" : "CLEAR",
     lineIdentityConflict,
-    protectedBusinessConflict
+    protectedBusinessConflict,
+    inventory: countValueInventory(masterValues, candidateValues, policy.ignoredFieldIds)
   };
 }
 
@@ -225,16 +414,24 @@ export function createLineContactReconciliationPreviewService(
     readClient: ghlReconciliationReadClient,
     now: Date.now,
     overallDeadlineMs: DEFAULT_PREVIEW_DEADLINE_MS,
+    getPreviewKeySecret: () => env.WEBHOOK_SHARED_SECRET,
     ...overrides
   };
 
   return async (request) => {
+    const run = async (): Promise<LineContactReconciliationPreviewResponse> => {
     const locationId = request.locationId.trim();
     const currentContactId = request.currentContactId.trim();
     const source = request.source.trim().toLowerCase();
     const email = normalizeEmail(request.identity.email);
     const phone = normalizePhone(request.identity.phone);
-    const previewKey = buildPreviewKey({ locationId, currentContactId, source, email, phone });
+    const previewKeySecret = dependencies.getPreviewKeySecret().trim();
+
+    if (!previewKeySecret) {
+      throw new Error("WEBHOOK_SHARED_SECRET is required for reconciliation Preview keys");
+    }
+
+    const previewKey = buildPreviewKey({ locationId, currentContactId, source, email, phone }, previewKeySecret);
     const responseBase = {
       previewKey,
       emailSupplied: Boolean(email),
@@ -263,12 +460,18 @@ export function createLineContactReconciliationPreviewService(
 
     const deadlineAt = dependencies.now() + dependencies.overallDeadlineMs;
     let timeoutHandle: NodeJS.Timeout | undefined;
+    let deadlineReached = false;
+    const deadlineResult = (): LineContactReconciliationPreviewResponse => auditResult(createResponse({
+      ...responseBase,
+      decision: "MANUAL_COMPLEX",
+      reasonCodes: ["PREVIEW_DEADLINE_EXCEEDED"]
+    }));
+    const canStartGhlRead = (): boolean => !deadlineReached && dependencies.now() < deadlineAt;
     const deadlineResponse = new Promise<LineContactReconciliationPreviewResponse>((resolve) => {
-      timeoutHandle = setTimeout(() => resolve(auditResult(createResponse({
-        ...responseBase,
-        decision: "MANUAL_COMPLEX",
-        reasonCodes: ["PREVIEW_DEADLINE_EXCEEDED"]
-      }))), dependencies.overallDeadlineMs);
+      timeoutHandle = setTimeout(() => {
+        deadlineReached = true;
+        resolve(deadlineResult());
+      }, dependencies.overallDeadlineMs);
     });
 
     const execute = async (): Promise<LineContactReconciliationPreviewResponse> => {
@@ -362,6 +565,10 @@ export function createLineContactReconciliationPreviewService(
 
         let session;
 
+        if (!canStartGhlRead()) {
+          return deadlineResult();
+        }
+
         try {
           session = await dependencies.readClient.openSession(locationId, tenantId, deadlineAt);
         } catch (error) {
@@ -376,9 +583,22 @@ export function createLineContactReconciliationPreviewService(
 
         let master: GhlReconciliationContact;
 
+        if (!canStartGhlRead()) {
+          return deadlineResult();
+        }
+
         try {
           master = await session.getContact(currentContactId, deadlineAt);
         } catch (error) {
+          if (error instanceof GhlReconciliationReadError && error.kind === "NOT_FOUND") {
+            return auditResult(createResponse({
+              ...responseBase,
+              decision: "MAPPING_NOT_FOUND",
+              reasonCodes: ["MAPPED_GHL_CONTACT_NOT_FOUND"],
+              currentContactMatchesMapping: true
+            }));
+          }
+
           return auditResult(createResponse({
             ...responseBase,
             decision: "MANUAL_COMPLEX",
@@ -396,7 +616,33 @@ export function createLineContactReconciliationPreviewService(
           }));
         }
 
+        const masterLineIdentityTagState = analyzeLineIdentityTags(master.tags, lineUserId);
+
+        if (masterLineIdentityTagState === "AMBIGUOUS") {
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "AMBIGUOUS",
+            reasonCodes: ["MAPPED_CONTACT_LINE_IDENTITY_TAGS_AMBIGUOUS"],
+            currentContactMatchesMapping: true,
+            masterLineIdentityTagState
+          }));
+        }
+
+        if (masterLineIdentityTagState === "DIFFERENT") {
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "IDENTITY_CONFLICT",
+            reasonCodes: ["MAPPED_CONTACT_LINE_TAG_DIFFERENT_USER"],
+            currentContactMatchesMapping: true,
+            masterLineIdentityTagState
+          }));
+        }
+
         let searchResults: GhlReconciliationContact[];
+
+        if (!canStartGhlRead()) {
+          return deadlineResult();
+        }
 
         try {
           const searches = [
@@ -409,7 +655,8 @@ export function createLineContactReconciliationPreviewService(
             ...responseBase,
             decision: "MANUAL_COMPLEX",
             reasonCodes: [`CONTACT_SEARCH_${errorToReadStatus(error)}`],
-            currentContactMatchesMapping: true
+            currentContactMatchesMapping: true,
+            masterLineIdentityTagState
           }));
         }
 
@@ -421,7 +668,8 @@ export function createLineContactReconciliationPreviewService(
               ...responseBase,
               decision: "CROSS_TENANT_BLOCKED",
               reasonCodes: ["SEARCH_RESULT_LOCATION_MISMATCH"],
-              currentContactMatchesMapping: true
+              currentContactMatchesMapping: true,
+              masterLineIdentityTagState
             }));
           }
 
@@ -438,7 +686,8 @@ export function createLineContactReconciliationPreviewService(
             decision: "AMBIGUOUS",
             reasonCodes: ["MULTIPLE_DISTINCT_CANDIDATES"],
             currentContactMatchesMapping: true,
-            distinctCandidateCount: distinctMatches.length
+            distinctCandidateCount: distinctMatches.length,
+            masterLineIdentityTagState
           }));
         }
 
@@ -449,21 +698,38 @@ export function createLineContactReconciliationPreviewService(
             decision: alreadyReconciled ? "ALREADY_RECONCILED" : "NO_MATCH",
             reasonCodes: [alreadyReconciled ? "IDENTITY_ALREADY_ON_MAPPED_CONTACT" : "NO_DISTINCT_CANDIDATE"],
             currentContactMatchesMapping: true,
-            distinctCandidateCount: 0
+            distinctCandidateCount: 0,
+            masterLineIdentityTagState
           }));
         }
 
         let candidate: GhlReconciliationContact;
 
+        if (!canStartGhlRead()) {
+          return deadlineResult();
+        }
+
         try {
           candidate = await session.getContact((distinctMatches[0] as GhlReconciliationContact).id, deadlineAt);
         } catch (error) {
+          if (error instanceof GhlReconciliationReadError && error.kind === "NOT_FOUND") {
+            return auditResult(createResponse({
+              ...responseBase,
+              decision: "MANUAL_COMPLEX",
+              reasonCodes: ["CANDIDATE_DISAPPEARED"],
+              currentContactMatchesMapping: true,
+              distinctCandidateCount: 1,
+              masterLineIdentityTagState
+            }));
+          }
+
           return auditResult(createResponse({
             ...responseBase,
             decision: "MANUAL_COMPLEX",
             reasonCodes: [`CANDIDATE_CONTACT_${errorToReadStatus(error)}`],
             currentContactMatchesMapping: true,
-            distinctCandidateCount: 1
+            distinctCandidateCount: 1,
+            masterLineIdentityTagState
           }));
         }
 
@@ -473,7 +739,8 @@ export function createLineContactReconciliationPreviewService(
             decision: "CROSS_TENANT_BLOCKED",
             reasonCodes: ["CANDIDATE_OWNERSHIP_MISMATCH"],
             currentContactMatchesMapping: true,
-            distinctCandidateCount: 1
+            distinctCandidateCount: 1,
+            masterLineIdentityTagState
           }));
         }
 
@@ -483,8 +750,120 @@ export function createLineContactReconciliationPreviewService(
             decision: "MANUAL_COMPLEX",
             reasonCodes: ["CANDIDATE_DETAIL_IDENTITY_MISMATCH"],
             currentContactMatchesMapping: true,
-            distinctCandidateCount: 1
+            distinctCandidateCount: 1,
+            masterLineIdentityTagState
           }));
+        }
+
+        const candidateLineIdentityTagState = analyzeLineIdentityTags(candidate.tags, lineUserId);
+        const transferInventory: TransferInventory = {
+          standardFields: buildStandardFieldInventory(master, candidate),
+          customFields: emptyInventoryCounts(),
+          candidateOnlyNonIdentityTags: countCandidateOnlyNonIdentityTags(master.tags, candidate.tags)
+        };
+        const candidateMapping = await dependencies.countLineProfilesExactlyForTenant(tenantId, {
+          contactId: candidate.id
+        });
+
+        if (candidateMapping.exactCount > 1 || candidateMapping.rows.length > 1) {
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "AMBIGUOUS",
+            reasonCodes: ["CANDIDATE_LINE_MAPPING_AMBIGUOUS"],
+            currentContactMatchesMapping: true,
+            distinctCandidateCount: 1,
+            masterLineIdentityTagState,
+            candidateLineIdentityTagState,
+            transferInventory
+          }));
+        }
+
+        if (candidateMapping.exactCount === 1) {
+          const candidateMappedProfile = candidateMapping.rows[0];
+          const candidateMappedLineUserId = candidateMappedProfile?.line_user_id?.trim();
+
+          if (!candidateMappedProfile || !candidateMappedLineUserId) {
+            return auditResult(createResponse({
+              ...responseBase,
+              decision: "MANUAL_COMPLEX",
+              reasonCodes: ["CANDIDATE_LINE_MAPPING_MALFORMED"],
+              currentContactMatchesMapping: true,
+              distinctCandidateCount: 1,
+              masterLineIdentityTagState,
+              candidateLineIdentityTagState,
+              transferInventory
+            }));
+          }
+
+          if (candidateMappedLineUserId !== lineUserId) {
+            return auditResult(createResponse({
+              ...responseBase,
+              decision: "IDENTITY_CONFLICT",
+              reasonCodes: ["CANDIDATE_MAPPED_TO_DIFFERENT_LINE_USER"],
+              currentContactMatchesMapping: true,
+              distinctCandidateCount: 1,
+              masterLineIdentityTagState,
+              candidateLineIdentityTagState,
+              transferInventory
+            }));
+          }
+
+          if (
+            candidateMappedProfile.id !== mappedProfile.id ||
+            candidateMappedProfile.ghl_contact_id?.trim() !== currentContactId
+          ) {
+            return auditResult(createResponse({
+              ...responseBase,
+              decision: "AMBIGUOUS",
+              reasonCodes: ["CANDIDATE_LINE_MAPPING_AMBIGUOUS"],
+              currentContactMatchesMapping: true,
+              distinctCandidateCount: 1,
+              masterLineIdentityTagState,
+              candidateLineIdentityTagState,
+              transferInventory
+            }));
+          }
+
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "ALREADY_RECONCILED",
+            reasonCodes: ["CANDIDATE_USES_CURRENT_LINE_MAPPING"],
+            currentContactMatchesMapping: true,
+            distinctCandidateCount: 1,
+            masterLineIdentityTagState,
+            candidateLineIdentityTagState,
+            transferInventory
+          }));
+        }
+
+        if (candidateLineIdentityTagState === "AMBIGUOUS") {
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "AMBIGUOUS",
+            reasonCodes: ["CANDIDATE_LINE_IDENTITY_TAGS_AMBIGUOUS"],
+            currentContactMatchesMapping: true,
+            distinctCandidateCount: 1,
+            masterLineIdentityTagState,
+            candidateLineIdentityTagState,
+            transferInventory
+          }));
+        }
+
+        if (candidateLineIdentityTagState === "DIFFERENT") {
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "IDENTITY_CONFLICT",
+            reasonCodes: ["CANDIDATE_LINE_TAG_DIFFERENT_USER"],
+            currentContactMatchesMapping: true,
+            distinctCandidateCount: 1,
+            masterLineIdentityTagState,
+            candidateLineIdentityTagState,
+            transferInventory
+          }));
+        }
+
+        if (!canStartGhlRead()) {
+          return deadlineResult();
         }
 
         const fieldPromise = session.getCustomFieldDefinitions(deadlineAt);
@@ -503,12 +882,19 @@ export function createLineContactReconciliationPreviewService(
         }
 
         const fieldEvaluation = fieldResult.status === "fulfilled"
-          ? evaluateFieldPolicy({ master, candidate, definitions: fieldResult.value })
+          ? evaluateFieldPolicy({
+              master,
+              candidate,
+              definitions: fieldResult.value,
+              configuredLineUserFieldId: env.GHL_LINE_USER_ID_FIELD_ID
+            })
           : {
               status: errorToReadStatus(fieldResult.reason),
               lineIdentityConflict: false,
-              protectedBusinessConflict: false
+              protectedBusinessConflict: false,
+              inventory: emptyInventoryCounts()
             };
+        transferInventory.customFields = fieldEvaluation.inventory;
         const standardIdentityConflict = hasStandardIdentityConflict(master, candidate, email, phone);
         const identityConflict = standardIdentityConflict || fieldEvaluation.lineIdentityConflict;
 
@@ -522,7 +908,10 @@ export function createLineContactReconciliationPreviewService(
             riskStatuses,
             fieldStatus: fieldEvaluation.status,
             lineIdentityConflict: fieldEvaluation.lineIdentityConflict,
-            protectedBusinessConflict: fieldEvaluation.protectedBusinessConflict
+            protectedBusinessConflict: fieldEvaluation.protectedBusinessConflict,
+            masterLineIdentityTagState,
+            candidateLineIdentityTagState,
+            transferInventory
           }));
         }
 
@@ -545,7 +934,10 @@ export function createLineContactReconciliationPreviewService(
             riskStatuses,
             fieldStatus: fieldEvaluation.status,
             lineIdentityConflict: false,
-            protectedBusinessConflict: fieldEvaluation.protectedBusinessConflict
+            protectedBusinessConflict: fieldEvaluation.protectedBusinessConflict,
+            masterLineIdentityTagState,
+            candidateLineIdentityTagState,
+            transferInventory
           }));
         }
 
@@ -558,7 +950,10 @@ export function createLineContactReconciliationPreviewService(
           riskStatuses,
           fieldStatus: "CLEAR",
           lineIdentityConflict: false,
-          protectedBusinessConflict: false
+          protectedBusinessConflict: false,
+          masterLineIdentityTagState,
+          candidateLineIdentityTagState,
+          transferInventory
         }));
       } catch {
         return auditResult(createResponse({
@@ -576,6 +971,9 @@ export function createLineContactReconciliationPreviewService(
         clearTimeout(timeoutHandle);
       }
     }
+    };
+
+    return logCompletion(await run());
   };
 }
 

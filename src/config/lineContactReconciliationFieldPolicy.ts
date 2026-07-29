@@ -7,8 +7,8 @@ type StableFieldReference = {
 
 const lineIdentityReferences: readonly StableFieldReference[] = [
   {
-    fieldKeys: ["contact.line_user_id", "contact.line_userid"],
-    names: ["LINE User ID", "LINE UserId"]
+    fieldKeys: ["contact.line_user_id", "contact.line_userid", "contact.line_id"],
+    names: ["LINE User ID", "LINE UserId", "LINE ID"]
   }
 ];
 
@@ -44,11 +44,41 @@ export type ReconciliationFieldPolicy = {
 };
 
 export function resolveReconciliationFieldPolicy(
-  definitions: GhlReconciliationCustomFieldDefinition[]
+  definitions: GhlReconciliationCustomFieldDefinition[],
+  configuredLineUserFieldId?: string
 ): ReconciliationFieldPolicy {
+  const definitionIds = new Set<string>();
+  const fieldKeys = new Set<string>();
+
+  for (const definition of definitions) {
+    const definitionId = definition.id.trim();
+    const fieldKey = normalizeStableName(definition.fieldKey);
+
+    if (!definitionId || definitionIds.has(definitionId) || (fieldKey && fieldKeys.has(fieldKey))) {
+      throw new Error("Ambiguous HighLevel custom-field metadata");
+    }
+
+    definitionIds.add(definitionId);
+
+    if (fieldKey) {
+      fieldKeys.add(fieldKey);
+    }
+  }
+
+  for (const reference of [...lineIdentityReferences, ...ignoredTemporaryReferences]) {
+    const matchingDefinitionIds = new Set(
+      definitions.filter((definition) => matchesReference(definition, reference)).map((definition) => definition.id)
+    );
+
+    if (matchingDefinitionIds.size > 1) {
+      throw new Error("Ambiguous HighLevel custom-field policy metadata");
+    }
+  }
+
   const lineIdentityFieldIds = new Set<string>();
   const ignoredFieldIds = new Set<string>();
   const protectedBusinessFieldIds = new Set<string>();
+  const normalizedConfiguredFieldId = configuredLineUserFieldId?.trim();
 
   for (const definition of definitions) {
     if (lineIdentityReferences.some((reference) => matchesReference(definition, reference))) {
@@ -62,6 +92,12 @@ export function resolveReconciliationFieldPolicy(
     }
 
     protectedBusinessFieldIds.add(definition.id);
+  }
+
+  if (normalizedConfiguredFieldId && definitionIds.has(normalizedConfiguredFieldId)) {
+    lineIdentityFieldIds.add(normalizedConfiguredFieldId);
+    ignoredFieldIds.delete(normalizedConfiguredFieldId);
+    protectedBusinessFieldIds.delete(normalizedConfiguredFieldId);
   }
 
   return { lineIdentityFieldIds, ignoredFieldIds, protectedBusinessFieldIds };

@@ -199,3 +199,40 @@ test("contact and custom-field readers accept documented nested structures", asy
   assert.deepEqual(contact.customFields, [{ id: "field-test", value: "value" }]);
   assert.equal(definitions[0].fieldKey, "contact.protected");
 });
+
+test("GET contact 404 has a distinct NOT_FOUND error kind", async () => {
+  const client = createGhlReconciliationReadClient({
+    loadToken: async () => token(),
+    fetchImpl: async () => jsonResponse({ message: "not found" }, 404)
+  });
+  const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
+
+  await assert.rejects(
+    () => session.getContact("contact-test", Date.now() + 1_000),
+    (error) => error instanceof GhlReconciliationReadError && error.kind === "NOT_FOUND" && error.statusCode === 404
+  );
+});
+
+test("malformed contact custom fields and duplicate metadata IDs are rejected", async () => {
+  const responses = [
+    { contact: { id: "contact-test", locationId: "location-test", customFields: [{ value: "missing-id" }] } },
+    { customFields: [
+      { id: "duplicate", fieldKey: "contact.one", name: "One" },
+      { id: "duplicate", fieldKey: "contact.two", name: "Two" }
+    ] }
+  ];
+  const client = createGhlReconciliationReadClient({
+    loadToken: async () => token(),
+    fetchImpl: async () => jsonResponse(responses.shift())
+  });
+  const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
+
+  await assert.rejects(
+    () => session.getContact("contact-test", Date.now() + 1_000),
+    (error) => error instanceof GhlReconciliationReadError && error.kind === "MALFORMED"
+  );
+  await assert.rejects(
+    () => session.getCustomFieldDefinitions(Date.now() + 1_000),
+    (error) => error instanceof GhlReconciliationReadError && error.kind === "MALFORMED"
+  );
+});

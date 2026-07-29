@@ -39,6 +39,15 @@ export const reconciliationRiskKeys = [
 
 export type ReconciliationRiskKey = (typeof reconciliationRiskKeys)[number];
 
+export type LineIdentityTagState = "NOT_EVALUATED" | "NONE" | "MATCH" | "DIFFERENT" | "AMBIGUOUS";
+
+export type TransferInventoryCounts = {
+  masterOnly: number | null;
+  candidateOnly: number | null;
+  equal: number | null;
+  conflicting: number | null;
+};
+
 export type LineContactReconciliationPreviewRequest = {
   locationId: string;
   currentContactId: string;
@@ -62,8 +71,17 @@ export type LineContactReconciliationPreviewResponse = {
   currentContactMatchesMapping: boolean | null;
   identity: SanitizedIdentitySummary;
   distinctCandidateCount: number | null;
-  scopeAvailability: Record<ReconciliationRiskKey, ReconciliationReadStatus>;
+  riskReadStatuses: Record<ReconciliationRiskKey, ReconciliationReadStatus>;
   associatedRecords: Record<ReconciliationRiskKey, ReconciliationReadStatus>;
+  lineIdentityTags: {
+    master: LineIdentityTagState;
+    candidate: LineIdentityTagState;
+  };
+  transferInventory: {
+    standardFields: TransferInventoryCounts;
+    customFields: TransferInventoryCounts;
+    candidateOnlyNonIdentityTags: number | null;
+  };
   fieldPolicy: {
     status: ReconciliationReadStatus;
     lineIdentityConflict: boolean | null;
@@ -78,6 +96,7 @@ export type GhlReconciliationContact = {
   phone?: string;
   tags: string[];
   customFields: Array<{ id: string; value: unknown }>;
+  standardFields: Record<string, unknown>;
 };
 
 export type GhlReconciliationCustomFieldDefinition = {

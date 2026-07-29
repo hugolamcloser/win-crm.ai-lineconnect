@@ -40,13 +40,19 @@ test("preview route is protected, returns HTTP 200 decisions, and uses mapping t
     currentContactMatchesMapping: null,
     identity: { emailSupplied: false, phoneSupplied: false },
     distinctCandidateCount: null,
-    scopeAvailability: {
+    riskReadStatuses: {
       conversations: "UNAVAILABLE", notes: "UNAVAILABLE", tasks: "UNAVAILABLE", opportunities: "UNAVAILABLE",
       appointments: "UNAVAILABLE", orders: "UNAVAILABLE", transactions: "UNAVAILABLE", invoices: "UNAVAILABLE"
     },
     associatedRecords: {
       conversations: "UNAVAILABLE", notes: "UNAVAILABLE", tasks: "UNAVAILABLE", opportunities: "UNAVAILABLE",
       appointments: "UNAVAILABLE", orders: "UNAVAILABLE", transactions: "UNAVAILABLE", invoices: "UNAVAILABLE"
+    },
+    lineIdentityTags: { master: "NOT_EVALUATED", candidate: "NOT_EVALUATED" },
+    transferInventory: {
+      standardFields: { masterOnly: null, candidateOnly: null, equal: null, conflicting: null },
+      customFields: { masterOnly: null, candidateOnly: null, equal: null, conflicting: null },
+      candidateOnlyNonIdentityTags: null
     },
     fieldPolicy: { status: "UNAVAILABLE", lineIdentityConflict: null, protectedBusinessConflict: null }
   })));
@@ -63,6 +69,8 @@ test("preview route is protected, returns HTTP 200 decisions, and uses mapping t
     assert.equal(allowed.status, 200);
     assert.equal(allowed.body.decision, "NO_IDENTIFIER");
     assert.equal("currentContactMatchesMapping" in allowed.body, true);
+    assert.equal("riskReadStatuses" in allowed.body, true);
+    assert.equal("scopeAvailability" in allowed.body, false);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     env.WEBHOOK_SHARED_SECRET = originalSecret;

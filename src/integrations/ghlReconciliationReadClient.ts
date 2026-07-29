@@ -9,6 +9,23 @@ import type {
 
 const DEFAULT_READ_TIMEOUT_MS = 2_500;
 const TOKEN_EXPIRY_SAFETY_WINDOW_MS = 30_000;
+const transferableStandardFieldNames = [
+  "firstName",
+  "lastName",
+  "name",
+  "email",
+  "phone",
+  "address1",
+  "city",
+  "state",
+  "country",
+  "postalCode",
+  "website",
+  "companyName",
+  "dateOfBirth",
+  "source",
+  "assignedTo"
+] as const;
 
 const riskScopes: Record<ReconciliationRiskKey, string> = {
   conversations: "conversations.readonly",
@@ -41,6 +58,7 @@ export type GhlReconciliationReadErrorKind =
   | "MISSING_SCOPE"
   | "UNAVAILABLE"
   | "MALFORMED"
+  | "NOT_FOUND"
   | "CROSS_TENANT";
 
 export class GhlReconciliationReadError extends Error {
@@ -137,15 +155,30 @@ function parseContact(payload: unknown): GhlReconciliationContact {
   }
 
   const rawTags = Array.isArray(contact.tags) ? contact.tags : [];
+
+  if (contact.customFields !== undefined && !Array.isArray(contact.customFields)) {
+    throw new GhlReconciliationReadError("MALFORMED", "HighLevel contact custom fields were malformed");
+  }
+
   const rawCustomFields = Array.isArray(contact.customFields) ? contact.customFields : [];
-  const customFields = rawCustomFields.flatMap((entry) => {
+  const customFields = rawCustomFields.map((entry) => {
     if (!isRecord(entry)) {
-      return [];
+      throw new GhlReconciliationReadError("MALFORMED", "HighLevel contact custom-field entry was malformed");
     }
 
     const fieldId = getString(entry.id) ?? getString(entry.fieldId);
-    return fieldId ? [{ id: fieldId, value: entry.value }] : [];
+
+    if (!fieldId) {
+      throw new GhlReconciliationReadError("MALFORMED", "HighLevel contact custom-field entry had no field ID");
+    }
+
+    return { id: fieldId, value: entry.value };
   });
+  const standardFields = Object.fromEntries(
+    transferableStandardFieldNames
+      .filter((fieldName) => contact[fieldName] !== undefined && contact[fieldName] !== null)
+      .map((fieldName) => [fieldName, contact[fieldName]])
+  );
 
   return {
     id,
@@ -153,7 +186,8 @@ function parseContact(payload: unknown): GhlReconciliationContact {
     email: getString(contact.email),
     phone: getString(contact.phone),
     tags: rawTags.map(getString).filter((tag): tag is string => Boolean(tag)),
-    customFields
+    customFields,
+    standardFields
   };
 }
 
@@ -180,7 +214,7 @@ function parseCustomFieldDefinitions(payload: unknown): GhlReconciliationCustomF
     throw new GhlReconciliationReadError("MALFORMED", "HighLevel custom-field response was malformed");
   }
 
-  return entries.map((entry) => {
+  const definitions = entries.map((entry) => {
     if (!isRecord(entry) || !getString(entry.id)) {
       throw new GhlReconciliationReadError("MALFORMED", "HighLevel custom-field definition was malformed");
     }
@@ -192,6 +226,13 @@ function parseCustomFieldDefinitions(payload: unknown): GhlReconciliationCustomF
       model: getString(entry.model)
     };
   });
+  const definitionIds = definitions.map((definition) => definition.id);
+
+  if (new Set(definitionIds).size !== definitionIds.length) {
+    throw new GhlReconciliationReadError("MALFORMED", "HighLevel custom-field definitions contained duplicate IDs");
+  }
+
+  return definitions;
 }
 
 function riskArrayKeys(risk: ReconciliationRiskKey): string[] {
@@ -335,6 +376,10 @@ export function createGhlReconciliationReadClient(
 
           if (response.status === 403) {
             throw new GhlReconciliationReadError("MISSING_SCOPE", "HighLevel denied a required read scope", response.status);
+          }
+
+          if (response.status === 404 && input.method === "GET" && /^\/contacts\/[^/]+$/.test(input.path)) {
+            throw new GhlReconciliationReadError("NOT_FOUND", "HighLevel contact was not found", response.status);
           }
 
           if (!response.ok) {

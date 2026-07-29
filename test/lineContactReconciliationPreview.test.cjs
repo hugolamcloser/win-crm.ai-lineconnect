@@ -1,10 +1,13 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const test = require("node:test");
 
 const {
   createLineContactReconciliationPreviewService
 } = require("../dist/services/lineContactReconciliationPreviewService");
 const { logger } = require("../dist/config/logger");
+const { env } = require("../dist/config/env");
+const { GhlReconciliationReadError } = require("../dist/integrations/ghlReconciliationReadClient");
 
 const locationId = "location-test";
 const currentContactId = "contact-master";
@@ -38,13 +41,18 @@ function profile(overrides = {}) {
 }
 
 function contact(id, overrides = {}) {
-  return {
+  const result = {
     id,
     locationId,
     tags: [],
     customFields: [],
     ...overrides
   };
+
+  result.standardFields = overrides.standardFields ?? Object.fromEntries(
+    [["email", result.email], ["phone", result.phone]].filter(([, value]) => value !== undefined)
+  );
+  return result;
 }
 
 function createHarness(options = {}) {
@@ -65,6 +73,7 @@ function createHarness(options = {}) {
     missingRequiredScopes: [],
     async getContact(id) {
       calls.contacts.push(id);
+      if (options.getContact) return options.getContact(id);
       if (options.getContactError) throw options.getContactError;
       return id === currentContactId ? master : candidate;
     },
@@ -95,6 +104,9 @@ function createHarness(options = {}) {
     async countLineProfilesExactlyForTenant(_tenantId, filter) {
       calls.mappings += 1;
       if (options.mappingResult) return options.mappingResult(filter, calls.mappings);
+      if ("contactId" in filter && filter.contactId !== currentContactId) {
+        return { exactCount: 0, rows: [] };
+      }
       return { exactCount: 1, rows: [mappedProfile] };
     },
     readClient: {
@@ -103,7 +115,8 @@ function createHarness(options = {}) {
         if (options.openSessionError) throw options.openSessionError;
         return session;
       }
-    }
+    },
+    getPreviewKeySecret: () => options.previewKeySecret ?? "preview-test-shared-secret"
   });
 
   return { service, calls };
@@ -261,7 +274,8 @@ test("every non-CLEAR associated-record status forces MANUAL_COMPLEX and is repo
     const result = await service(baseRequest);
     assert.equal(result.decision, "MANUAL_COMPLEX");
     assert.equal(result.associatedRecords.notes, status);
-    assert.equal(result.scopeAvailability.notes, status);
+    assert.equal(result.riskReadStatuses.notes, status);
+    assert.equal("scopeAvailability" in result, false);
   }
 });
 
@@ -307,6 +321,284 @@ test("overall preview deadline returns MANUAL_COMPLEX without a retry", async ()
   assert.deepEqual(result.reasonCodes, ["PREVIEW_DEADLINE_EXCEEDED"]);
   assert.equal(calls.tenants, 1);
   assert.equal(calls.sessions, 0);
+});
+
+test("candidate mapping to another LINE user is an identity conflict", async () => {
+  const { service, calls } = createHarness({
+    mappingResult: (filter) => {
+      if ("contactId" in filter && filter.contactId === candidateContactId) {
+        return { exactCount: 1, rows: [profile({ id: "candidate-profile", line_user_id: "different-line-user", ghl_contact_id: candidateContactId })] };
+      }
+      return { exactCount: 1, rows: [profile()] };
+    }
+  });
+  const result = await service(baseRequest);
+
+  assert.equal(result.decision, "IDENTITY_CONFLICT");
+  assert.deepEqual(result.reasonCodes, ["CANDIDATE_MAPPED_TO_DIFFERENT_LINE_USER"]);
+  assert.equal(calls.risks.length, 0);
+});
+
+test("ambiguous candidate LINE mappings fail before risk reads", async () => {
+  const { service, calls } = createHarness({
+    mappingResult: (filter) => {
+      if ("contactId" in filter && filter.contactId === candidateContactId) {
+        return {
+          exactCount: 2,
+          rows: [
+            profile({ id: "candidate-profile-a", ghl_contact_id: candidateContactId }),
+            profile({ id: "candidate-profile-b", ghl_contact_id: candidateContactId })
+          ]
+        };
+      }
+      return { exactCount: 1, rows: [profile()] };
+    }
+  });
+  const result = await service(baseRequest);
+
+  assert.equal(result.decision, "AMBIGUOUS");
+  assert.deepEqual(result.reasonCodes, ["CANDIDATE_LINE_MAPPING_AMBIGUOUS"]);
+  assert.equal(calls.risks.length, 0);
+});
+
+test("LINE identity tags recognize same, different, multiple, and ordinary line tags without exposing values", async () => {
+  const same = createHarness({
+    master: contact(currentContactId, { tags: [`LINE:${lineUserId}`] }),
+    candidate: contact(candidateContactId, { email: "person@example.com", tags: ["line", `line:${lineUserId}`] })
+  });
+  const sameResult = await same.service(baseRequest);
+  assert.equal(sameResult.decision, "AUTO_SIMPLE");
+  assert.deepEqual(sameResult.lineIdentityTags, { master: "MATCH", candidate: "MATCH" });
+  assert.equal(sameResult.transferInventory.candidateOnlyNonIdentityTags, 1);
+
+  const different = createHarness({
+    candidate: contact(candidateContactId, { email: "person@example.com", tags: ["line:different-user"] })
+  });
+  const differentResult = await different.service(baseRequest);
+  assert.equal(differentResult.decision, "IDENTITY_CONFLICT");
+  assert.deepEqual(differentResult.reasonCodes, ["CANDIDATE_LINE_TAG_DIFFERENT_USER"]);
+
+  const multiple = createHarness({
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      tags: [`line:${lineUserId}`, "line:different-user"]
+    })
+  });
+  const multipleResult = await multiple.service(baseRequest);
+  assert.equal(multipleResult.decision, "AMBIGUOUS");
+  assert.deepEqual(multipleResult.reasonCodes, ["CANDIDATE_LINE_IDENTITY_TAGS_AMBIGUOUS"]);
+
+  const serialized = JSON.stringify([sameResult, differentResult, multipleResult]);
+  assert.doesNotMatch(serialized, new RegExp(lineUserId));
+  assert.doesNotMatch(serialized, /line:different-user/i);
+});
+
+test("LINE ID name and contact.line_id key are confirmed LINE identity fields", async () => {
+  for (const definition of [
+    { id: "line-field", fieldKey: "contact.line_id", name: "Unrelated Name", model: "contact" },
+    { id: "line-field", fieldKey: "contact.other", name: "LINE ID", model: "contact" }
+  ]) {
+    const harness = createHarness({
+      master: contact(currentContactId, { customFields: [{ id: "line-field", value: "line-a" }] }),
+      candidate: contact(candidateContactId, {
+        email: "person@example.com",
+        customFields: [{ id: "line-field", value: "line-b" }]
+      }),
+      fieldDefinitions: [definition]
+    });
+    assert.equal((await harness.service(baseRequest)).decision, "IDENTITY_CONFLICT");
+  }
+});
+
+test("configured LINE field ID is identity only when confirmed in current location metadata", async () => {
+  const originalConfiguredId = env.GHL_LINE_USER_ID_FIELD_ID;
+  env.GHL_LINE_USER_ID_FIELD_ID = "configured-line-field";
+
+  try {
+    const contactPair = {
+      master: contact(currentContactId, { customFields: [{ id: "configured-line-field", value: "line-a" }] }),
+      candidate: contact(candidateContactId, {
+        email: "person@example.com",
+        customFields: [{ id: "configured-line-field", value: "line-b" }]
+      })
+    };
+    const confirmed = createHarness({
+      ...contactPair,
+      fieldDefinitions: [{ id: "configured-line-field", fieldKey: "contact.other", name: "Other", model: "contact" }]
+    });
+    assert.equal((await confirmed.service(baseRequest)).decision, "IDENTITY_CONFLICT");
+
+    const absent = createHarness({
+      ...contactPair,
+      fieldDefinitions: [{ id: "different-field", fieldKey: "contact.other", name: "Other", model: "contact" }]
+    });
+    const absentResult = await absent.service(baseRequest);
+    assert.equal(absentResult.decision, "MANUAL_COMPLEX");
+    assert.equal(absentResult.fieldPolicy.status, "MALFORMED");
+  } finally {
+    env.GHL_LINE_USER_ID_FIELD_ID = originalConfiguredId;
+  }
+});
+
+test("duplicate and malformed custom-field entries fail closed while equal duplicates normalize", async () => {
+  const definition = [{ id: "protected", fieldKey: "contact.protected", name: "Protected", model: "contact" }];
+  const conflictingDuplicate = createHarness({
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      customFields: [{ id: "protected", value: "one" }, { id: "protected", value: "two" }]
+    }),
+    fieldDefinitions: definition
+  });
+  const conflictResult = await conflictingDuplicate.service(baseRequest);
+  assert.equal(conflictResult.decision, "MANUAL_COMPLEX");
+  assert.equal(conflictResult.fieldPolicy.status, "MALFORMED");
+
+  const malformed = createHarness({
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      customFields: [{ value: "missing-id" }]
+    }),
+    fieldDefinitions: definition
+  });
+  assert.equal((await malformed.service(baseRequest)).decision, "MANUAL_COMPLEX");
+
+  const equalDuplicate = createHarness({
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      customFields: [{ id: "protected", value: "same" }, { id: "protected", value: "same" }]
+    }),
+    fieldDefinitions: definition
+  });
+  assert.equal((await equalDuplicate.service(baseRequest)).decision, "AUTO_SIMPLE");
+});
+
+test("duplicate custom-field metadata IDs fail closed", async () => {
+  const harness = createHarness({
+    fieldDefinitions: [
+      { id: "duplicate", fieldKey: "contact.one", name: "One", model: "contact" },
+      { id: "duplicate", fieldKey: "contact.two", name: "Two", model: "contact" }
+    ]
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "MANUAL_COMPLEX");
+  assert.equal(result.fieldPolicy.status, "MALFORMED");
+});
+
+test("mapped and candidate contact 404 responses use distinct safe classifications", async () => {
+  const mappedMissing = createHarness({
+    getContactError: new GhlReconciliationReadError("NOT_FOUND", "not found", 404)
+  });
+  const mappedResult = await mappedMissing.service(baseRequest);
+  assert.equal(mappedResult.decision, "MAPPING_NOT_FOUND");
+  assert.deepEqual(mappedResult.reasonCodes, ["MAPPED_GHL_CONTACT_NOT_FOUND"]);
+
+  const candidateMissing = createHarness({
+    getContact: async (id) => {
+      if (id === currentContactId) return contact(currentContactId);
+      throw new GhlReconciliationReadError("NOT_FOUND", "not found", 404);
+    }
+  });
+  const candidateResult = await candidateMissing.service(baseRequest);
+  assert.equal(candidateResult.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(candidateResult.reasonCodes, ["CANDIDATE_DISAPPEARED"]);
+});
+
+test("transfer inventory returns counts only for standard fields, custom fields, and candidate-only tags", async () => {
+  const master = contact(currentContactId, {
+    tags: ["shared", "master-only"],
+    standardFields: { firstName: "Same", lastName: "Master", city: "Kuala Lumpur", state: "A" },
+    customFields: [
+      { id: "equal", value: "same" },
+      { id: "master-only", value: "master" },
+      { id: "conflict", value: "one" }
+    ]
+  });
+  const candidate = contact(candidateContactId, {
+    email: "person@example.com",
+    tags: ["shared", "candidate-only", "line"],
+    standardFields: { firstName: "Same", phone: "+60123456789", city: "Penang", state: "A" },
+    customFields: [
+      { id: "equal", value: "same" },
+      { id: "candidate-only", value: "candidate" },
+      { id: "conflict", value: "two" }
+    ]
+  });
+  const fieldDefinitions = ["equal", "master-only", "candidate-only", "conflict"].map((id) => ({
+    id,
+    fieldKey: `contact.${id}`,
+    name: id,
+    model: "contact"
+  }));
+  const harness = createHarness({ master, candidate, fieldDefinitions });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(result.transferInventory.standardFields, {
+    masterOnly: 1,
+    candidateOnly: 1,
+    equal: 2,
+    conflicting: 1
+  });
+  assert.deepEqual(result.transferInventory.customFields, {
+    masterOnly: 1,
+    candidateOnly: 1,
+    equal: 1,
+    conflicting: 1
+  });
+  assert.equal(result.transferInventory.candidateOnlyNonIdentityTags, 2);
+  const serialized = JSON.stringify(result.transferInventory);
+  assert.doesNotMatch(
+    serialized,
+    /"(?:Same|Master|Kuala Lumpur|Penang|shared|master-only|candidate-only|conflict|person@example\.com)"/
+  );
+});
+
+test("Preview key is HMAC-based, deterministic, and changes with request input", async () => {
+  const secret = "hmac-preview-test-secret";
+  const first = await createHarness({ previewKeySecret: secret }).service(baseRequest);
+  const same = await createHarness({ previewKeySecret: secret }).service(baseRequest);
+  const different = await createHarness({ previewKeySecret: secret }).service({
+    ...baseRequest,
+    identity: { email: "different@example.com" }
+  });
+  const plainInput = [locationId, currentContactId, "line", "person@example.com", ""].join("\u001f");
+  const plainSha256 = crypto.createHash("sha256").update(plainInput).digest("hex").slice(0, 32);
+
+  assert.equal(first.previewKey, same.previewKey);
+  assert.notEqual(first.previewKey, different.previewKey);
+  assert.notEqual(first.previewKey, plainSha256);
+});
+
+test("deadline winner prevents later reads and emits exactly one completion log", async () => {
+  let releaseMaster;
+  const masterGate = new Promise((resolve) => { releaseMaster = resolve; });
+  const originalInfo = logger.info;
+  const completions = [];
+  logger.info = (...args) => completions.push(args);
+  const harness = createHarness({
+    overallDeadlineMs: 20,
+    getContact: async (id) => {
+      if (id === currentContactId) {
+        await masterGate;
+        return contact(currentContactId);
+      }
+      return contact(candidateContactId, { email: "person@example.com" });
+    }
+  });
+
+  try {
+    const result = await harness.service(baseRequest);
+    assert.equal(result.decision, "MANUAL_COMPLEX");
+    assert.deepEqual(result.reasonCodes, ["PREVIEW_DEADLINE_EXCEEDED"]);
+    releaseMaster();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(harness.calls.searches.length, 0);
+    assert.equal(harness.calls.risks.length, 0);
+    assert.equal(completions.length, 1);
+  } finally {
+    logger.info = originalInfo;
+  }
 });
 
 test("preview key is deterministic and audit logs contain no raw identifiers or identity values", async () => {
