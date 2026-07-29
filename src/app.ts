@@ -13,6 +13,7 @@ import { ghlAppInstallWebhookRouter } from "./routes/ghlAppInstallWebhook";
 import { ghlWebhookRouter } from "./routes/ghlWebhook";
 import { healthRouter } from "./routes/health";
 import { lineWebhookRouter } from "./routes/lineWebhook";
+import { lineContactReconciliationRouter } from "./routes/lineContactReconciliation";
 import { oauthRouter } from "./routes/oauth";
 
 const sensitiveQueryKeyNames = [
@@ -213,6 +214,7 @@ export function createApp() {
   app.use(ghlWebhookRouter);
   app.use(appLineRouter);
   app.use(adminRouter);
+  app.use(lineContactReconciliationRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
