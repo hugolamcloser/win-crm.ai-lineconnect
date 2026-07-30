@@ -38,7 +38,7 @@ The response contains a decision, sanitized reason codes, an HMAC-based preview 
 12. `MANUAL_COMPLEX`
 13. `AUTO_SIMPLE`
 
-`NO_IDENTIFIER` means neither Email nor Phone remains after trimming. It returns HTTP 200 without calling contact search or any associated-record endpoint. `NO_MATCH` means at least one syntactically valid identity signal was supplied but no distinct candidate matched.
+`NO_IDENTIFIER` means neither Email nor Phone remains after trimming. It returns HTTP 200 without calling contact search or any associated-record endpoint. `NO_MATCH` means at least one syntactically valid identity signal was supplied but no distinct candidate matched. `ALREADY_RECONCILED` means the supplied identity is already on the mapped contact and no distinct candidate exists. Master-only merge risks do not replace either result with `MANUAL_COMPLEX`; transfer-risk blocking begins only after one distinct candidate exists.
 
 Zero tenants for a location returns `MAPPING_NOT_FOUND` with `LOCATION_NOT_ONBOARDED`. Multiple tenants return `CROSS_TENANT_BLOCKED`. Zero mapping rows return `MAPPING_NOT_FOUND`, one continues, and two or more return `AMBIGUOUS`. Every exact-count result is checked against the returned row count; inconsistent results fail closed rather than selecting a row.
 
@@ -60,7 +60,7 @@ The endpoint evaluates only `identity` values in the current request. It never r
 
 Field IDs are resolved at runtime from the location's contact custom-field definitions by stable `fieldKey` or exact field name; no tenant-specific field ID is hardcoded.
 
-- Every confirmed LINE identity custom-field value is checked independently against the immutable, tenant-scoped Supabase `lineUserId`. Empty values provide no evidence, an exact value is valid evidence, and any different non-empty value produces `IDENTITY_CONFLICT` without exposing either value.
+- Every confirmed LINE identity custom-field value is checked independently against the immutable, tenant-scoped Supabase `lineUserId`. Empty values provide no evidence, an exact value is valid evidence, and any different non-empty value produces `IDENTITY_CONFLICT` without exposing either value. The mapped master's LINE identity fields are validated from location metadata even when contact search finds no distinct candidate; malformed or unavailable metadata fails closed without associated-record reads.
 - Stable LINE identity metadata includes `contact.line_user_id`, `contact.line_userid`, `contact.line_id`, `LINE User ID`, `LINE UserId`, and `LINE ID`. The configured `GHL_LINE_USER_ID_FIELD_ID` is recognized only when that exact ID exists in the current location metadata.
 - Temporary AI command fields (`AI Event Command`, `AI Tag Command`, and `AI Content Command`) are ignored and are never proposed for transfer.
 - Candidate Email/Phone workflow fields are ignored for comparison and are never used as request identity.
@@ -75,11 +75,13 @@ Malformed tag containers, non-string entries, and empty tag entries fail closed 
 
 After one candidate passes GHL location and identity validation, Preview exact-counts tenant-scoped `line_profiles` rows for the candidate contact. Another LINE user's mapping is `IDENTITY_CONFLICT`; multiple mappings are `AMBIGUOUS`. Because the candidate is already distinct, a candidate mapping to the same immutable LINE user is also `AMBIGUOUS` with `SAME_LINE_USER_MAPPED_TO_MULTIPLE_CONTACTS`. No preferred profile selector is used, and `ALREADY_RECONCILED` is reserved for identity already present on the currently mapped contact when no distinct candidate exists.
 
-Standard contact data uses an explicit policy. Recognized transferable business fields enter the sanitized transfer inventory; IDs, location IDs, timestamps, attribution data, internal links, and other recognized system metadata are ignored rather than treated as transferable. Recognized protected or unsupported business fields force `MANUAL_COMPLEX`. Any non-empty field that is neither classified nor explicitly ignored forces `MANUAL_COMPLEX` with `UNCLASSIFIED_STANDARD_FIELD_PRESENT`. Only counts are returned—never field names or values.
+Standard contact data uses an explicit policy. Recognized transferable business fields enter the sanitized transfer inventory. True system metadata—IDs, location IDs, timestamps, deletion markers, internal links, tags/custom-field containers, and computed validation flags—is ignored rather than treated as transferable. Contact type, followers, attribution data, and business relationship fields are protected business data, not disposable metadata. Any non-empty field that is neither classified nor explicitly ignored forces `MANUAL_COMPLEX` with `UNCLASSIFIED_STANDARD_FIELD_PRESENT` when a distinct candidate exists.
+
+Protected or unsupported standard fields are compared by relationship and returned only as `masterOnly`, `candidateOnly`, `equal`, and `conflicting` counts. Master-only and equal values are safe for Preview because the intended master retains them. Candidate-only values return `CANDIDATE_ONLY_PROTECTED_STANDARD_FIELD`; conflicting values return `CONFLICTING_PROTECTED_STANDARD_FIELD`. Names and values are never returned.
 
 ## Associated-record and scope policy
 
-Only the distinct candidate is checked because the mapped LINE contact is the intended master. Conversations, notes, tasks, opportunities, appointments, orders, transactions, and invoices each report one of:
+Only a distinct candidate is checked because the mapped LINE contact is the intended master. No associated-record endpoint is called for `NO_MATCH` or `ALREADY_RECONCILED`. Conversations, notes, tasks, opportunities, appointments, orders, transactions, and invoices each report one of:
 
 - `CLEAR`: the read succeeded and returned no records.
 - `FOUND`: one or more records exist.
@@ -93,7 +95,7 @@ Required read scopes are `contacts.readonly`, `locations/customFields.readonly`,
 
 Each HighLevel read has a narrow timeout and the whole preview has a fixed deadline. Reads are never retried beyond that deadline, no new read starts after the deadline wins, and completion is logged once. Timeout, partial completion, or uncertainty returns `MANUAL_COMPLEX`. A mapped-contact 404 becomes `MAPPING_NOT_FOUND`; a searched candidate that disappears becomes `MANUAL_COMPLEX`. To preserve the no-write guarantee, Preview uses the stored location OAuth token but does not refresh it; an expired or near-expiry token fails closed.
 
-Transfer inventory is classification-only. It returns counts for master-only, candidate-only, equal, and conflicting standard/custom fields, candidate-only non-identity tags, protected or unsupported standard fields, and unclassified standard fields. It never returns or proposes field names, values, IDs, tags, Email, Phone, LINE IDs, or contact IDs and performs no mutation.
+Transfer inventory is classification-only. It returns counts for master-only, candidate-only, equal, and conflicting transferable standard fields, protected or unsupported standard fields, and custom fields, plus candidate-only non-identity tags and an unclassified-standard-field count. It never returns or proposes field names, values, IDs, tags, Email, Phone, LINE IDs, or contact IDs and performs no mutation.
 
 ## Transport boundary and rollback
 

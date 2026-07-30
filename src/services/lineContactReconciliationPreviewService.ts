@@ -42,6 +42,9 @@ type PreviewDependencies = {
 };
 
 type TransferInventory = LineContactReconciliationPreviewResponse["transferInventory"];
+type CustomFieldDefinitions = Awaited<
+  ReturnType<Awaited<ReturnType<GhlReconciliationReadClient["openSession"]>>["getCustomFieldDefinitions"]>
+>;
 type ExactCountAssessment =
   | { kind: "ZERO" }
   | { kind: "ONE"; row: ExactLineProfileCountResult["rows"][number] }
@@ -132,7 +135,7 @@ function emptyTransferInventory(): TransferInventory {
     standardFields: emptyInventoryCounts(),
     customFields: emptyInventoryCounts(),
     candidateOnlyNonIdentityTags: null,
-    protectedOrUnsupportedStandardFieldCount: null,
+    protectedOrUnsupportedStandardFields: emptyInventoryCounts(),
     unclassifiedStandardFieldCount: null
   };
 }
@@ -197,18 +200,26 @@ function buildStandardFieldInventory(
   return countValueInventory(masterValues, candidateValues);
 }
 
-function buildStandardPolicyCounts(
+function buildProtectedStandardFieldInventory(
   master: GhlReconciliationContact,
   candidate?: GhlReconciliationContact
-): Pick<TransferInventory, "protectedOrUnsupportedStandardFieldCount" | "unclassifiedStandardFieldCount"> {
-  return {
-    protectedOrUnsupportedStandardFieldCount:
-      (master.protectedOrUnsupportedStandardFieldCount ?? 0) +
-      (candidate?.protectedOrUnsupportedStandardFieldCount ?? 0),
-    unclassifiedStandardFieldCount:
-      (master.unclassifiedStandardFieldCount ?? 0) +
-      (candidate?.unclassifiedStandardFieldCount ?? 0)
-  };
+): TransferInventoryCounts {
+  const masterValues = new Map(
+    Object.entries(master.protectedOrUnsupportedStandardFields ?? {})
+      .map(([key, value]) => [key, normalizeComparableValue(value)] as const)
+  );
+  const candidateValues = new Map(
+    Object.entries(candidate?.protectedOrUnsupportedStandardFields ?? {})
+      .map(([key, value]) => [key, normalizeComparableValue(value)] as const)
+  );
+  return countValueInventory(masterValues, candidateValues);
+}
+
+function countUnclassifiedStandardFields(
+  master: GhlReconciliationContact,
+  candidate?: GhlReconciliationContact
+): number {
+  return (master.unclassifiedStandardFieldCount ?? 0) + (candidate?.unclassifiedStandardFieldCount ?? 0);
 }
 
 function analyzeLineIdentityTags(tags: string[], lineUserId: string): LineIdentityTagState {
@@ -371,7 +382,7 @@ function logCompletion(response: LineContactReconciliationPreviewResponse): Line
 function evaluateFieldPolicy(input: {
   master: GhlReconciliationContact;
   candidate: GhlReconciliationContact;
-  definitions: Awaited<ReturnType<Awaited<ReturnType<GhlReconciliationReadClient["openSession"]>>["getCustomFieldDefinitions"]>>;
+  definitions: CustomFieldDefinitions;
   configuredLineUserFieldId?: string;
   trustedLineUserId: string;
 }): {
@@ -462,6 +473,45 @@ function evaluateFieldPolicy(input: {
     lineIdentityReasonCodes,
     protectedBusinessConflict,
     inventory: countValueInventory(masterValues, candidateValues, policy.ignoredFieldIds)
+  };
+}
+
+function evaluateMappedMasterLineIdentityFields(input: {
+  master: GhlReconciliationContact;
+  definitions: CustomFieldDefinitions;
+  configuredLineUserFieldId?: string;
+  trustedLineUserId: string;
+}): {
+  status: ReconciliationReadStatus;
+  lineIdentityConflict: boolean;
+} {
+  const masterCollection = collectCustomFieldValues(input.master.customFields);
+
+  if (masterCollection.malformed) {
+    return { status: "MALFORMED", lineIdentityConflict: false };
+  }
+
+  let policy;
+
+  try {
+    policy = resolveReconciliationFieldPolicy(input.definitions, input.configuredLineUserFieldId);
+  } catch {
+    return { status: "MALFORMED", lineIdentityConflict: false };
+  }
+
+  const definedIds = new Set(input.definitions.map((definition) => definition.id));
+
+  if ([...masterCollection.values.keys()].some((fieldId) => !definedIds.has(fieldId))) {
+    return { status: "MALFORMED", lineIdentityConflict: false };
+  }
+
+  const lineIdentityConflict = [...policy.lineIdentityFieldIds]
+    .map((fieldId) => masterCollection.values.get(fieldId))
+    .some((value) => Boolean(value) && value !== input.trustedLineUserId);
+
+  return {
+    status: lineIdentityConflict ? "FOUND" : "CLEAR",
+    lineIdentityConflict
   };
 }
 
@@ -718,6 +768,44 @@ export function createLineContactReconciliationPreviewService(
           }));
         }
 
+        let fieldDefinitions: CustomFieldDefinitions;
+
+        if (!canStartGhlRead()) {
+          return deadlineResult();
+        }
+
+        try {
+          fieldDefinitions = await session.getCustomFieldDefinitions(deadlineAt);
+        } catch (error) {
+          const fieldStatus = errorToReadStatus(error);
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "MANUAL_COMPLEX",
+            reasonCodes: [`MAPPED_LINE_FIELD_METADATA_${fieldStatus}`],
+            currentContactMatchesMapping: true,
+            masterLineIdentityTagState,
+            fieldStatus
+          }));
+        }
+
+        const mappedMasterFieldEvaluation = evaluateMappedMasterLineIdentityFields({
+          master,
+          definitions: fieldDefinitions,
+          configuredLineUserFieldId: env.GHL_LINE_USER_ID_FIELD_ID,
+          trustedLineUserId: lineUserId
+        });
+
+        if (mappedMasterFieldEvaluation.status === "MALFORMED") {
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "MANUAL_COMPLEX",
+            reasonCodes: ["MAPPED_LINE_FIELD_METADATA_MALFORMED"],
+            currentContactMatchesMapping: true,
+            masterLineIdentityTagState,
+            fieldStatus: "MALFORMED"
+          }));
+        }
+
         let searchResults: GhlReconciliationContact[];
 
         if (!canStartGhlRead()) {
@@ -772,46 +860,39 @@ export function createLineContactReconciliationPreviewService(
         }
 
         if (distinctMatches.length === 0) {
-          const masterStandardPolicyCounts = buildStandardPolicyCounts(master);
-
-          if ((masterStandardPolicyCounts.unclassifiedStandardFieldCount ?? 0) > 0) {
-            return auditResult(createResponse({
-              ...responseBase,
-              decision: "MANUAL_COMPLEX",
-              reasonCodes: ["UNCLASSIFIED_STANDARD_FIELD_PRESENT"],
-              currentContactMatchesMapping: true,
-              distinctCandidateCount: 0,
-              masterLineIdentityTagState,
-              transferInventory: {
-                ...emptyTransferInventory(),
-                ...masterStandardPolicyCounts
-              }
-            }));
-          }
-
-          if ((masterStandardPolicyCounts.protectedOrUnsupportedStandardFieldCount ?? 0) > 0) {
-            return auditResult(createResponse({
-              ...responseBase,
-              decision: "MANUAL_COMPLEX",
-              reasonCodes: ["PROTECTED_OR_UNSUPPORTED_STANDARD_FIELD_PRESENT"],
-              currentContactMatchesMapping: true,
-              distinctCandidateCount: 0,
-              masterLineIdentityTagState,
-              transferInventory: {
-                ...emptyTransferInventory(),
-                ...masterStandardPolicyCounts
-              }
-            }));
-          }
-
           const alreadyReconciled = exactMatches.has(currentContactId) || contactMatchesIdentity(master, email, phone);
+          const transferInventory: TransferInventory = {
+            ...emptyTransferInventory(),
+            protectedOrUnsupportedStandardFields: buildProtectedStandardFieldInventory(master),
+            unclassifiedStandardFieldCount: countUnclassifiedStandardFields(master)
+          };
+
+          if (mappedMasterFieldEvaluation.lineIdentityConflict) {
+            return auditResult(createResponse({
+              ...responseBase,
+              decision: "IDENTITY_CONFLICT",
+              reasonCodes: ["MAPPED_CONTACT_LINE_FIELD_DIFFERENT_USER"],
+              currentContactMatchesMapping: true,
+              distinctCandidateCount: 0,
+              masterLineIdentityTagState,
+              transferInventory,
+              fieldStatus: "FOUND",
+              lineIdentityConflict: true,
+              protectedBusinessConflict: false
+            }));
+          }
+
           return auditResult(createResponse({
             ...responseBase,
             decision: alreadyReconciled ? "ALREADY_RECONCILED" : "NO_MATCH",
             reasonCodes: [alreadyReconciled ? "IDENTITY_ALREADY_ON_MAPPED_CONTACT" : "NO_DISTINCT_CANDIDATE"],
             currentContactMatchesMapping: true,
             distinctCandidateCount: 0,
-            masterLineIdentityTagState
+            masterLineIdentityTagState,
+            transferInventory,
+            fieldStatus: "CLEAR",
+            lineIdentityConflict: false,
+            protectedBusinessConflict: false
           }));
         }
 
@@ -868,12 +949,13 @@ export function createLineContactReconciliationPreviewService(
         }
 
         const candidateLineIdentityTagState = analyzeLineIdentityTags(candidate.tags, lineUserId);
-        const standardPolicyCounts = buildStandardPolicyCounts(master, candidate);
+        const protectedStandardFieldInventory = buildProtectedStandardFieldInventory(master, candidate);
         const transferInventory: TransferInventory = {
           standardFields: buildStandardFieldInventory(master, candidate),
           customFields: emptyInventoryCounts(),
           candidateOnlyNonIdentityTags: countCandidateOnlyNonIdentityTags(master.tags, candidate.tags),
-          ...standardPolicyCounts
+          protectedOrUnsupportedStandardFields: protectedStandardFieldInventory,
+          unclassifiedStandardFieldCount: countUnclassifiedStandardFields(master, candidate)
         };
 
         const candidateMapping = await dependencies.countLineProfilesExactlyForTenant(tenantId, {
@@ -975,66 +1057,13 @@ export function createLineContactReconciliationPreviewService(
           }));
         }
 
-        if ((standardPolicyCounts.unclassifiedStandardFieldCount ?? 0) > 0) {
-          return auditResult(createResponse({
-            ...responseBase,
-            decision: "MANUAL_COMPLEX",
-            reasonCodes: ["UNCLASSIFIED_STANDARD_FIELD_PRESENT"],
-            currentContactMatchesMapping: true,
-            distinctCandidateCount: 1,
-            masterLineIdentityTagState,
-            candidateLineIdentityTagState,
-            transferInventory
-          }));
-        }
-
-        if ((standardPolicyCounts.protectedOrUnsupportedStandardFieldCount ?? 0) > 0) {
-          return auditResult(createResponse({
-            ...responseBase,
-            decision: "MANUAL_COMPLEX",
-            reasonCodes: ["PROTECTED_OR_UNSUPPORTED_STANDARD_FIELD_PRESENT"],
-            currentContactMatchesMapping: true,
-            distinctCandidateCount: 1,
-            masterLineIdentityTagState,
-            candidateLineIdentityTagState,
-            transferInventory
-          }));
-        }
-
-        if (!canStartGhlRead()) {
-          return deadlineResult();
-        }
-
-        const fieldPromise = session.getCustomFieldDefinitions(deadlineAt);
-        const riskPromises = reconciliationRiskKeys.map(async (risk) => [
-          risk,
-          await session.checkAssociatedRecords(risk, candidate.id, deadlineAt)
-        ] as const);
-        const [fieldResult, ...riskResults] = await Promise.allSettled([fieldPromise, ...riskPromises]);
-        const riskStatuses = emptyRiskStatuses();
-
-        for (const riskResult of riskResults) {
-          if (riskResult.status === "fulfilled") {
-            const [risk, status] = riskResult.value as readonly [ReconciliationRiskKey, ReconciliationReadStatus];
-            riskStatuses[risk] = status;
-          }
-        }
-
-        const fieldEvaluation = fieldResult.status === "fulfilled"
-          ? evaluateFieldPolicy({
-              master,
-              candidate,
-              definitions: fieldResult.value,
-              configuredLineUserFieldId: env.GHL_LINE_USER_ID_FIELD_ID,
-              trustedLineUserId: lineUserId
-            })
-          : {
-              status: errorToReadStatus(fieldResult.reason),
-              lineIdentityConflict: false,
-              lineIdentityReasonCodes: [],
-              protectedBusinessConflict: false,
-              inventory: emptyInventoryCounts()
-            };
+        const fieldEvaluation = evaluateFieldPolicy({
+          master,
+          candidate,
+          definitions: fieldDefinitions,
+          configuredLineUserFieldId: env.GHL_LINE_USER_ID_FIELD_ID,
+          trustedLineUserId: lineUserId
+        });
         transferInventory.customFields = fieldEvaluation.inventory;
         const standardIdentityConflict = hasStandardIdentityConflict(master, candidate, email, phone);
         const identityConflict = standardIdentityConflict || fieldEvaluation.lineIdentityConflict;
@@ -1050,7 +1079,6 @@ export function createLineContactReconciliationPreviewService(
             reasonCodes: identityReasonCodes,
             currentContactMatchesMapping: true,
             distinctCandidateCount: 1,
-            riskStatuses,
             fieldStatus: fieldEvaluation.status,
             lineIdentityConflict: fieldEvaluation.lineIdentityConflict,
             protectedBusinessConflict: fieldEvaluation.protectedBusinessConflict,
@@ -1060,16 +1088,91 @@ export function createLineContactReconciliationPreviewService(
           }));
         }
 
-        const nonClearRisks = reconciliationRiskKeys.filter((risk) => riskStatuses[risk] !== "CLEAR");
-
-        if (fieldEvaluation.status !== "CLEAR" || fieldEvaluation.protectedBusinessConflict || nonClearRisks.length > 0) {
+        if (fieldEvaluation.status !== "CLEAR" || fieldEvaluation.protectedBusinessConflict) {
           const reasonCodes = [
             ...(fieldEvaluation.protectedBusinessConflict ? ["PROTECTED_BUSINESS_FIELD_CONFLICT"] : []),
             ...(fieldEvaluation.status !== "CLEAR" && !fieldEvaluation.protectedBusinessConflict
               ? [`FIELD_POLICY_${fieldEvaluation.status}`]
-              : []),
-            ...nonClearRisks.map((risk) => `${risk.toUpperCase()}_${riskStatuses[risk]}`)
+              : [])
           ];
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "MANUAL_COMPLEX",
+            reasonCodes,
+            currentContactMatchesMapping: true,
+            distinctCandidateCount: 1,
+            fieldStatus: fieldEvaluation.status,
+            lineIdentityConflict: false,
+            protectedBusinessConflict: fieldEvaluation.protectedBusinessConflict,
+            masterLineIdentityTagState,
+            candidateLineIdentityTagState,
+            transferInventory
+          }));
+        }
+
+        if ((transferInventory.unclassifiedStandardFieldCount ?? 0) > 0) {
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "MANUAL_COMPLEX",
+            reasonCodes: ["UNCLASSIFIED_STANDARD_FIELD_PRESENT"],
+            currentContactMatchesMapping: true,
+            distinctCandidateCount: 1,
+            fieldStatus: fieldEvaluation.status,
+            lineIdentityConflict: false,
+            protectedBusinessConflict: false,
+            masterLineIdentityTagState,
+            candidateLineIdentityTagState,
+            transferInventory
+          }));
+        }
+
+        const protectedStandardReasonCodes = [
+          ...(protectedStandardFieldInventory.candidateOnly
+            ? ["CANDIDATE_ONLY_PROTECTED_STANDARD_FIELD"]
+            : []),
+          ...(protectedStandardFieldInventory.conflicting
+            ? ["CONFLICTING_PROTECTED_STANDARD_FIELD"]
+            : [])
+        ];
+
+        if (protectedStandardReasonCodes.length > 0) {
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "MANUAL_COMPLEX",
+            reasonCodes: protectedStandardReasonCodes,
+            currentContactMatchesMapping: true,
+            distinctCandidateCount: 1,
+            fieldStatus: fieldEvaluation.status,
+            lineIdentityConflict: false,
+            protectedBusinessConflict: false,
+            masterLineIdentityTagState,
+            candidateLineIdentityTagState,
+            transferInventory
+          }));
+        }
+
+        if (!canStartGhlRead()) {
+          return deadlineResult();
+        }
+
+        const riskPromises = reconciliationRiskKeys.map(async (risk) => [
+          risk,
+          await session.checkAssociatedRecords(risk, candidate.id, deadlineAt)
+        ] as const);
+        const riskResults = await Promise.allSettled(riskPromises);
+        const riskStatuses = emptyRiskStatuses();
+
+        for (const riskResult of riskResults) {
+          if (riskResult.status === "fulfilled") {
+            const [risk, status] = riskResult.value as readonly [ReconciliationRiskKey, ReconciliationReadStatus];
+            riskStatuses[risk] = status;
+          }
+        }
+
+        const nonClearRisks = reconciliationRiskKeys.filter((risk) => riskStatuses[risk] !== "CLEAR");
+
+        if (nonClearRisks.length > 0) {
+          const reasonCodes = nonClearRisks.map((risk) => `${risk.toUpperCase()}_${riskStatuses[risk]}`);
           return auditResult(createResponse({
             ...responseBase,
             decision: "MANUAL_COMPLEX",

@@ -172,7 +172,7 @@ function parseContact(payload: unknown): GhlReconciliationContact {
     return { id: fieldId, value: entry.value };
   });
   const standardFields: Record<string, unknown> = {};
-  let protectedOrUnsupportedStandardFieldCount = 0;
+  const protectedOrUnsupportedStandardFields: Record<string, unknown> = {};
   let unclassifiedStandardFieldCount = 0;
 
   for (const [fieldName, value] of Object.entries(contact)) {
@@ -185,7 +185,7 @@ function parseContact(payload: unknown): GhlReconciliationContact {
         standardFields[fieldName] = value;
         break;
       case "PROTECTED_OR_UNSUPPORTED":
-        protectedOrUnsupportedStandardFieldCount += 1;
+        protectedOrUnsupportedStandardFields[fieldName] = value;
         break;
       case "UNCLASSIFIED":
         unclassifiedStandardFieldCount += 1;
@@ -203,7 +203,7 @@ function parseContact(payload: unknown): GhlReconciliationContact {
     tags,
     customFields,
     standardFields,
-    protectedOrUnsupportedStandardFieldCount,
+    protectedOrUnsupportedStandardFields,
     unclassifiedStandardFieldCount
   };
 }

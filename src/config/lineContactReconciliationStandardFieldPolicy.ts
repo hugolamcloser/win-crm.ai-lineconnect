@@ -28,14 +28,7 @@ const ignoredMetadataFields = new Set([
   "lastactivity",
   "lastactivitydate",
   "lastcontacted",
-  "attributions",
-  "attributionsource",
-  "lastattributionsource",
-  "followers",
-  "followersids",
-  "businessid",
   "validemail",
-  "type",
   "links",
   "_links",
   "tags",
@@ -51,7 +44,14 @@ const protectedOrUnsupportedBusinessFields = new Set([
   "additionalphones",
   "timezone",
   "companyid",
-  "company"
+  "company",
+  "type",
+  "followers",
+  "followersids",
+  "attributions",
+  "attributionsource",
+  "lastattributionsource",
+  "businessid"
 ]);
 
 export type ReconciliationStandardFieldClassification =

@@ -52,7 +52,7 @@ function contact(id, overrides = {}) {
   result.standardFields = overrides.standardFields ?? Object.fromEntries(
     [["email", result.email], ["phone", result.phone]].filter(([, value]) => value !== undefined)
   );
-  result.protectedOrUnsupportedStandardFieldCount = overrides.protectedOrUnsupportedStandardFieldCount ?? 0;
+  result.protectedOrUnsupportedStandardFields = overrides.protectedOrUnsupportedStandardFields ?? {};
   result.unclassifiedStandardFieldCount = overrides.unclassifiedStandardFieldCount ?? 0;
   return result;
 }
@@ -237,6 +237,75 @@ test("NO_MATCH requires valid identity and no distinct match; master identity is
     searchResults: [contact(currentContactId, { email: "person@example.com" })]
   });
   assert.equal((await already.service(baseRequest)).decision, "ALREADY_RECONCILED");
+});
+
+test("realistic mapped-master protected fields do not block NO_MATCH or ALREADY_RECONCILED", async () => {
+  const protectedFields = {
+    source: "LINE Official Account",
+    type: "lead",
+    timezone: "Asia/Kuala_Lumpur",
+    assignedTo: "assigned-user-reference"
+  };
+  const noMatch = createHarness({
+    master: contact(currentContactId, { protectedOrUnsupportedStandardFields: protectedFields }),
+    searchResults: []
+  });
+  const noMatchResult = await noMatch.service(baseRequest);
+  assert.equal(noMatchResult.decision, "NO_MATCH");
+  assert.deepEqual(noMatchResult.transferInventory.protectedOrUnsupportedStandardFields, {
+    masterOnly: 4, candidateOnly: 0, equal: 0, conflicting: 0
+  });
+  assert.equal(noMatch.calls.risks.length, 0);
+
+  const already = createHarness({
+    master: contact(currentContactId, {
+      email: "person@example.com",
+      protectedOrUnsupportedStandardFields: protectedFields
+    }),
+    searchResults: []
+  });
+  const alreadyResult = await already.service(baseRequest);
+  assert.equal(alreadyResult.decision, "ALREADY_RECONCILED");
+  assert.equal(already.calls.risks.length, 0);
+  assert.equal(already.calls.fieldDefinitions, 1);
+});
+
+test("mapped-master LINE identity fields are validated even without a candidate", async () => {
+  const trusted = createHarness({
+    master: contact(currentContactId, { customFields: [{ id: "line-field", value: lineUserId }] }),
+    searchResults: [],
+    fieldDefinitions: [{ id: "line-field", fieldKey: "contact.line_id", name: "LINE ID", model: "contact" }]
+  });
+  const trustedResult = await trusted.service(baseRequest);
+  assert.equal(trustedResult.decision, "NO_MATCH");
+  assert.equal(trustedResult.fieldPolicy.lineIdentityConflict, false);
+  assert.equal(trusted.calls.risks.length, 0);
+
+  const wrong = createHarness({
+    master: contact(currentContactId, { customFields: [{ id: "line-field", value: "different-line-user" }] }),
+    searchResults: [],
+    fieldDefinitions: [{ id: "line-field", fieldKey: "contact.line_id", name: "LINE ID", model: "contact" }]
+  });
+  const wrongResult = await wrong.service(baseRequest);
+  assert.equal(wrongResult.decision, "IDENTITY_CONFLICT");
+  assert.deepEqual(wrongResult.reasonCodes, ["MAPPED_CONTACT_LINE_FIELD_DIFFERENT_USER"]);
+  assert.equal(wrong.calls.risks.length, 0);
+  assert.doesNotMatch(JSON.stringify(wrongResult), /different-line-user|line-user-test/);
+});
+
+test("mapped-master LINE metadata failures are manual without candidate risk reads", async () => {
+  for (const kind of ["MALFORMED", "UNAVAILABLE"]) {
+    const harness = createHarness({
+      searchResults: [],
+      fieldError: new GhlReconciliationReadError(kind, "metadata unavailable")
+    });
+    const result = await harness.service(baseRequest);
+
+    assert.equal(result.decision, "MANUAL_COMPLEX");
+    assert.deepEqual(result.reasonCodes, [`MAPPED_LINE_FIELD_METADATA_${kind}`]);
+    assert.equal(harness.calls.searches.length, 0);
+    assert.equal(harness.calls.risks.length, 0);
+  }
 });
 
 test("multiple distinct candidates return AMBIGUOUS without running risk checks", async () => {
@@ -683,18 +752,71 @@ test("unclassified non-empty standard data is counted and fails closed without e
   assert.doesNotMatch(JSON.stringify(result), new RegExp(`${unknownFieldName}|${unknownValue}`));
 });
 
-test("recognized protected or unsupported standard data fails closed with a sanitized count", async () => {
+test("master-only protected standard data is safe because the intended master retains it", async () => {
+  const harness = createHarness({
+    master: contact(currentContactId, {
+      protectedOrUnsupportedStandardFields: { source: "LINE Official Account" }
+    })
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "AUTO_SIMPLE");
+  assert.deepEqual(result.transferInventory.protectedOrUnsupportedStandardFields, {
+    masterOnly: 1, candidateOnly: 0, equal: 0, conflicting: 0
+  });
+});
+
+test("candidate-only protected standard data requires manual review", async () => {
   const harness = createHarness({
     candidate: contact(candidateContactId, {
       email: "person@example.com",
-      protectedOrUnsupportedStandardFieldCount: 2
+      protectedOrUnsupportedStandardFields: { type: "lead" }
     })
   });
   const result = await harness.service(baseRequest);
 
   assert.equal(result.decision, "MANUAL_COMPLEX");
-  assert.deepEqual(result.reasonCodes, ["PROTECTED_OR_UNSUPPORTED_STANDARD_FIELD_PRESENT"]);
-  assert.equal(result.transferInventory.protectedOrUnsupportedStandardFieldCount, 2);
+  assert.deepEqual(result.reasonCodes, ["CANDIDATE_ONLY_PROTECTED_STANDARD_FIELD"]);
+  assert.deepEqual(result.transferInventory.protectedOrUnsupportedStandardFields, {
+    masterOnly: 0, candidateOnly: 1, equal: 0, conflicting: 0
+  });
+});
+
+test("equal protected standard data is safe for Preview", async () => {
+  const protectedFields = { type: "lead", businessId: "business-reference" };
+  const harness = createHarness({
+    master: contact(currentContactId, { protectedOrUnsupportedStandardFields: protectedFields }),
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      protectedOrUnsupportedStandardFields: protectedFields
+    })
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "AUTO_SIMPLE");
+  assert.deepEqual(result.transferInventory.protectedOrUnsupportedStandardFields, {
+    masterOnly: 0, candidateOnly: 0, equal: 2, conflicting: 0
+  });
+});
+
+test("conflicting protected standard data requires manual review without exposing data", async () => {
+  const harness = createHarness({
+    master: contact(currentContactId, {
+      protectedOrUnsupportedStandardFields: { attributionSource: "line-source-private" }
+    }),
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      protectedOrUnsupportedStandardFields: { attributionSource: "form-source-private" }
+    })
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(result.reasonCodes, ["CONFLICTING_PROTECTED_STANDARD_FIELD"]);
+  assert.deepEqual(result.transferInventory.protectedOrUnsupportedStandardFields, {
+    masterOnly: 0, candidateOnly: 0, equal: 0, conflicting: 1
+  });
+  assert.doesNotMatch(JSON.stringify(result), /attributionSource|line-source-private|form-source-private/);
 });
 
 test("transfer inventory returns counts only for standard fields, custom fields, and candidate-only tags", async () => {
@@ -740,7 +862,9 @@ test("transfer inventory returns counts only for standard fields, custom fields,
     conflicting: 1
   });
   assert.equal(result.transferInventory.candidateOnlyNonIdentityTags, 2);
-  assert.equal(result.transferInventory.protectedOrUnsupportedStandardFieldCount, 0);
+  assert.deepEqual(result.transferInventory.protectedOrUnsupportedStandardFields, {
+    masterOnly: 0, candidateOnly: 0, equal: 0, conflicting: 0
+  });
   assert.equal(result.transferInventory.unclassifiedStandardFieldCount, 0);
   const serialized = JSON.stringify(result.transferInventory);
   assert.doesNotMatch(

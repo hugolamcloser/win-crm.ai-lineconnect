@@ -7,6 +7,9 @@ const {
   createGhlReconciliationReadClient,
   reconciliationRequiredReadScopes
 } = require("../dist/integrations/ghlReconciliationReadClient");
+const {
+  classifyReconciliationStandardField
+} = require("../dist/config/lineContactReconciliationStandardFieldPolicy");
 
 const allScopes = [...reconciliationRequiredReadScopes];
 
@@ -226,11 +229,41 @@ test("standard contact fields are explicitly classified without treating metadat
     firstName: "Transferable",
     email: "person@example.com"
   });
-  assert.equal(contact.protectedOrUnsupportedStandardFieldCount, 1);
+  assert.deepEqual(Object.keys(contact.protectedOrUnsupportedStandardFields).sort(), ["attributionSource", "source"]);
   assert.equal(contact.unclassifiedStandardFieldCount, 1);
   assert.equal(JSON.stringify(contact.standardFields).includes("updatedAt"), false);
   assert.equal(JSON.stringify(contact.standardFields).includes("attributionSource"), false);
   assert.equal(JSON.stringify(contact.standardFields).includes("links"), false);
+});
+
+test("valuable relationship and attribution fields are protected while true system metadata is ignored", () => {
+  for (const fieldName of [
+    "type",
+    "followers",
+    "followersIds",
+    "attributions",
+    "attributionSource",
+    "lastAttributionSource",
+    "businessId"
+  ]) {
+    assert.equal(classifyReconciliationStandardField(fieldName), "PROTECTED_OR_UNSUPPORTED");
+  }
+
+  for (const fieldName of [
+    "id",
+    "contactId",
+    "locationId",
+    "createdAt",
+    "updatedAt",
+    "deleted",
+    "deletedAt",
+    "links",
+    "tags",
+    "customFields",
+    "validEmail"
+  ]) {
+    assert.equal(classifyReconciliationStandardField(fieldName), "IGNORED_METADATA");
+  }
 });
 
 test("malformed contact tags are rejected instead of discarded", async () => {

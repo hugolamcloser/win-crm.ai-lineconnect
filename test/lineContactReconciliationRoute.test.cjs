@@ -53,7 +53,9 @@ test("preview route is protected, returns HTTP 200 decisions, and uses mapping t
       standardFields: { masterOnly: null, candidateOnly: null, equal: null, conflicting: null },
       customFields: { masterOnly: null, candidateOnly: null, equal: null, conflicting: null },
       candidateOnlyNonIdentityTags: null,
-      protectedOrUnsupportedStandardFieldCount: null,
+      protectedOrUnsupportedStandardFields: {
+        masterOnly: null, candidateOnly: null, equal: null, conflicting: null
+      },
       unclassifiedStandardFieldCount: null
     },
     fieldPolicy: { status: "UNAVAILABLE", lineIdentityConflict: null, protectedBusinessConflict: null }
