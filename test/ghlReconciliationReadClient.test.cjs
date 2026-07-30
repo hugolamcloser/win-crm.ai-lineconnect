@@ -200,6 +200,54 @@ test("contact and custom-field readers accept documented nested structures", asy
   assert.equal(definitions[0].fieldKey, "contact.protected");
 });
 
+test("standard contact fields are explicitly classified without treating metadata as transferable", async () => {
+  const client = createGhlReconciliationReadClient({
+    loadToken: async () => token(),
+    fetchImpl: async () => jsonResponse({
+      contact: {
+        id: "contact-test",
+        locationId: "location-test",
+        firstName: "Transferable",
+        email: "person@example.com",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        attributionSource: { source: "metadata" },
+        links: [{ rel: "self" }],
+        source: "protected-source",
+        futureBusinessValue: "unclassified-value",
+        tags: [],
+        customFields: []
+      }
+    })
+  });
+  const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
+  const contact = await session.getContact("contact-test", Date.now() + 1_000);
+
+  assert.deepEqual(contact.standardFields, {
+    firstName: "Transferable",
+    email: "person@example.com"
+  });
+  assert.equal(contact.protectedOrUnsupportedStandardFieldCount, 1);
+  assert.equal(contact.unclassifiedStandardFieldCount, 1);
+  assert.equal(JSON.stringify(contact.standardFields).includes("updatedAt"), false);
+  assert.equal(JSON.stringify(contact.standardFields).includes("attributionSource"), false);
+  assert.equal(JSON.stringify(contact.standardFields).includes("links"), false);
+});
+
+test("malformed contact tags are rejected instead of discarded", async () => {
+  for (const tags of ["line", ["line", 42], ["line", "  "]]) {
+    const client = createGhlReconciliationReadClient({
+      loadToken: async () => token(),
+      fetchImpl: async () => jsonResponse({ contact: { id: "contact-test", locationId: "location-test", tags } })
+    });
+    const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
+
+    await assert.rejects(
+      () => session.getContact("contact-test", Date.now() + 1_000),
+      (error) => error instanceof GhlReconciliationReadError && error.kind === "MALFORMED"
+    );
+  }
+});
+
 test("GET contact 404 has a distinct NOT_FOUND error kind", async () => {
   const client = createGhlReconciliationReadClient({
     loadToken: async () => token(),

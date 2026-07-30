@@ -1,4 +1,8 @@
 import { env, requireEnvValue } from "../config/env";
+import {
+  classifyReconciliationStandardField,
+  hasNonEmptyReconciliationStandardValue
+} from "../config/lineContactReconciliationStandardFieldPolicy";
 import { getGhlOAuthToken, type GhlOAuthTokenRecord } from "../services/repository";
 import type {
   GhlReconciliationContact,
@@ -9,24 +13,6 @@ import type {
 
 const DEFAULT_READ_TIMEOUT_MS = 2_500;
 const TOKEN_EXPIRY_SAFETY_WINDOW_MS = 30_000;
-const transferableStandardFieldNames = [
-  "firstName",
-  "lastName",
-  "name",
-  "email",
-  "phone",
-  "address1",
-  "city",
-  "state",
-  "country",
-  "postalCode",
-  "website",
-  "companyName",
-  "dateOfBirth",
-  "source",
-  "assignedTo"
-] as const;
-
 const riskScopes: Record<ReconciliationRiskKey, string> = {
   conversations: "conversations.readonly",
   notes: "contacts.readonly",
@@ -154,7 +140,18 @@ function parseContact(payload: unknown): GhlReconciliationContact {
     throw new GhlReconciliationReadError("MALFORMED", "HighLevel contact response was malformed");
   }
 
+  if (contact.tags !== undefined && !Array.isArray(contact.tags)) {
+    throw new GhlReconciliationReadError("MALFORMED", "HighLevel contact tags were malformed");
+  }
+
   const rawTags = Array.isArray(contact.tags) ? contact.tags : [];
+  const tags = rawTags.map((tag) => {
+    if (typeof tag !== "string" || !tag.trim()) {
+      throw new GhlReconciliationReadError("MALFORMED", "HighLevel contact tag entry was malformed");
+    }
+
+    return tag.trim();
+  });
 
   if (contact.customFields !== undefined && !Array.isArray(contact.customFields)) {
     throw new GhlReconciliationReadError("MALFORMED", "HighLevel contact custom fields were malformed");
@@ -174,20 +171,40 @@ function parseContact(payload: unknown): GhlReconciliationContact {
 
     return { id: fieldId, value: entry.value };
   });
-  const standardFields = Object.fromEntries(
-    transferableStandardFieldNames
-      .filter((fieldName) => contact[fieldName] !== undefined && contact[fieldName] !== null)
-      .map((fieldName) => [fieldName, contact[fieldName]])
-  );
+  const standardFields: Record<string, unknown> = {};
+  let protectedOrUnsupportedStandardFieldCount = 0;
+  let unclassifiedStandardFieldCount = 0;
+
+  for (const [fieldName, value] of Object.entries(contact)) {
+    if (!hasNonEmptyReconciliationStandardValue(value)) {
+      continue;
+    }
+
+    switch (classifyReconciliationStandardField(fieldName)) {
+      case "TRANSFERABLE":
+        standardFields[fieldName] = value;
+        break;
+      case "PROTECTED_OR_UNSUPPORTED":
+        protectedOrUnsupportedStandardFieldCount += 1;
+        break;
+      case "UNCLASSIFIED":
+        unclassifiedStandardFieldCount += 1;
+        break;
+      case "IGNORED_METADATA":
+        break;
+    }
+  }
 
   return {
     id,
     locationId: getString(contact.locationId) ?? getString(contact.location_id),
     email: getString(contact.email),
     phone: getString(contact.phone),
-    tags: rawTags.map(getString).filter((tag): tag is string => Boolean(tag)),
+    tags,
     customFields,
-    standardFields
+    standardFields,
+    protectedOrUnsupportedStandardFieldCount,
+    unclassifiedStandardFieldCount
   };
 }
 

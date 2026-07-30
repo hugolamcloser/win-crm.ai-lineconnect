@@ -52,6 +52,8 @@ function contact(id, overrides = {}) {
   result.standardFields = overrides.standardFields ?? Object.fromEntries(
     [["email", result.email], ["phone", result.phone]].filter(([, value]) => value !== undefined)
   );
+  result.protectedOrUnsupportedStandardFieldCount = overrides.protectedOrUnsupportedStandardFieldCount ?? 0;
+  result.unclassifiedStandardFieldCount = overrides.unclassifiedStandardFieldCount ?? 0;
   return result;
 }
 
@@ -187,6 +189,45 @@ test("mapping exact-count outcomes never select a preferred duplicate row", asyn
   assert.equal(mismatchResult.currentContactMatchesMapping, false);
 });
 
+test("inconsistent exact-count results fail closed at every mapping boundary", async () => {
+  for (const result of [
+    { exactCount: 0, rows: [profile()] },
+    { exactCount: 1, rows: [] }
+  ]) {
+    const harness = createHarness({ mappingResult: () => result });
+    const preview = await harness.service(baseRequest);
+    assert.equal(preview.decision, "MANUAL_COMPLEX");
+    assert.deepEqual(preview.reasonCodes, ["CONTACT_MAPPING_COUNT_INCONSISTENT"]);
+  }
+
+  const knownDuplicate = createHarness({ mappingResult: () => ({ exactCount: 2, rows: [] }) });
+  assert.equal((await knownDuplicate.service(baseRequest)).decision, "AMBIGUOUS");
+
+  const lineMappingInconsistent = createHarness({
+    mappingResult: (_filter, call) => call === 1
+      ? { exactCount: 1, rows: [profile()] }
+      : { exactCount: 1, rows: [] }
+  });
+  const linePreview = await lineMappingInconsistent.service(baseRequest);
+  assert.equal(linePreview.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(linePreview.reasonCodes, ["LINE_USER_MAPPING_COUNT_INCONSISTENT"]);
+
+  for (const candidateResult of [
+    { exactCount: 0, rows: [profile({ id: "candidate-profile", ghl_contact_id: candidateContactId })] },
+    { exactCount: 1, rows: [] },
+    { exactCount: 2, rows: [] }
+  ]) {
+    const harness = createHarness({
+      mappingResult: (filter) => "contactId" in filter && filter.contactId === candidateContactId
+        ? candidateResult
+        : { exactCount: 1, rows: [profile()] }
+    });
+    const preview = await harness.service(baseRequest);
+    assert.equal(preview.decision, "AMBIGUOUS");
+    assert.deepEqual(preview.reasonCodes, ["CANDIDATE_LINE_MAPPING_AMBIGUOUS"]);
+  }
+});
+
 test("NO_MATCH requires valid identity and no distinct match; master identity is ALREADY_RECONCILED", async () => {
   const noMatch = createHarness({ searchResults: [] });
   assert.equal((await noMatch.service(baseRequest)).decision, "NO_MATCH");
@@ -225,6 +266,88 @@ test("standard and LINE identity conflicts return IDENTITY_CONFLICT", async () =
     fieldDefinitions: [{ id: "line-field", fieldKey: "contact.line_user_id", name: "LINE User ID", model: "contact" }]
   });
   assert.equal((await lineField.service(baseRequest)).decision, "IDENTITY_CONFLICT");
+});
+
+const lineIdentityDefinition = [
+  { id: "line-field", fieldKey: "contact.line_id", name: "LINE ID", model: "contact" }
+];
+
+test("trusted LINE identity field values are accepted as valid evidence", async () => {
+  const harness = createHarness({
+    master: contact(currentContactId, { customFields: [{ id: "line-field", value: lineUserId }] }),
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      customFields: [{ id: "line-field", value: lineUserId }]
+    }),
+    fieldDefinitions: lineIdentityDefinition
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "AUTO_SIMPLE");
+  assert.equal(result.fieldPolicy.lineIdentityConflict, false);
+});
+
+test("master-only wrong LINE identity field is rejected against the trusted mapping", async () => {
+  const harness = createHarness({
+    master: contact(currentContactId, { customFields: [{ id: "line-field", value: "wrong-user" }] }),
+    fieldDefinitions: lineIdentityDefinition
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "IDENTITY_CONFLICT");
+  assert.deepEqual(result.reasonCodes, ["MAPPED_CONTACT_LINE_FIELD_DIFFERENT_USER"]);
+  assert.doesNotMatch(JSON.stringify(result), /wrong-user|line-user-test/);
+});
+
+test("candidate-only wrong LINE identity field is rejected against the trusted mapping", async () => {
+  const harness = createHarness({
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      customFields: [{ id: "line-field", value: "wrong-user" }]
+    }),
+    fieldDefinitions: lineIdentityDefinition
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "IDENTITY_CONFLICT");
+  assert.deepEqual(result.reasonCodes, ["CANDIDATE_LINE_FIELD_DIFFERENT_USER"]);
+});
+
+test("the same wrong LINE identity field on both contacts rejects both owners", async () => {
+  const harness = createHarness({
+    master: contact(currentContactId, { customFields: [{ id: "line-field", value: "same-wrong-user" }] }),
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      customFields: [{ id: "line-field", value: "same-wrong-user" }]
+    }),
+    fieldDefinitions: lineIdentityDefinition
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "IDENTITY_CONFLICT");
+  assert.deepEqual(result.reasonCodes, [
+    "MAPPED_CONTACT_LINE_FIELD_DIFFERENT_USER",
+    "CANDIDATE_LINE_FIELD_DIFFERENT_USER"
+  ]);
+});
+
+test("different wrong LINE identity fields are rejected as conflicting evidence", async () => {
+  const harness = createHarness({
+    master: contact(currentContactId, { customFields: [{ id: "line-field", value: "wrong-master" }] }),
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      customFields: [{ id: "line-field", value: "wrong-candidate" }]
+    }),
+    fieldDefinitions: lineIdentityDefinition
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "IDENTITY_CONFLICT");
+  assert.deepEqual(result.reasonCodes, [
+    "MAPPED_CONTACT_LINE_FIELD_DIFFERENT_USER",
+    "CANDIDATE_LINE_FIELD_DIFFERENT_USER",
+    "LINE_IDENTITY_FIELDS_CONFLICT"
+  ]);
 });
 
 test("protected business conflicts are manual while one-sided, equal, and ignored fields are safe", async () => {
@@ -336,6 +459,25 @@ test("candidate mapping to another LINE user is an identity conflict", async () 
 
   assert.equal(result.decision, "IDENTITY_CONFLICT");
   assert.deepEqual(result.reasonCodes, ["CANDIDATE_MAPPED_TO_DIFFERENT_LINE_USER"]);
+  assert.equal(calls.risks.length, 0);
+});
+
+test("a distinct candidate mapped to the same LINE user is ambiguous", async () => {
+  const { service, calls } = createHarness({
+    mappingResult: (filter) => {
+      if ("contactId" in filter && filter.contactId === candidateContactId) {
+        return {
+          exactCount: 1,
+          rows: [profile({ id: "candidate-profile", ghl_contact_id: candidateContactId })]
+        };
+      }
+      return { exactCount: 1, rows: [profile()] };
+    }
+  });
+  const result = await service(baseRequest);
+
+  assert.equal(result.decision, "AMBIGUOUS");
+  assert.deepEqual(result.reasonCodes, ["SAME_LINE_USER_MAPPED_TO_MULTIPLE_CONTACTS"]);
   assert.equal(calls.risks.length, 0);
 });
 
@@ -504,6 +646,57 @@ test("mapped and candidate contact 404 responses use distinct safe classificatio
   assert.deepEqual(candidateResult.reasonCodes, ["CANDIDATE_DISAPPEARED"]);
 });
 
+test("malformed master and candidate tags fail closed through read classifications", async () => {
+  const mappedMalformed = createHarness({
+    getContactError: new GhlReconciliationReadError("MALFORMED", "malformed tags")
+  });
+  const mappedResult = await mappedMalformed.service(baseRequest);
+  assert.equal(mappedResult.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(mappedResult.reasonCodes, ["MAPPED_CONTACT_MALFORMED"]);
+
+  const candidateMalformed = createHarness({
+    getContact: async (id) => {
+      if (id === currentContactId) return contact(currentContactId);
+      throw new GhlReconciliationReadError("MALFORMED", "malformed tags");
+    }
+  });
+  const candidateResult = await candidateMalformed.service(baseRequest);
+  assert.equal(candidateResult.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(candidateResult.reasonCodes, ["CANDIDATE_CONTACT_MALFORMED"]);
+});
+
+test("unclassified non-empty standard data is counted and fails closed without exposing names or values", async () => {
+  const unknownFieldName = "futureBusinessValue";
+  const unknownValue = "private-unknown-value";
+  const harness = createHarness({
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      [unknownFieldName]: unknownValue,
+      unclassifiedStandardFieldCount: 1
+    })
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(result.reasonCodes, ["UNCLASSIFIED_STANDARD_FIELD_PRESENT"]);
+  assert.equal(result.transferInventory.unclassifiedStandardFieldCount, 1);
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(`${unknownFieldName}|${unknownValue}`));
+});
+
+test("recognized protected or unsupported standard data fails closed with a sanitized count", async () => {
+  const harness = createHarness({
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      protectedOrUnsupportedStandardFieldCount: 2
+    })
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(result.reasonCodes, ["PROTECTED_OR_UNSUPPORTED_STANDARD_FIELD_PRESENT"]);
+  assert.equal(result.transferInventory.protectedOrUnsupportedStandardFieldCount, 2);
+});
+
 test("transfer inventory returns counts only for standard fields, custom fields, and candidate-only tags", async () => {
   const master = contact(currentContactId, {
     tags: ["shared", "master-only"],
@@ -547,6 +740,8 @@ test("transfer inventory returns counts only for standard fields, custom fields,
     conflicting: 1
   });
   assert.equal(result.transferInventory.candidateOnlyNonIdentityTags, 2);
+  assert.equal(result.transferInventory.protectedOrUnsupportedStandardFieldCount, 0);
+  assert.equal(result.transferInventory.unclassifiedStandardFieldCount, 0);
   const serialized = JSON.stringify(result.transferInventory);
   assert.doesNotMatch(
     serialized,

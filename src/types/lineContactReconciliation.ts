@@ -81,6 +81,8 @@ export type LineContactReconciliationPreviewResponse = {
     standardFields: TransferInventoryCounts;
     customFields: TransferInventoryCounts;
     candidateOnlyNonIdentityTags: number | null;
+    protectedOrUnsupportedStandardFieldCount: number | null;
+    unclassifiedStandardFieldCount: number | null;
   };
   fieldPolicy: {
     status: ReconciliationReadStatus;
@@ -97,6 +99,8 @@ export type GhlReconciliationContact = {
   tags: string[];
   customFields: Array<{ id: string; value: unknown }>;
   standardFields: Record<string, unknown>;
+  protectedOrUnsupportedStandardFieldCount: number;
+  unclassifiedStandardFieldCount: number;
 };
 
 export type GhlReconciliationCustomFieldDefinition = {
