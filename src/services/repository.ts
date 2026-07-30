@@ -17,6 +17,11 @@ export type LineProfileRecord = {
   updated_at: string;
 };
 
+export type ExactLineProfileCountResult = {
+  exactCount: number;
+  rows: LineProfileRecord[];
+};
+
 export type LineChannelRecord = {
   id: string;
   tenant_id: string;
@@ -1015,6 +1020,40 @@ export async function findLineProfileByGhlIdsForTenantIds(
   }
 
   return data as LineProfileRecord | null;
+}
+
+export async function countLineProfilesExactlyForTenant(
+  tenantId: string,
+  filter: { contactId: string } | { lineUserId: string }
+): Promise<ExactLineProfileCountResult> {
+  const normalizedTenantId = tenantId.trim();
+  const normalizedContactId = "contactId" in filter ? filter.contactId.trim() : "";
+  const normalizedLineUserId = "lineUserId" in filter ? filter.lineUserId.trim() : "";
+
+  if (!normalizedTenantId || (!normalizedContactId && !normalizedLineUserId)) {
+    return { exactCount: 0, rows: [] };
+  }
+
+  const supabase = getSupabase();
+  let query = supabase
+    .from("line_profiles")
+    .select("*", { count: "exact" })
+    .eq("tenant_id", normalizedTenantId);
+
+  query = normalizedContactId
+    ? query.eq("ghl_contact_id", normalizedContactId)
+    : query.eq("line_user_id", normalizedLineUserId);
+
+  const { data, error, count } = await query.limit(2);
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return {
+    exactCount: count ?? (data ?? []).length,
+    rows: (data ?? []) as LineProfileRecord[]
+  };
 }
 
 export async function findLatestLineProfileWithGhlContact(): Promise<LineProfileRecord | null> {

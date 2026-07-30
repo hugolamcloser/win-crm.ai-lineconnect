@@ -2,6 +2,8 @@
 
 Node.js, Express, TypeScript, and Supabase middleware for syncing LINE Official Account conversations with GoHighLevel Conversations through a custom Conversation Provider.
 
+The read-only LINE contact reconciliation Preview design and internal endpoint contract are documented in [`docs/line-contact-reconciliation-preview.md`](docs/line-contact-reconciliation-preview.md). PR1 performs classification only and does not implement Apply Mode.
+
 The service accepts inbound LINE webhooks, validates the `x-line-signature` HMAC, saves LINE profiles in Supabase, creates or reuses mapped GHL contacts, forwards inbound messages into HighLevel, receives outbound provider webhooks from HighLevel, and pushes replies back to LINE.
 
 ## What Is Included
