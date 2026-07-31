@@ -29,6 +29,34 @@ function token(scopes = allScopes) {
   };
 }
 
+function oauthSession(initialToken, refreshToken = initialToken) {
+  let activeToken = initialToken;
+  let refreshAttempted = false;
+  let refreshPromise;
+
+  return {
+    getActiveToken: () => activeToken,
+    hasRefreshed: () => refreshAttempted,
+    refresh: () => {
+      refreshAttempted = true;
+      refreshPromise ??= Promise.resolve(
+        typeof refreshToken === "function" ? refreshToken() : refreshToken
+      ).then((nextToken) => {
+        activeToken = nextToken;
+        return activeToken;
+      });
+      return refreshPromise;
+    }
+  };
+}
+
+function openSessionWithToken(initialToken, refreshToken = initialToken) {
+  return async () => oauthSession(
+    typeof initialToken === "function" ? await initialToken() : initialToken,
+    refreshToken
+  );
+}
+
 function jsonResponse(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -64,7 +92,7 @@ test("transport allowlist permits declared GETs and only POST /contacts/search",
 test("search dispatches one exact allowed POST with location-scoped filter", async () => {
   const calls = [];
   const client = createGhlReconciliationReadClient({
-    loadToken: async () => token(),
+    openOAuthSession: openSessionWithToken(token()),
     fetchImpl: async (url, init) => {
       calls.push({ url: new URL(url), init });
       return jsonResponse({ contacts: [] });
@@ -85,10 +113,125 @@ test("search dispatches one exact allowed POST with location-scoped filter", asy
   });
 });
 
+test("valid-looking token receiving 401 refreshes once and retries the exact read once", async () => {
+  const requests = [];
+  let refreshCount = 0;
+  const initial = token(["contacts.readonly"]);
+  const refreshed = { ...token(), access_token: "refreshed-test-token" };
+  const client = createGhlReconciliationReadClient({
+    openOAuthSession: async () => oauthSession(initial, () => {
+      refreshCount += 1;
+      return refreshed;
+    }),
+    fetchImpl: async (url, init) => {
+      requests.push({
+        path: new URL(url).pathname,
+        method: init.method,
+        usedInitialToken: init.headers.Authorization === `Bearer ${initial.access_token}`,
+        usedRefreshedToken: init.headers.Authorization === `Bearer ${refreshed.access_token}`
+      });
+      return requests.length === 1
+        ? jsonResponse({ message: "expired" }, 401)
+        : jsonResponse({ contact: { id: "contact-test", locationId: "location-test" } });
+    }
+  });
+  const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
+  assert.equal(session.missingRequiredScopes.includes("conversations.readonly"), true);
+  const contact = await session.getContact("contact-test", Date.now() + 1_000);
+
+  assert.equal(contact.id, "contact-test");
+  assert.equal(refreshCount, 1);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].path, requests[1].path);
+  assert.equal(requests[0].method, requests[1].method);
+  assert.equal(requests[0].usedInitialToken, true);
+  assert.equal(requests[1].usedRefreshedToken, true);
+  assert.equal(session.missingRequiredScopes.includes("conversations.readonly"), false);
+});
+
+test("concurrent 401 reads share one refresh and each retries at most once", async () => {
+  let requestCount = 0;
+  let refreshCount = 0;
+  const initial = token();
+  const refreshed = { ...token(), access_token: "refreshed-test-token" };
+  const client = createGhlReconciliationReadClient({
+    openOAuthSession: async () => oauthSession(initial, async () => {
+      refreshCount += 1;
+      await new Promise((resolve) => setImmediate(resolve));
+      return refreshed;
+    }),
+    fetchImpl: async (url) => {
+      requestCount += 1;
+      if (requestCount <= 2) {
+        return jsonResponse({ message: "expired" }, 401);
+      }
+      const id = new URL(url).pathname.split("/").pop();
+      return jsonResponse({ contact: { id, locationId: "location-test" } });
+    }
+  });
+  const session = await client.openSession("location-test", "tenant-test", Date.now() + 2_000);
+  const [first, second] = await Promise.all([
+    session.getContact("contact-one", Date.now() + 2_000),
+    session.getContact("contact-two", Date.now() + 2_000)
+  ]);
+
+  assert.deepEqual([first.id, second.id].sort(), ["contact-one", "contact-two"]);
+  assert.equal(refreshCount, 1);
+  assert.equal(requestCount, 4);
+});
+
+test("401 after the session token was already refreshed fails without a second retry", async () => {
+  let requestCount = 0;
+  let refreshCount = 0;
+  const refreshed = { ...token(), access_token: "refreshed-test-token" };
+  const client = createGhlReconciliationReadClient({
+    openOAuthSession: async () => oauthSession(refreshed, () => {
+      refreshCount += 1;
+      return refreshed;
+    }),
+    fetchImpl: async () => {
+      requestCount += 1;
+      return jsonResponse({ message: "still unauthorized" }, 401);
+    }
+  });
+  const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
+
+  await assert.rejects(
+    () => session.getContact("contact-test", Date.now() + 1_000),
+    (error) => error instanceof GhlReconciliationReadError && error.kind === "UNAVAILABLE"
+  );
+  assert.equal(refreshCount, 1);
+  assert.equal(requestCount, 1);
+});
+
+test("deadline exhaustion after refresh prevents the retry read", async () => {
+  const start = Date.now();
+  let clock = start;
+  let requestCount = 0;
+  const initial = token();
+  const refreshed = { ...token(), access_token: "refreshed-test-token" };
+  const client = createGhlReconciliationReadClient({
+    openOAuthSession: async () => oauthSession(initial, refreshed),
+    now: () => clock,
+    fetchImpl: async () => {
+      requestCount += 1;
+      clock = start + 1_001;
+      return jsonResponse({ message: "expired" }, 401);
+    }
+  });
+  const session = await client.openSession("location-test", "tenant-test", start + 1_000);
+
+  await assert.rejects(
+    () => session.getContact("contact-test", start + 1_000),
+    (error) => error instanceof GhlReconciliationReadError && error.kind === "UNAVAILABLE"
+  );
+  assert.equal(requestCount, 1);
+});
+
 test("missing stored scopes fail before fetch and are exposed without credentials", async () => {
   let fetchCount = 0;
   const client = createGhlReconciliationReadClient({
-    loadToken: async () => token(["contacts.readonly"]),
+    openOAuthSession: openSessionWithToken(token(["contacts.readonly"])),
     fetchImpl: async () => {
       fetchCount += 1;
       return jsonResponse({ conversations: [] });
@@ -101,19 +244,19 @@ test("missing stored scopes fail before fetch and are exposed without credential
   assert.equal(fetchCount, 0);
 });
 
-test("tenant/location token mismatch is blocked and expired tokens are not refreshed", async () => {
-  const mismatched = createGhlReconciliationReadClient({ loadToken: async () => token() });
+test("unusable or mismatched tokens returned by the OAuth opener fail closed", async () => {
+  const mismatched = createGhlReconciliationReadClient({ openOAuthSession: openSessionWithToken(token()) });
   await assert.rejects(
     () => mismatched.openSession("location-test", "tenant-other", Date.now() + 1_000),
-    (error) => error instanceof GhlReconciliationReadError && error.kind === "CROSS_TENANT"
+    (error) => error instanceof GhlReconciliationReadError && error.kind === "UNAVAILABLE"
   );
 
   let loads = 0;
   const expired = createGhlReconciliationReadClient({
-    loadToken: async () => {
+    openOAuthSession: openSessionWithToken(async () => {
       loads += 1;
       return { ...token(), expires_at: "2000-01-01T00:00:00.000Z" };
-    }
+    })
   });
   await assert.rejects(
     () => expired.openSession("location-test", "tenant-test", Date.now() + 1_000),
@@ -125,7 +268,7 @@ test("tenant/location token mismatch is blocked and expired tokens are not refre
 test("per-read timeout aborts once and returns UNAVAILABLE without retry", async () => {
   let fetchCount = 0;
   const client = createGhlReconciliationReadClient({
-    loadToken: async () => token(),
+    openOAuthSession: openSessionWithToken(token()),
     perReadTimeoutMs: 10,
     fetchImpl: async (_url, init) => {
       fetchCount += 1;
@@ -149,7 +292,7 @@ test("associated record parsers report CLEAR, FOUND, MALFORMED, and MISSING_SCOP
   ];
   let index = 0;
   const client = createGhlReconciliationReadClient({
-    loadToken: async () => token(),
+    openOAuthSession: openSessionWithToken(token()),
     fetchImpl: async () => jsonResponse(payloads[index++])
   });
   const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
@@ -159,7 +302,7 @@ test("associated record parsers report CLEAR, FOUND, MALFORMED, and MISSING_SCOP
   assert.equal(await session.checkAssociatedRecords("notes", "contact-test", Date.now() + 1_000), "MALFORMED");
 
   const denied = createGhlReconciliationReadClient({
-    loadToken: async () => token(),
+    openOAuthSession: openSessionWithToken(token()),
     fetchImpl: async () => jsonResponse({ error: "denied" }, 403)
   });
   const deniedSession = await denied.openSession("location-test", "tenant-test", Date.now() + 1_000);
@@ -172,7 +315,7 @@ test("pagination uncertainty is malformed and count metadata cannot be mistaken 
     { notes: [], total: 1 }
   ];
   const client = createGhlReconciliationReadClient({
-    loadToken: async () => token(),
+    openOAuthSession: openSessionWithToken(token()),
     fetchImpl: async () => jsonResponse(responses.shift())
   });
   const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
@@ -190,7 +333,7 @@ test("contact and custom-field readers accept documented nested structures", asy
     { customFields: [{ id: "field-test", name: "Protected", fieldKey: "contact.protected", model: "contact" }] }
   ];
   const client = createGhlReconciliationReadClient({
-    loadToken: async () => token(),
+    openOAuthSession: openSessionWithToken(token()),
     fetchImpl: async () => jsonResponse(responses.shift())
   });
   const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
@@ -205,7 +348,7 @@ test("contact and custom-field readers accept documented nested structures", asy
 
 test("standard contact fields are explicitly classified without treating metadata as transferable", async () => {
   const client = createGhlReconciliationReadClient({
-    loadToken: async () => token(),
+    openOAuthSession: openSessionWithToken(token()),
     fetchImpl: async () => jsonResponse({
       contact: {
         id: "contact-test",
@@ -269,7 +412,7 @@ test("valuable relationship and attribution fields are protected while true syst
 test("malformed contact tags are rejected instead of discarded", async () => {
   for (const tags of ["line", ["line", 42], ["line", "  "]]) {
     const client = createGhlReconciliationReadClient({
-      loadToken: async () => token(),
+      openOAuthSession: openSessionWithToken(token()),
       fetchImpl: async () => jsonResponse({ contact: { id: "contact-test", locationId: "location-test", tags } })
     });
     const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
@@ -283,7 +426,7 @@ test("malformed contact tags are rejected instead of discarded", async () => {
 
 test("GET contact 404 has a distinct NOT_FOUND error kind", async () => {
   const client = createGhlReconciliationReadClient({
-    loadToken: async () => token(),
+    openOAuthSession: openSessionWithToken(token()),
     fetchImpl: async () => jsonResponse({ message: "not found" }, 404)
   });
   const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
@@ -303,7 +446,7 @@ test("malformed contact custom fields and duplicate metadata IDs are rejected", 
     ] }
   ];
   const client = createGhlReconciliationReadClient({
-    loadToken: async () => token(),
+    openOAuthSession: openSessionWithToken(token()),
     fetchImpl: async () => jsonResponse(responses.shift())
   });
   const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);

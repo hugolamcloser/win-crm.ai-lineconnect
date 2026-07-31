@@ -3,7 +3,13 @@ import {
   classifyReconciliationStandardField,
   hasNonEmptyReconciliationStandardValue
 } from "../config/lineContactReconciliationStandardFieldPolicy";
-import { getGhlOAuthToken, type GhlOAuthTokenRecord } from "../services/repository";
+import {
+  GHL_RECONCILIATION_TOKEN_SAFETY_WINDOW_MS,
+  openGhlReconciliationPreviewOAuthSession,
+  type GhlReconciliationPreviewOAuthSession,
+  type OpenGhlReconciliationPreviewOAuthSessionInput
+} from "../services/ghlOAuthService";
+import type { GhlOAuthTokenRecord } from "../services/repository";
 import type {
   GhlReconciliationContact,
   GhlReconciliationCustomFieldDefinition,
@@ -12,7 +18,6 @@ import type {
 } from "../types/lineContactReconciliation";
 
 const DEFAULT_READ_TIMEOUT_MS = 2_500;
-const TOKEN_EXPIRY_SAFETY_WINDOW_MS = 30_000;
 const riskScopes: Record<ReconciliationRiskKey, string> = {
   conversations: "conversations.readonly",
   notes: "contacts.readonly",
@@ -314,7 +319,9 @@ export type GhlReconciliationReadClient = {
 };
 
 type ReadClientDependencies = {
-  loadToken: (locationId: string) => Promise<GhlOAuthTokenRecord | null>;
+  openOAuthSession: (
+    input: OpenGhlReconciliationPreviewOAuthSessionInput
+  ) => Promise<GhlReconciliationPreviewOAuthSession>;
   fetchImpl: typeof fetch;
   now: () => number;
   perReadTimeoutMs: number;
@@ -324,7 +331,7 @@ export function createGhlReconciliationReadClient(
   overrides: Partial<ReadClientDependencies> = {}
 ): GhlReconciliationReadClient {
   const dependencies: ReadClientDependencies = {
-    loadToken: getGhlOAuthToken,
+    openOAuthSession: openGhlReconciliationPreviewOAuthSession,
     fetchImpl: fetch,
     now: Date.now,
     perReadTimeoutMs: DEFAULT_READ_TIMEOUT_MS,
@@ -333,40 +340,55 @@ export function createGhlReconciliationReadClient(
 
   return {
     async openSession(locationId, tenantId, overallDeadlineAt) {
-      const token = await dependencies.loadToken(locationId);
+      let oauthSession: GhlReconciliationPreviewOAuthSession;
 
-      if (!token) {
-        throw new GhlReconciliationReadError("UNAVAILABLE", "No stored location OAuth token is available");
+      try {
+        oauthSession = await dependencies.openOAuthSession({
+          locationId,
+          expectedTenantId: tenantId,
+          overallDeadlineAt
+        });
+      } catch {
+        throw new GhlReconciliationReadError("UNAVAILABLE", "Location OAuth token was unavailable for reconciliation Preview");
       }
 
-      if (token.location_id !== locationId || token.tenant_id !== tenantId) {
-        throw new GhlReconciliationReadError("CROSS_TENANT", "Stored OAuth context did not match the resolved tenant and location");
-      }
+      let activeToken = oauthSession.getActiveToken();
+      let activeScopes = new Set<string>();
 
-      const expiry = new Date(token.expires_at).getTime();
+      const activateToken = (token: GhlOAuthTokenRecord): void => {
+        const expiry = new Date(token.expires_at).getTime();
 
-      if (!Number.isFinite(expiry) || expiry <= dependencies.now() + TOKEN_EXPIRY_SAFETY_WINDOW_MS) {
-        throw new GhlReconciliationReadError("UNAVAILABLE", "Stored OAuth token is expired or too close to expiry for a read-only preview");
-      }
+        if (
+          token.location_id !== locationId ||
+          token.tenant_id !== tenantId ||
+          !token.access_token.trim() ||
+          !Number.isFinite(expiry) ||
+          expiry <= dependencies.now() + GHL_RECONCILIATION_TOKEN_SAFETY_WINDOW_MS
+        ) {
+          throw new GhlReconciliationReadError("UNAVAILABLE", "Location OAuth token context was unusable");
+        }
 
-      const scopes = new Set((token.scopes ?? []).map((scope) => scope.trim()).filter(Boolean));
-      const missingRequiredScopes = reconciliationRequiredReadScopes.filter((scope) => !scopes.has(scope));
+        activeToken = token;
+        activeScopes = new Set((token.scopes ?? []).map((scope) => scope.trim()).filter(Boolean));
+      };
 
-      const request = async (input: {
+      activateToken(activeToken);
+
+      const getMissingRequiredScopes = (): string[] =>
+        reconciliationRequiredReadScopes.filter((scope) => !activeScopes.has(scope));
+
+      type RequestInput = {
         method: "GET" | "POST";
         path: string;
         query?: URLSearchParams;
         body?: unknown;
         requiredScope: string;
         overallDeadlineAt: number;
-      }): Promise<unknown> => {
-        assertReconciliationTransportAllowed(input.method, input.path);
+      };
 
-        if (!scopes.has(input.requiredScope)) {
-          throw new GhlReconciliationReadError("MISSING_SCOPE", "Required HighLevel read scope is not present");
-        }
-
-        const remainingMs = input.overallDeadlineAt - dependencies.now();
+      const dispatch = async (input: RequestInput, token: GhlOAuthTokenRecord): Promise<Response> => {
+        const effectiveDeadlineAt = Math.min(overallDeadlineAt, input.overallDeadlineAt);
+        const remainingMs = effectiveDeadlineAt - dependencies.now();
 
         if (remainingMs <= 0) {
           throw new GhlReconciliationReadError("UNAVAILABLE", "Preview deadline was reached before the HighLevel read");
@@ -379,7 +401,7 @@ export function createGhlReconciliationReadClient(
         try {
           const url = new URL(input.path, env.GHL_API_BASE_URL);
           input.query?.forEach((value, key) => url.searchParams.append(key, value));
-          const response = await dependencies.fetchImpl(url, {
+          return await dependencies.fetchImpl(url, {
             method: input.method,
             signal: controller.signal,
             headers: {
@@ -390,39 +412,70 @@ export function createGhlReconciliationReadClient(
             },
             body: input.body === undefined ? undefined : JSON.stringify(input.body)
           });
-
-          if (response.status === 403) {
-            throw new GhlReconciliationReadError("MISSING_SCOPE", "HighLevel denied a required read scope", response.status);
-          }
-
-          if (response.status === 404 && input.method === "GET" && /^\/contacts\/[^/]+$/.test(input.path)) {
-            throw new GhlReconciliationReadError("NOT_FOUND", "HighLevel contact was not found", response.status);
-          }
-
-          if (!response.ok) {
-            throw new GhlReconciliationReadError("UNAVAILABLE", "HighLevel read request was unavailable", response.status);
-          }
-
-          const text = await response.text();
-
-          try {
-            return text ? JSON.parse(text) : {};
-          } catch {
-            throw new GhlReconciliationReadError("MALFORMED", "HighLevel read response was not valid JSON");
-          }
-        } catch (error) {
-          if (error instanceof GhlReconciliationReadError) {
-            throw error;
-          }
-
+        } catch {
           throw new GhlReconciliationReadError("UNAVAILABLE", "HighLevel read request timed out or failed");
         } finally {
           clearTimeout(timeout);
         }
       };
 
+      const request = async (input: RequestInput): Promise<unknown> => {
+        assertReconciliationTransportAllowed(input.method, input.path);
+
+        if (!activeScopes.has(input.requiredScope)) {
+          throw new GhlReconciliationReadError("MISSING_SCOPE", "Required HighLevel read scope is not present");
+        }
+
+        const requestToken = activeToken;
+        let response = await dispatch(input, requestToken);
+
+        if (response.status === 401) {
+          let refreshedToken: GhlOAuthTokenRecord;
+
+          try {
+            refreshedToken = await oauthSession.refresh();
+          } catch {
+            throw new GhlReconciliationReadError("UNAVAILABLE", "Location OAuth token refresh failed");
+          }
+
+          if (refreshedToken.access_token === requestToken.access_token) {
+            throw new GhlReconciliationReadError("UNAVAILABLE", "HighLevel read required a second OAuth refresh");
+          }
+
+          activateToken(refreshedToken);
+
+          if (!activeScopes.has(input.requiredScope)) {
+            throw new GhlReconciliationReadError("MISSING_SCOPE", "Required HighLevel read scope is not present after OAuth refresh");
+          }
+
+          response = await dispatch(input, activeToken);
+        }
+
+        if (response.status === 403) {
+          throw new GhlReconciliationReadError("MISSING_SCOPE", "HighLevel denied a required read scope", response.status);
+        }
+
+        if (response.status === 404 && input.method === "GET" && /^\/contacts\/[^/]+$/.test(input.path)) {
+          throw new GhlReconciliationReadError("NOT_FOUND", "HighLevel contact was not found", response.status);
+        }
+
+        if (!response.ok) {
+          throw new GhlReconciliationReadError("UNAVAILABLE", "HighLevel read request was unavailable", response.status);
+        }
+
+        const text = await response.text();
+
+        try {
+          return text ? JSON.parse(text) : {};
+        } catch {
+          throw new GhlReconciliationReadError("MALFORMED", "HighLevel read response was not valid JSON");
+        }
+      };
+
       return {
-        missingRequiredScopes,
+        get missingRequiredScopes() {
+          return getMissingRequiredScopes();
+        },
         async getContact(contactId, deadlineAt) {
           return parseContact(await request({
             method: "GET",
@@ -455,7 +508,7 @@ export function createGhlReconciliationReadClient(
           }));
         },
         async checkAssociatedRecords(risk, contactId, deadlineAt) {
-          if (!scopes.has(riskScopes[risk])) {
+          if (!activeScopes.has(riskScopes[risk])) {
             return "MISSING_SCOPE";
           }
 
