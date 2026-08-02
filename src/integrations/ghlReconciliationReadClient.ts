@@ -5,6 +5,7 @@ import {
 } from "../config/lineContactReconciliationStandardFieldPolicy";
 import {
   GHL_RECONCILIATION_TOKEN_SAFETY_WINDOW_MS,
+  GhlReconciliationOAuthContextMismatchError,
   openGhlReconciliationPreviewOAuthSession,
   type GhlReconciliationPreviewOAuthSession,
   type OpenGhlReconciliationPreviewOAuthSessionInput
@@ -348,7 +349,11 @@ export function createGhlReconciliationReadClient(
           expectedTenantId: tenantId,
           overallDeadlineAt
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof GhlReconciliationOAuthContextMismatchError) {
+          throw new GhlReconciliationReadError("CROSS_TENANT", "Location OAuth token context did not match reconciliation Preview");
+        }
+
         throw new GhlReconciliationReadError("UNAVAILABLE", "Location OAuth token was unavailable for reconciliation Preview");
       }
 
@@ -358,9 +363,11 @@ export function createGhlReconciliationReadClient(
       const activateToken = (token: GhlOAuthTokenRecord): void => {
         const expiry = new Date(token.expires_at).getTime();
 
+        if (token.location_id !== locationId || token.tenant_id !== tenantId) {
+          throw new GhlReconciliationReadError("CROSS_TENANT", "Location OAuth token context did not match reconciliation Preview");
+        }
+
         if (
-          token.location_id !== locationId ||
-          token.tenant_id !== tenantId ||
           !token.access_token.trim() ||
           !Number.isFinite(expiry) ||
           expiry <= dependencies.now() + GHL_RECONCILIATION_TOKEN_SAFETY_WINDOW_MS
@@ -434,7 +441,11 @@ export function createGhlReconciliationReadClient(
 
           try {
             refreshedToken = await oauthSession.refresh();
-          } catch {
+          } catch (error) {
+            if (error instanceof GhlReconciliationOAuthContextMismatchError) {
+              throw new GhlReconciliationReadError("CROSS_TENANT", "Location OAuth token context did not match reconciliation Preview");
+            }
+
             throw new GhlReconciliationReadError("UNAVAILABLE", "Location OAuth token refresh failed");
           }
 

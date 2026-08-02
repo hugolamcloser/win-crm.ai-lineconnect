@@ -10,6 +10,9 @@ const {
 const {
   classifyReconciliationStandardField
 } = require("../dist/config/lineContactReconciliationStandardFieldPolicy");
+const {
+  createGhlReconciliationPreviewOAuthSessionOpener
+} = require("../dist/services/ghlOAuthService");
 
 const allScopes = [...reconciliationRequiredReadScopes];
 
@@ -55,6 +58,29 @@ function openSessionWithToken(initialToken, refreshToken = initialToken) {
     typeof initialToken === "function" ? await initialToken() : initialToken,
     refreshToken
   );
+}
+
+function strictOAuthOpener(stored, options = {}) {
+  return createGhlReconciliationPreviewOAuthSessionOpener({
+    loadToken: async () => stored,
+    exchangeRefreshToken: async () => {
+      if (options.exchangeError) throw options.exchangeError;
+      return {
+        access_token: "refreshed-test-token",
+        refresh_token: "refreshed-test-refresh",
+        expires_in: 3600
+      };
+    },
+    persistToken: async (input) => ({
+      ...token(),
+      tenant_id: input.tenantId,
+      location_id: input.locationId,
+      access_token: input.accessToken,
+      refresh_token: input.refreshToken,
+      expires_at: input.expiresAt,
+      scopes: input.scopes
+    })
+  });
 }
 
 function jsonResponse(payload, status = 200) {
@@ -244,13 +270,48 @@ test("missing stored scopes fail before fetch and are exposed without credential
   assert.equal(fetchCount, 0);
 });
 
-test("unusable or mismatched tokens returned by the OAuth opener fail closed", async () => {
+test("foreign token context returned by the OAuth opener remains CROSS_TENANT", async () => {
   const mismatched = createGhlReconciliationReadClient({ openOAuthSession: openSessionWithToken(token()) });
   await assert.rejects(
     () => mismatched.openSession("location-test", "tenant-other", Date.now() + 1_000),
-    (error) => error instanceof GhlReconciliationReadError && error.kind === "UNAVAILABLE"
+    (error) => error instanceof GhlReconciliationReadError && error.kind === "CROSS_TENANT"
   );
+});
 
+for (const [name, stored] of [
+  ["foreign stored tenant", { ...token(), tenant_id: "tenant-foreign" }],
+  ["foreign stored location", { ...token(), location_id: "location-foreign" }]
+]) {
+  test(`${name} from the strict OAuth helper maps to read-client CROSS_TENANT`, async () => {
+    const client = createGhlReconciliationReadClient({ openOAuthSession: strictOAuthOpener(stored) });
+
+    await assert.rejects(
+      () => client.openSession("location-test", "tenant-test", Date.now() + 1_000),
+      (error) => error instanceof GhlReconciliationReadError && error.kind === "CROSS_TENANT"
+    );
+  });
+}
+
+test("missing, expired-without-refresh, and rejected OAuth remain UNAVAILABLE", async () => {
+  const ordinaryOpeners = [
+    strictOAuthOpener(null),
+    strictOAuthOpener({ ...token(), expires_at: "2000-01-01T00:00:00.000Z", refresh_token: "" }),
+    strictOAuthOpener(
+      { ...token(), expires_at: "2000-01-01T00:00:00.000Z" },
+      { exchangeError: new Error("refresh rejected") }
+    )
+  ];
+
+  for (const openOAuthSession of ordinaryOpeners) {
+    const client = createGhlReconciliationReadClient({ openOAuthSession });
+    await assert.rejects(
+      () => client.openSession("location-test", "tenant-test", Date.now() + 1_000),
+      (error) => error instanceof GhlReconciliationReadError && error.kind === "UNAVAILABLE"
+    );
+  }
+});
+
+test("expired token returned by a custom OAuth opener remains UNAVAILABLE", async () => {
   let loads = 0;
   const expired = createGhlReconciliationReadClient({
     openOAuthSession: openSessionWithToken(async () => {

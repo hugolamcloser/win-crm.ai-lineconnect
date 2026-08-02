@@ -142,6 +142,16 @@ export class GhlOAuthError extends Error {
   }
 }
 
+export class GhlReconciliationOAuthContextMismatchError extends GhlOAuthError {
+  constructor() {
+    super({
+      publicErrorCode: "oauth_location_token_mismatch",
+      message: "Reconciliation OAuth context did not match the expected location and tenant"
+    });
+    this.name = "GhlReconciliationOAuthContextMismatchError";
+  }
+}
+
 function getString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
@@ -309,6 +319,24 @@ function getExpiresAt(payload: GhlOAuthTokenPayload, now = Date.now()): string {
   return new Date(now + expiresIn * 1000).toISOString();
 }
 
+function getReconciliationRefreshExpiresAt(payload: GhlOAuthTokenPayload, now: number): string | undefined {
+  const explicitExpiresAt = getString(payload.expires_at);
+
+  if (explicitExpiresAt) {
+    const parsedExpiresAt = new Date(explicitExpiresAt).getTime();
+    return Number.isFinite(parsedExpiresAt) ? new Date(parsedExpiresAt).toISOString() : undefined;
+  }
+
+  const expiresIn = getNumber(payload.expires_in) ?? getNumber(payload.expiresIn);
+
+  if (expiresIn === undefined) {
+    return undefined;
+  }
+
+  const calculatedExpiresAt = now + expiresIn * 1000;
+  return Number.isFinite(calculatedExpiresAt) ? new Date(calculatedExpiresAt).toISOString() : undefined;
+}
+
 function getCompanyOnboardingSessionExpiresAt(payload: GhlOAuthTokenPayload): string {
   const tokenExpiresAt = new Date(getExpiresAt(payload)).getTime();
   const shortLivedExpiry = Date.now() + companyOnboardingSessionTtlMs;
@@ -342,10 +370,50 @@ function getSafeTokenRequestDiagnostics(entries: Record<string, string>) {
   };
 }
 
-function redactTokenExchangeText(value: string, entries: Record<string, string>): string {
+function getTokenResponseSecretValues(responseText: string): string[] {
+  const values = new Set<string>();
+  const patterns = [
+    /"(?:access_token|accessToken|refresh_token|refreshToken|client_secret|clientSecret|code|authorization)"\s*:\s*"([^"]+)"/gi,
+    /(?:^|[?&\s])(?:access_token|accessToken|refresh_token|refreshToken|client_secret|clientSecret|code|authorization)=([^&\s]+)/gi
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of responseText.matchAll(pattern)) {
+      const matchedValue = match[1];
+
+      if (!matchedValue) {
+        continue;
+      }
+
+      values.add(matchedValue);
+
+      try {
+        values.add(decodeURIComponent(matchedValue));
+      } catch {
+        // Keep the literal response value when it is not valid URI encoding.
+      }
+    }
+  }
+
+  return [...values];
+}
+
+function redactTokenExchangeText(
+  value: string,
+  entries: Record<string, string>,
+  responseText = "",
+  knownSensitiveValues: readonly string[] = []
+): string {
   let redacted = redactSensitiveText(value);
 
-  for (const sensitiveValue of [entries.code, entries.client_secret, entries.refresh_token]) {
+  for (const sensitiveValue of [
+    entries.code,
+    entries.client_secret,
+    entries.refresh_token,
+    entries.access_token,
+    ...knownSensitiveValues,
+    ...getTokenResponseSecretValues(responseText)
+  ]) {
     if (sensitiveValue) {
       redacted = redacted.split(sensitiveValue).join("[redacted]");
     }
@@ -354,21 +422,37 @@ function redactTokenExchangeText(value: string, entries: Record<string, string>)
   return redacted;
 }
 
-function parseTokenResponse(responseText: string): GhlOAuthTokenPayload {
+export function parseGhlOAuthTokenResponse(
+  responseText: string,
+  redactionEntries: Record<string, string> = {},
+  knownSensitiveValues: readonly string[] = []
+): GhlOAuthTokenPayload {
   try {
     return responseText ? (JSON.parse(responseText) as GhlOAuthTokenPayload) : {};
   } catch (error) {
+    const redactedResponseText = redactTokenExchangeText(
+      responseText,
+      redactionEntries,
+      responseText,
+      knownSensitiveValues
+    );
+    const safeErrorMessage = redactTokenExchangeText(
+      error instanceof Error ? error.message : String(error),
+      redactionEntries,
+      responseText,
+      knownSensitiveValues
+    );
     logger.error(
       {
-        error: error instanceof Error ? error.message : String(error),
-        redactedResponseText: redactSensitiveText(responseText)
+        error: safeErrorMessage,
+        redactedResponseText
       },
       "Failed to parse HighLevel OAuth token response"
     );
     throw new GhlOAuthError({
       publicErrorCode: "token_response_parse_failed",
       message: "HighLevel OAuth token response was not valid JSON",
-      responseBody: redactSensitiveText(responseText)
+      responseBody: redactedResponseText
     });
   }
 }
@@ -447,7 +531,8 @@ function isCompanyTokenPayload(payload: GhlOAuthTokenPayload): boolean {
 
 async function requestOAuthToken(
   entries: Record<string, string>,
-  maximumTimeoutMs = tokenExchangeTimeoutMs
+  maximumTimeoutMs = tokenExchangeTimeoutMs,
+  knownSensitiveValues: readonly string[] = []
 ): Promise<GhlOAuthTokenPayload> {
   const body = buildTokenRequestBody(entries);
   const requestDiagnostics = getSafeTokenRequestDiagnostics(Object.fromEntries(body.entries()));
@@ -485,7 +570,9 @@ async function requestOAuthToken(
     const timedOut = error instanceof Error && error.name === "AbortError";
     const safeErrorMessage = redactTokenExchangeText(
       error instanceof Error ? error.message : String(error),
-      entries
+      entries,
+      "",
+      knownSensitiveValues
     );
     const message = timedOut
       ? `HighLevel OAuth token exchange timed out after ${boundedTimeoutMs}ms`
@@ -511,7 +598,12 @@ async function requestOAuthToken(
   }
 
   const responseText = await response.text();
-  const redactedResponseText = redactTokenExchangeText(responseText, entries);
+  const redactedResponseText = redactTokenExchangeText(
+    responseText,
+    entries,
+    responseText,
+    knownSensitiveValues
+  );
 
   logger.info(
     {
@@ -531,7 +623,7 @@ async function requestOAuthToken(
     });
   }
 
-  const payload = parseTokenResponse(responseText);
+  const payload = parseGhlOAuthTokenResponse(responseText, entries, knownSensitiveValues);
   logger.info({ tokenResponseKeys: getTokenPayloadKeys(payload) }, "Parsed HighLevel OAuth token response");
 
   return payload;
@@ -578,7 +670,7 @@ async function requestLocationToken(input: {
     });
   }
 
-  const payload = parseTokenResponse(responseText);
+  const payload = parseGhlOAuthTokenResponse(responseText);
   logger.info(
     {
       companyId: input.companyId,
@@ -1032,6 +1124,7 @@ type ReconciliationPreviewOAuthDependencies = {
   loadToken(locationId: string): Promise<GhlOAuthTokenRecord | null>;
   exchangeRefreshToken(input: {
     refreshToken: string;
+    knownAccessToken: string;
     maximumTimeoutMs: number;
   }): Promise<GhlOAuthTokenPayload>;
   persistToken(input: UpsertGhlOAuthTokenInput): Promise<GhlOAuthTokenRecord>;
@@ -1051,7 +1144,7 @@ function requireExactReconciliationTokenContext(
   expectedTenantId: string
 ): void {
   if (token.location_id !== locationId || token.tenant_id !== expectedTenantId) {
-    throw reconciliationOAuthError("Stored OAuth context did not match the expected location and tenant");
+    throw new GhlReconciliationOAuthContextMismatchError();
   }
 
   if (!getString(token.access_token)) {
@@ -1069,12 +1162,12 @@ export function createGhlReconciliationPreviewOAuthSessionOpener(
 ): (input: OpenGhlReconciliationPreviewOAuthSessionInput) => Promise<GhlReconciliationPreviewOAuthSession> {
   const dependencies: ReconciliationPreviewOAuthDependencies = {
     loadToken: getGhlOAuthToken,
-    exchangeRefreshToken: ({ refreshToken, maximumTimeoutMs }) => requestOAuthToken({
+    exchangeRefreshToken: ({ refreshToken, knownAccessToken, maximumTimeoutMs }) => requestOAuthToken({
       grant_type: "refresh_token",
       refresh_token: refreshToken,
       client_id: requireEnvValue("GHL_OAUTH_CLIENT_ID", env.GHL_OAUTH_CLIENT_ID),
       client_secret: requireEnvValue("GHL_OAUTH_CLIENT_SECRET", env.GHL_OAUTH_CLIENT_SECRET)
-    }, maximumTimeoutMs),
+    }, maximumTimeoutMs, [knownAccessToken]),
     persistToken: upsertGhlOAuthToken,
     now: Date.now,
     ...overrides
@@ -1124,6 +1217,7 @@ export function createGhlReconciliationPreviewOAuthSessionOpener(
         try {
           payload = await dependencies.exchangeRefreshToken({
             refreshToken,
+            knownAccessToken: activeToken.access_token,
             maximumTimeoutMs: remainingMs
           });
         } catch {
@@ -1137,15 +1231,16 @@ export function createGhlReconciliationPreviewOAuthSessionOpener(
         const responseLocationId = resolveTokenLocationId(payload);
 
         if (responseLocationId && responseLocationId !== normalizedLocationId) {
-          throw new GhlOAuthError({
-            publicErrorCode: "oauth_location_token_mismatch",
-            message: "OAuth refresh response did not match the expected location"
-          });
+          throw new GhlReconciliationOAuthContextMismatchError();
         }
 
         const accessToken = getAccessToken(payload);
         const nextRefreshToken = getRefreshToken(payload) ?? refreshToken;
-        const expiresAt = getExpiresAt(payload, dependencies.now());
+        const expiresAt = getReconciliationRefreshExpiresAt(payload, dependencies.now());
+
+        if (!expiresAt) {
+          throw reconciliationOAuthError("OAuth refresh response did not include usable expiry metadata");
+        }
         const prospectiveToken: GhlOAuthTokenRecord = {
           ...activeToken,
           tenant_id: normalizedTenantId,

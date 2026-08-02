@@ -2,7 +2,9 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
-  createGhlReconciliationPreviewOAuthSessionOpener
+  GhlReconciliationOAuthContextMismatchError,
+  createGhlReconciliationPreviewOAuthSessionOpener,
+  parseGhlOAuthTokenResponse
 } = require("../dist/services/ghlOAuthService");
 
 const NOW = Date.parse("2026-07-31T00:00:00.000Z");
@@ -99,17 +101,30 @@ test("valid stored access token performs zero refreshes and no persistence", asy
 
 for (const [name, stored] of [
   ["foreign stored location", token({ location_id: "location-foreign" })],
-  ["foreign stored tenant", token({ tenant_id: "tenant-foreign" })],
-  ["missing stored access token", token({ access_token: "" })]
+  ["foreign stored tenant", token({ tenant_id: "tenant-foreign" })]
 ]) {
-  test(`${name} fails before exchange or persistence`, async () => {
+  test(`${name} raises a distinguishable context mismatch before exchange or persistence`, async () => {
     const harness = createHarness({ stored });
 
-    await assert.rejects(() => harness.open());
+    await assert.rejects(
+      () => harness.open(),
+      (error) => error instanceof GhlReconciliationOAuthContextMismatchError
+    );
     assert.equal(harness.exchangeCount, 0);
     assert.equal(harness.persistCount, 0);
   });
 }
+
+test("missing stored access token remains an ordinary unavailable OAuth failure", async () => {
+  const harness = createHarness({ stored: token({ access_token: "" }) });
+
+  await assert.rejects(
+    () => harness.open(),
+    (error) => !(error instanceof GhlReconciliationOAuthContextMismatchError)
+  );
+  assert.equal(harness.exchangeCount, 0);
+  assert.equal(harness.persistCount, 0);
+});
 
 for (const [name, expiresAt] of [
   ["near-expiry", new Date(NOW + 10_000).toISOString()],
@@ -163,7 +178,10 @@ test("foreign refresh-response location is rejected before persistence", async (
     }
   });
 
-  await assert.rejects(() => harness.open(), /did not match the expected location/);
+  await assert.rejects(
+    () => harness.open(),
+    (error) => error instanceof GhlReconciliationOAuthContextMismatchError
+  );
   assert.equal(harness.exchangeCount, 1);
   assert.equal(harness.persistCount, 0);
 });
@@ -174,7 +192,10 @@ test("saved token with a foreign tenant is rejected after OAuth-only persistence
     savedOverrides: { tenant_id: "tenant-foreign" }
   });
 
-  await assert.rejects(() => harness.open(), /did not match the expected location and tenant/);
+  await assert.rejects(
+    () => harness.open(),
+    (error) => error instanceof GhlReconciliationOAuthContextMismatchError
+  );
   assert.equal(harness.exchangeCount, 1);
   assert.equal(harness.persistCount, 1);
 });
@@ -185,7 +206,10 @@ test("saved token with a foreign location is rejected after OAuth-only persisten
     savedOverrides: { location_id: "location-foreign" }
   });
 
-  await assert.rejects(() => harness.open(), /did not match the expected location and tenant/);
+  await assert.rejects(
+    () => harness.open(),
+    (error) => error instanceof GhlReconciliationOAuthContextMismatchError
+  );
   assert.equal(harness.exchangeCount, 1);
   assert.equal(harness.persistCount, 1);
 });
@@ -201,6 +225,20 @@ test("refreshed token that remains near expiry is rejected before persistence", 
   });
 
   await assert.rejects(() => harness.open(), /remained expired or unusable/);
+  assert.equal(harness.exchangeCount, 1);
+  assert.equal(harness.persistCount, 0);
+});
+
+test("refresh without explicit expiry metadata fails closed before persistence", async () => {
+  const harness = createHarness({
+    stored: token({ expires_at: new Date(NOW - 1_000).toISOString() }),
+    exchangePayload: {
+      access_token: "refreshed-access-sensitive",
+      refresh_token: "refreshed-refresh-sensitive"
+    }
+  });
+
+  await assert.rejects(() => harness.open(), /did not include usable expiry metadata/);
   assert.equal(harness.exchangeCount, 1);
   assert.equal(harness.persistCount, 0);
 });
@@ -312,4 +350,45 @@ test("OAuth errors and session metadata do not serialize token values", async ()
 
   assert.equal(serialized.includes("access-sensitive"), false);
   assert.equal(serialized.includes("refresh-sensitive"), false);
+});
+
+test("malformed token responses exactly redact every known literal secret", () => {
+  const secrets = {
+    access: "malformed-access-value",
+    returnedRefresh: "malformed-returned-refresh-value",
+    requestRefresh: "malformed-request-refresh-value",
+    knownAccess: "malformed-known-access-value",
+    clientSecret: "malformed-client-secret-value",
+    authorizationCode: "malformed-authorization-code-value"
+  };
+  const malformedResponse = [
+    `{"access_token":"${secrets.access}",`,
+    `"refresh_token":"${secrets.returnedRefresh}",`,
+    `"diagnostic":"${Object.values(secrets).join(" ")}"`
+  ].join("");
+  let serialized = "";
+
+  assert.throws(
+    () => parseGhlOAuthTokenResponse(
+      malformedResponse,
+      {
+        refresh_token: secrets.requestRefresh,
+        client_secret: secrets.clientSecret,
+        code: secrets.authorizationCode
+      },
+      [secrets.knownAccess]
+    ),
+    (error) => {
+      serialized = JSON.stringify({
+        name: error.name,
+        message: error.message,
+        responseBody: error.responseBody
+      });
+      return true;
+    }
+  );
+
+  for (const secret of Object.values(secrets)) {
+    assert.equal(serialized.includes(secret), false);
+  }
 });
