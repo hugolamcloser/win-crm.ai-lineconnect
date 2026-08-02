@@ -172,6 +172,16 @@ test("zero tenant returns LOCATION_NOT_ONBOARDED and multiple tenants are cross-
   assert.equal(multiple.calls.sessions, 0);
 });
 
+test("OAuth tenant mismatch remains CROSS_TENANT_BLOCKED at the Preview boundary", async () => {
+  const harness = createHarness({
+    openSessionError: new GhlReconciliationReadError("CROSS_TENANT", "OAuth context mismatch")
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "CROSS_TENANT_BLOCKED");
+  assert.equal(result.reasonCodes.includes("OAUTH_TENANT_MISMATCH"), true);
+});
+
 test("mapping exact-count outcomes never select a preferred duplicate row", async () => {
   const missing = createHarness({ mappingResult: () => ({ exactCount: 0, rows: [] }) });
   assert.equal((await missing.service(baseRequest)).decision, "MAPPING_NOT_FOUND");

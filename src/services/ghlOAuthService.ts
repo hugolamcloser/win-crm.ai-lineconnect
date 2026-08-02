@@ -16,13 +16,16 @@ import {
   upsertGhlOAuthToken,
   upsertPendingGhlAppInstall,
   type GhlPendingAppInstallRecord,
-  type GhlOAuthTokenRecord
+  type GhlOAuthTokenRecord,
+  type UpsertGhlOAuthTokenInput
 } from "./repository";
 
 const tokenRefreshSkewMs = 5 * 60 * 1000;
 const tokenExchangeTimeoutMs = 15000;
 const companyOnboardingSessionTtlMs = 15 * 60 * 1000;
 const highLevelV3Version = "v3";
+
+export const GHL_RECONCILIATION_TOKEN_SAFETY_WINDOW_MS = 30_000;
 
 export type GhlOAuthErrorCode =
   | "token_exchange_failed"
@@ -105,6 +108,18 @@ export type GhlAuthContext = {
   locationId: string;
 };
 
+export type GhlReconciliationPreviewOAuthSession = {
+  getActiveToken(): GhlOAuthTokenRecord;
+  hasRefreshed(): boolean;
+  refresh(): Promise<GhlOAuthTokenRecord>;
+};
+
+export type OpenGhlReconciliationPreviewOAuthSessionInput = {
+  locationId: string;
+  expectedTenantId: string;
+  overallDeadlineAt: number;
+};
+
 export class GhlOAuthError extends Error {
   public readonly publicErrorCode: GhlOAuthErrorCode;
   public readonly statusCode?: number;
@@ -124,6 +139,16 @@ export class GhlOAuthError extends Error {
     this.statusCode = input.statusCode;
     this.responseBody = input.responseBody;
     this.requestPayload = input.requestPayload;
+  }
+}
+
+export class GhlReconciliationOAuthContextMismatchError extends GhlOAuthError {
+  constructor() {
+    super({
+      publicErrorCode: "oauth_location_token_mismatch",
+      message: "Reconciliation OAuth context did not match the expected location and tenant"
+    });
+    this.name = "GhlReconciliationOAuthContextMismatchError";
   }
 }
 
@@ -283,7 +308,7 @@ function decodeJwtHeaderAndPayload(token: string): { header: Record<string, unkn
   };
 }
 
-function getExpiresAt(payload: GhlOAuthTokenPayload): string {
+function getExpiresAt(payload: GhlOAuthTokenPayload, now = Date.now()): string {
   const explicitExpiresAt = getString(payload.expires_at);
 
   if (explicitExpiresAt) {
@@ -291,7 +316,25 @@ function getExpiresAt(payload: GhlOAuthTokenPayload): string {
   }
 
   const expiresIn = getNumber(payload.expires_in) ?? getNumber(payload.expiresIn) ?? 3600;
-  return new Date(Date.now() + expiresIn * 1000).toISOString();
+  return new Date(now + expiresIn * 1000).toISOString();
+}
+
+function getReconciliationRefreshExpiresAt(payload: GhlOAuthTokenPayload, now: number): string | undefined {
+  const explicitExpiresAt = getString(payload.expires_at);
+
+  if (explicitExpiresAt) {
+    const parsedExpiresAt = new Date(explicitExpiresAt).getTime();
+    return Number.isFinite(parsedExpiresAt) ? new Date(parsedExpiresAt).toISOString() : undefined;
+  }
+
+  const expiresIn = getNumber(payload.expires_in) ?? getNumber(payload.expiresIn);
+
+  if (expiresIn === undefined) {
+    return undefined;
+  }
+
+  const calculatedExpiresAt = now + expiresIn * 1000;
+  return Number.isFinite(calculatedExpiresAt) ? new Date(calculatedExpiresAt).toISOString() : undefined;
 }
 
 function getCompanyOnboardingSessionExpiresAt(payload: GhlOAuthTokenPayload): string {
@@ -327,10 +370,50 @@ function getSafeTokenRequestDiagnostics(entries: Record<string, string>) {
   };
 }
 
-function redactTokenExchangeText(value: string, entries: Record<string, string>): string {
+function getTokenResponseSecretValues(responseText: string): string[] {
+  const values = new Set<string>();
+  const patterns = [
+    /"(?:access_token|accessToken|refresh_token|refreshToken|client_secret|clientSecret|code|authorization)"\s*:\s*"([^"]+)"/gi,
+    /(?:^|[?&\s])(?:access_token|accessToken|refresh_token|refreshToken|client_secret|clientSecret|code|authorization)=([^&\s]+)/gi
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of responseText.matchAll(pattern)) {
+      const matchedValue = match[1];
+
+      if (!matchedValue) {
+        continue;
+      }
+
+      values.add(matchedValue);
+
+      try {
+        values.add(decodeURIComponent(matchedValue));
+      } catch {
+        // Keep the literal response value when it is not valid URI encoding.
+      }
+    }
+  }
+
+  return [...values];
+}
+
+function redactTokenExchangeText(
+  value: string,
+  entries: Record<string, string>,
+  responseText = "",
+  knownSensitiveValues: readonly string[] = []
+): string {
   let redacted = redactSensitiveText(value);
 
-  for (const sensitiveValue of [entries.code, entries.client_secret]) {
+  for (const sensitiveValue of [
+    entries.code,
+    entries.client_secret,
+    entries.refresh_token,
+    entries.access_token,
+    ...knownSensitiveValues,
+    ...getTokenResponseSecretValues(responseText)
+  ]) {
     if (sensitiveValue) {
       redacted = redacted.split(sensitiveValue).join("[redacted]");
     }
@@ -339,21 +422,37 @@ function redactTokenExchangeText(value: string, entries: Record<string, string>)
   return redacted;
 }
 
-function parseTokenResponse(responseText: string): GhlOAuthTokenPayload {
+export function parseGhlOAuthTokenResponse(
+  responseText: string,
+  redactionEntries: Record<string, string> = {},
+  knownSensitiveValues: readonly string[] = []
+): GhlOAuthTokenPayload {
   try {
     return responseText ? (JSON.parse(responseText) as GhlOAuthTokenPayload) : {};
   } catch (error) {
+    const redactedResponseText = redactTokenExchangeText(
+      responseText,
+      redactionEntries,
+      responseText,
+      knownSensitiveValues
+    );
+    const safeErrorMessage = redactTokenExchangeText(
+      error instanceof Error ? error.message : String(error),
+      redactionEntries,
+      responseText,
+      knownSensitiveValues
+    );
     logger.error(
       {
-        error: error instanceof Error ? error.message : String(error),
-        redactedResponseText: redactSensitiveText(responseText)
+        error: safeErrorMessage,
+        redactedResponseText
       },
       "Failed to parse HighLevel OAuth token response"
     );
     throw new GhlOAuthError({
       publicErrorCode: "token_response_parse_failed",
       message: "HighLevel OAuth token response was not valid JSON",
-      responseBody: redactSensitiveText(responseText)
+      responseBody: redactedResponseText
     });
   }
 }
@@ -430,7 +529,11 @@ function isCompanyTokenPayload(payload: GhlOAuthTokenPayload): boolean {
   return userType === "company" || Boolean(!locationId && accessToken);
 }
 
-async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOAuthTokenPayload> {
+async function requestOAuthToken(
+  entries: Record<string, string>,
+  maximumTimeoutMs = tokenExchangeTimeoutMs,
+  knownSensitiveValues: readonly string[] = []
+): Promise<GhlOAuthTokenPayload> {
   const body = buildTokenRequestBody(entries);
   const requestDiagnostics = getSafeTokenRequestDiagnostics(Object.fromEntries(body.entries()));
 
@@ -445,8 +548,12 @@ async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOA
     "Requesting HighLevel OAuth token"
   );
 
+  const requestedTimeoutMs = Number.isFinite(maximumTimeoutMs)
+    ? Math.floor(maximumTimeoutMs)
+    : tokenExchangeTimeoutMs;
+  const boundedTimeoutMs = Math.max(1, Math.min(tokenExchangeTimeoutMs, requestedTimeoutMs));
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), tokenExchangeTimeoutMs);
+  const timeout = setTimeout(() => controller.abort(), boundedTimeoutMs);
   let response: Response;
 
   try {
@@ -461,13 +568,19 @@ async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOA
     });
   } catch (error) {
     const timedOut = error instanceof Error && error.name === "AbortError";
+    const safeErrorMessage = redactTokenExchangeText(
+      error instanceof Error ? error.message : String(error),
+      entries,
+      "",
+      knownSensitiveValues
+    );
     const message = timedOut
-      ? `HighLevel OAuth token exchange timed out after ${tokenExchangeTimeoutMs}ms`
-      : `HighLevel OAuth token exchange request failed: ${error instanceof Error ? error.message : String(error)}`;
+      ? `HighLevel OAuth token exchange timed out after ${boundedTimeoutMs}ms`
+      : `HighLevel OAuth token exchange request failed: ${safeErrorMessage}`;
 
     logger.error(
       {
-        error: error instanceof Error ? error.message : String(error),
+        error: safeErrorMessage,
         timedOut,
         tokenUrl: env.GHL_OAUTH_TOKEN_URL,
         tokenRequestBodyKeys: requestDiagnostics.bodyKeys
@@ -485,7 +598,12 @@ async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOA
   }
 
   const responseText = await response.text();
-  const redactedResponseText = redactTokenExchangeText(responseText, entries);
+  const redactedResponseText = redactTokenExchangeText(
+    responseText,
+    entries,
+    responseText,
+    knownSensitiveValues
+  );
 
   logger.info(
     {
@@ -505,7 +623,7 @@ async function requestOAuthToken(entries: Record<string, string>): Promise<GhlOA
     });
   }
 
-  const payload = parseTokenResponse(responseText);
+  const payload = parseGhlOAuthTokenResponse(responseText, entries, knownSensitiveValues);
   logger.info({ tokenResponseKeys: getTokenPayloadKeys(payload) }, "Parsed HighLevel OAuth token response");
 
   return payload;
@@ -552,7 +670,7 @@ async function requestLocationToken(input: {
     });
   }
 
-  const payload = parseTokenResponse(responseText);
+  const payload = parseGhlOAuthTokenResponse(responseText);
   logger.info(
     {
       companyId: input.companyId,
@@ -1001,6 +1119,197 @@ export async function exchangeGhlAuthorizationCode(
     status: "direct_location"
   };
 }
+
+type ReconciliationPreviewOAuthDependencies = {
+  loadToken(locationId: string): Promise<GhlOAuthTokenRecord | null>;
+  exchangeRefreshToken(input: {
+    refreshToken: string;
+    knownAccessToken: string;
+    maximumTimeoutMs: number;
+  }): Promise<GhlOAuthTokenPayload>;
+  persistToken(input: UpsertGhlOAuthTokenInput): Promise<GhlOAuthTokenRecord>;
+  now(): number;
+};
+
+function reconciliationOAuthError(message: string): GhlOAuthError {
+  return new GhlOAuthError({
+    publicErrorCode: "token_exchange_failed",
+    message
+  });
+}
+
+function requireExactReconciliationTokenContext(
+  token: GhlOAuthTokenRecord,
+  locationId: string,
+  expectedTenantId: string
+): void {
+  if (token.location_id !== locationId || token.tenant_id !== expectedTenantId) {
+    throw new GhlReconciliationOAuthContextMismatchError();
+  }
+
+  if (!getString(token.access_token)) {
+    throw reconciliationOAuthError("Stored OAuth access token is unavailable");
+  }
+}
+
+function isUsableReconciliationToken(token: GhlOAuthTokenRecord, now: number): boolean {
+  const expiry = new Date(token.expires_at).getTime();
+  return Number.isFinite(expiry) && expiry > now + GHL_RECONCILIATION_TOKEN_SAFETY_WINDOW_MS;
+}
+
+export function createGhlReconciliationPreviewOAuthSessionOpener(
+  overrides: Partial<ReconciliationPreviewOAuthDependencies> = {}
+): (input: OpenGhlReconciliationPreviewOAuthSessionInput) => Promise<GhlReconciliationPreviewOAuthSession> {
+  const dependencies: ReconciliationPreviewOAuthDependencies = {
+    loadToken: getGhlOAuthToken,
+    exchangeRefreshToken: ({ refreshToken, knownAccessToken, maximumTimeoutMs }) => requestOAuthToken({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: requireEnvValue("GHL_OAUTH_CLIENT_ID", env.GHL_OAUTH_CLIENT_ID),
+      client_secret: requireEnvValue("GHL_OAUTH_CLIENT_SECRET", env.GHL_OAUTH_CLIENT_SECRET)
+    }, maximumTimeoutMs, [knownAccessToken]),
+    persistToken: upsertGhlOAuthToken,
+    now: Date.now,
+    ...overrides
+  };
+
+  return async ({ locationId, expectedTenantId, overallDeadlineAt }) => {
+    const normalizedLocationId = locationId.trim();
+    const normalizedTenantId = expectedTenantId.trim();
+
+    if (!normalizedLocationId || !normalizedTenantId || !Number.isFinite(overallDeadlineAt)) {
+      throw reconciliationOAuthError("Reconciliation OAuth context was invalid");
+    }
+
+    const storedToken = await dependencies.loadToken(normalizedLocationId);
+
+    if (!storedToken) {
+      throw reconciliationOAuthError("No stored location OAuth token is available");
+    }
+
+    requireExactReconciliationTokenContext(storedToken, normalizedLocationId, normalizedTenantId);
+
+    let activeToken = storedToken;
+    let refreshAttempted = false;
+    let refreshPromise: Promise<GhlOAuthTokenRecord> | undefined;
+
+    const refresh = (): Promise<GhlOAuthTokenRecord> => {
+      if (refreshPromise) {
+        return refreshPromise;
+      }
+
+      refreshAttempted = true;
+      refreshPromise = (async () => {
+        const refreshToken = getString(activeToken.refresh_token);
+
+        if (!refreshToken) {
+          throw reconciliationOAuthError("Stored OAuth refresh token is unavailable");
+        }
+
+        const remainingMs = overallDeadlineAt - dependencies.now();
+
+        if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
+          throw reconciliationOAuthError("Preview deadline was reached before OAuth refresh");
+        }
+
+        let payload: GhlOAuthTokenPayload;
+
+        try {
+          payload = await dependencies.exchangeRefreshToken({
+            refreshToken,
+            knownAccessToken: activeToken.access_token,
+            maximumTimeoutMs: remainingMs
+          });
+        } catch {
+          throw reconciliationOAuthError("OAuth refresh exchange failed");
+        }
+
+        if (dependencies.now() >= overallDeadlineAt) {
+          throw reconciliationOAuthError("Preview deadline was reached during OAuth refresh");
+        }
+
+        const responseLocationId = resolveTokenLocationId(payload);
+
+        if (responseLocationId && responseLocationId !== normalizedLocationId) {
+          throw new GhlReconciliationOAuthContextMismatchError();
+        }
+
+        const accessToken = getAccessToken(payload);
+        const nextRefreshToken = getRefreshToken(payload) ?? refreshToken;
+        const expiresAt = getReconciliationRefreshExpiresAt(payload, dependencies.now());
+
+        if (!expiresAt) {
+          throw reconciliationOAuthError("OAuth refresh response did not include usable expiry metadata");
+        }
+        const prospectiveToken: GhlOAuthTokenRecord = {
+          ...activeToken,
+          tenant_id: normalizedTenantId,
+          location_id: normalizedLocationId,
+          access_token: accessToken ?? "",
+          refresh_token: nextRefreshToken,
+          expires_at: expiresAt,
+          scopes: hasScopeMetadata(payload) ? parseScopes(payload) : normalizeScopes(activeToken.scopes),
+          token_type: getTokenType(payload) ?? activeToken.token_type
+        };
+
+        requireExactReconciliationTokenContext(prospectiveToken, normalizedLocationId, normalizedTenantId);
+
+        if (!isUsableReconciliationToken(prospectiveToken, dependencies.now())) {
+          throw reconciliationOAuthError("Refreshed OAuth token remained expired or unusable");
+        }
+
+        if (dependencies.now() >= overallDeadlineAt) {
+          throw reconciliationOAuthError("Preview deadline was reached before OAuth token persistence");
+        }
+
+        let savedToken: GhlOAuthTokenRecord;
+
+        try {
+          savedToken = await dependencies.persistToken({
+            tenantId: normalizedTenantId,
+            locationId: normalizedLocationId,
+            companyId: resolveTokenCompanyId(payload) ?? getString(activeToken.company_id),
+            accessToken: prospectiveToken.access_token,
+            refreshToken: prospectiveToken.refresh_token,
+            expiresAt: prospectiveToken.expires_at,
+            scopes: prospectiveToken.scopes,
+            tokenType: prospectiveToken.token_type ?? undefined
+          });
+        } catch {
+          throw reconciliationOAuthError("OAuth token persistence failed");
+        }
+
+        requireExactReconciliationTokenContext(savedToken, normalizedLocationId, normalizedTenantId);
+
+        if (!getString(savedToken.refresh_token) || !isUsableReconciliationToken(savedToken, dependencies.now())) {
+          throw reconciliationOAuthError("Saved OAuth token remained expired or unusable");
+        }
+
+        if (dependencies.now() >= overallDeadlineAt) {
+          throw reconciliationOAuthError("Preview deadline was reached after OAuth token persistence");
+        }
+
+        activeToken = savedToken;
+        return activeToken;
+      })();
+
+      return refreshPromise;
+    };
+
+    if (!isUsableReconciliationToken(activeToken, dependencies.now())) {
+      await refresh();
+    }
+
+    return {
+      getActiveToken: () => activeToken,
+      hasRefreshed: () => refreshAttempted,
+      refresh
+    };
+  };
+}
+
+export const openGhlReconciliationPreviewOAuthSession =
+  createGhlReconciliationPreviewOAuthSessionOpener();
 
 export async function refreshGhlOAuthToken(locationId = env.GHL_LOCATION_ID): Promise<GhlOAuthTokenRecord> {
   const token = await getGhlOAuthToken(locationId);

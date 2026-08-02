@@ -1,6 +1,6 @@
 # LINE contact reconciliation preview (PR1)
 
-This endpoint classifies a possible LINE/contact reconciliation. It is intentionally read-only. It does not merge, create, update, or delete contacts; alter Supabase mappings; create conversation messages; invoke workflow actions or provider callbacks; or send LINE messages.
+This endpoint classifies a possible LINE/contact reconciliation. It is read-only for business, contact, mapping, conversation, provider, workflow, and LINE data. It does not merge, create, update, or delete contacts; alter Supabase mappings; create conversation messages; invoke workflow actions or provider callbacks; or send LINE messages. Normal OAuth lifecycle maintenance may update only the exact location's `ghl_oauth_tokens` row when its access token must be refreshed.
 
 ## Endpoint
 
@@ -93,7 +93,9 @@ Every status other than `CLEAR` forces `MANUAL_COMPLEX`. `riskReadStatuses` desc
 
 Required read scopes are `contacts.readonly`, `locations/customFields.readonly`, `conversations.readonly`, `opportunities.readonly`, `payments/orders.readonly`, `payments/transactions.readonly`, and `invoices.readonly`. PR1 does not change Marketplace App scopes or OAuth configuration. `AUTO_SIMPLE` may therefore be unreachable until the missing read scopes are separately reviewed, approved, and rolled out.
 
-Each HighLevel read has a narrow timeout and the whole preview has a fixed deadline. Reads are never retried beyond that deadline, no new read starts after the deadline wins, and completion is logged once. Timeout, partial completion, or uncertainty returns `MANUAL_COMPLEX`. A mapped-contact 404 becomes `MAPPING_NOT_FOUND`; a searched candidate that disappears becomes `MANUAL_COMPLEX`. To preserve the no-write guarantee, Preview uses the stored location OAuth token but does not refresh it; an expired or near-expiry token fails closed.
+Each HighLevel read has a narrow timeout and the whole preview has a fixed deadline. Reads are never retried beyond that deadline, no new refresh or read starts after the deadline wins, and completion is logged once. Timeout, partial completion, or uncertainty returns `MANUAL_COMPLEX`. A mapped-contact 404 becomes `MAPPING_NOT_FOUND`; a searched candidate that disappears becomes `MANUAL_COMPLEX`.
+
+Preview acquires OAuth only after exact tenant and location resolution. A valid stored access token is reused. An expired or near-expiry token is refreshed once through the stored location refresh token; a permitted read that returns 401 may also trigger the same single shared session refresh and retry that exact read once. Concurrent 401 reads share one refresh promise. Private-token fallback is never used. Stored, returned, and saved location/tenant context must remain exact, the exchange is capped by the remaining Preview deadline, and any missing, rejected, foreign, still-expired, or second-refresh condition fails closed. Token values are never logged or returned. OAuth refresh persistence is limited to `ghl_oauth_tokens`; `line_profiles` and all business or messaging records remain untouched.
 
 Transfer inventory is classification-only. It returns counts for master-only, candidate-only, equal, and conflicting transferable standard fields, protected or unsupported standard fields, and custom fields, plus candidate-only non-identity tags and an unclassified-standard-field count. It never returns or proposes field names, values, IDs, tags, Email, Phone, LINE IDs, or contact IDs and performs no mutation.
 
@@ -101,4 +103,4 @@ Transfer inventory is classification-only. It returns counts for master-only, ca
 
 The dedicated client permits only its declared GET endpoints and `POST /contacts/search`. It rejects every other POST and all PUT, PATCH, and DELETE requests before dispatch.
 
-Rollback is removal of the preview route, service, types, field policy, read client, exact-count repository helper, tests, and this document. There is no migration, stored preview state, or production data to reverse.
+Rollback of OAuth refresh support is a code revert restoring fail-closed behavior for expired tokens. There is no migration or stored Preview state to reverse. Previously refreshed OAuth credentials remain valid; no contact, mapping, conversation, provider, workflow, or LINE data requires rollback.
