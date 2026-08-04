@@ -69,7 +69,7 @@ Field IDs are resolved at runtime from the location's contact custom-field defin
 - Missing or malformed field metadata fails closed as `MANUAL_COMPLEX`.
 - Missing field IDs, conflicting duplicate values, duplicate metadata IDs, and ambiguous stable metadata fail closed. Conclusively equal duplicate values may be normalized once.
 
-Exact `line:<user>` tags are identity evidence; the prefix match is case-insensitive, while the captured immutable LINE user ID remains exact. A different user is `IDENTITY_CONFLICT`, multiple different identity tags are `AMBIGUOUS`, and the ordinary `line` tag is not identity evidence. Responses expose only `NONE`, `MATCH`, `DIFFERENT`, `AMBIGUOUS`, or `NOT_EVALUATED` states.
+Exact `line:<user>` tags are identity evidence. A captured value is canonicalized for comparison and deduplication only when it matches the integration's supported LINE user-ID syntax: `U` or `u` followed by exactly 32 hexadecimal characters. Canonicalization normalizes the prefix and hexadecimal casing without rewriting the GHL tag or the Supabase mapping. Unsupported or malformed `line:` identity tags fail closed, a genuinely different canonical user is `IDENTITY_CONFLICT`, and multiple genuinely different canonical identities are `AMBIGUOUS`. Multiple raw case variants of the same valid identity count as one identity. The ordinary `line` tag is not identity evidence, and arbitrary identifiers never receive generic case-insensitive comparison. Responses and logs expose only sanitized states, never raw LINE user IDs or identity tags.
 
 Malformed tag containers, non-string entries, and empty tag entries fail closed as a `MALFORMED` read. They are never silently discarded.
 

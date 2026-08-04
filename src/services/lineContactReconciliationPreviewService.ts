@@ -28,6 +28,7 @@ import {
 const DEFAULT_PREVIEW_DEADLINE_MS = 8_000;
 const emailSchema = z.string().email();
 const e164PhonePattern = /^\+[1-9]\d{7,14}$/;
+const supportedLineUserIdPattern = /^[Uu][0-9A-Fa-f]{32}$/;
 
 type PreviewDependencies = {
   getTenantIdsByLocationId: (locationId: string) => Promise<string[]>;
@@ -52,6 +53,12 @@ type ExactCountAssessment =
   | { kind: "INCONSISTENT" };
 
 const lineIdentityTagPattern = /^line:([A-Za-z0-9_-]+)$/i;
+const lineIdentityTagPrefixPattern = /^line:/i;
+
+type LineIdentityTagAnalysis = {
+  state: LineIdentityTagState;
+  malformed: boolean;
+};
 
 function emptyRiskStatuses(status: ReconciliationReadStatus = "UNAVAILABLE"): Record<ReconciliationRiskKey, ReconciliationReadStatus> {
   return Object.fromEntries(reconciliationRiskKeys.map((key) => [key, status])) as Record<
@@ -222,23 +229,56 @@ function countUnclassifiedStandardFields(
   return (master.unclassifiedStandardFieldCount ?? 0) + (candidate?.unclassifiedStandardFieldCount ?? 0);
 }
 
-function analyzeLineIdentityTags(tags: string[], lineUserId: string): LineIdentityTagState {
-  const identityValues = new Set(
-    tags.flatMap((tag) => {
-      const match = lineIdentityTagPattern.exec(tag.trim());
-      return match?.[1] ? [match[1]] : [];
-    })
-  );
+function canonicalizeSupportedLineUserId(value: string): string | undefined {
+  const normalized = value.trim();
+
+  if (!supportedLineUserIdPattern.test(normalized)) {
+    return undefined;
+  }
+
+  return `U${normalized.slice(1).toLowerCase()}`;
+}
+
+function analyzeLineIdentityTags(tags: string[], lineUserId: string): LineIdentityTagAnalysis {
+  const identityValues = new Set<string>();
+
+  for (const tag of tags) {
+    const normalizedTag = tag.trim();
+
+    if (!lineIdentityTagPrefixPattern.test(normalizedTag)) {
+      continue;
+    }
+
+    const match = lineIdentityTagPattern.exec(normalizedTag);
+    const canonicalIdentity = match?.[1]
+      ? canonicalizeSupportedLineUserId(match[1])
+      : undefined;
+
+    if (!canonicalIdentity) {
+      return { state: "NOT_EVALUATED", malformed: true };
+    }
+
+    identityValues.add(canonicalIdentity);
+  }
 
   if (identityValues.size === 0) {
-    return "NONE";
+    return { state: "NONE", malformed: false };
   }
 
   if (identityValues.size > 1) {
-    return "AMBIGUOUS";
+    return { state: "AMBIGUOUS", malformed: false };
   }
 
-  return identityValues.has(lineUserId) ? "MATCH" : "DIFFERENT";
+  const canonicalMappedIdentity = canonicalizeSupportedLineUserId(lineUserId);
+
+  if (!canonicalMappedIdentity) {
+    return { state: "NOT_EVALUATED", malformed: true };
+  }
+
+  return {
+    state: identityValues.has(canonicalMappedIdentity) ? "MATCH" : "DIFFERENT",
+    malformed: false
+  };
 }
 
 function countCandidateOnlyNonIdentityTags(masterTags: string[], candidateTags: string[]): number {
@@ -746,7 +786,18 @@ export function createLineContactReconciliationPreviewService(
           }));
         }
 
-        const masterLineIdentityTagState = analyzeLineIdentityTags(master.tags, lineUserId);
+        const masterLineIdentityTagAnalysis = analyzeLineIdentityTags(master.tags, lineUserId);
+
+        if (masterLineIdentityTagAnalysis.malformed) {
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "MANUAL_COMPLEX",
+            reasonCodes: ["MAPPED_CONTACT_LINE_IDENTITY_TAG_MALFORMED"],
+            currentContactMatchesMapping: true
+          }));
+        }
+
+        const masterLineIdentityTagState = masterLineIdentityTagAnalysis.state;
 
         if (masterLineIdentityTagState === "AMBIGUOUS") {
           return auditResult(createResponse({
@@ -948,7 +999,8 @@ export function createLineContactReconciliationPreviewService(
           }));
         }
 
-        const candidateLineIdentityTagState = analyzeLineIdentityTags(candidate.tags, lineUserId);
+        const candidateLineIdentityTagAnalysis = analyzeLineIdentityTags(candidate.tags, lineUserId);
+        const candidateLineIdentityTagState = candidateLineIdentityTagAnalysis.state;
         const protectedStandardFieldInventory = buildProtectedStandardFieldInventory(master, candidate);
         const transferInventory: TransferInventory = {
           standardFields: buildStandardFieldInventory(master, candidate),
@@ -1027,6 +1079,18 @@ export function createLineContactReconciliationPreviewService(
             distinctCandidateCount: 1,
             masterLineIdentityTagState,
             candidateLineIdentityTagState,
+            transferInventory
+          }));
+        }
+
+        if (candidateLineIdentityTagAnalysis.malformed) {
+          return auditResult(createResponse({
+            ...responseBase,
+            decision: "MANUAL_COMPLEX",
+            reasonCodes: ["CANDIDATE_LINE_IDENTITY_TAG_MALFORMED"],
+            currentContactMatchesMapping: true,
+            distinctCandidateCount: 1,
+            masterLineIdentityTagState,
             transferInventory
           }));
         }
