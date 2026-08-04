@@ -582,36 +582,108 @@ test("ambiguous candidate LINE mappings fail before risk reads", async () => {
   assert.equal(calls.risks.length, 0);
 });
 
-test("LINE identity tags recognize same, different, multiple, and ordinary line tags without exposing values", async () => {
-  const same = createHarness({
-    master: contact(currentContactId, { tags: [`LINE:${lineUserId}`] }),
-    candidate: contact(candidateContactId, { email: "person@example.com", tags: ["line", `line:${lineUserId}`] })
-  });
-  const sameResult = await same.service(baseRequest);
-  assert.equal(sameResult.decision, "AUTO_SIMPLE");
-  assert.deepEqual(sameResult.lineIdentityTags, { master: "MATCH", candidate: "MATCH" });
-  assert.equal(sameResult.transferInventory.candidateOnlyNonIdentityTags, 1);
+const validLineUserId = "U0123456789abcdef0123456789abcdef";
+const lowercasePrefixLineUserId = `u${validLineUserId.slice(1)}`;
+const differentValidLineUserId = "U0123456789abcdef0123456789abcdee";
 
-  const different = createHarness({
-    candidate: contact(candidateContactId, { email: "person@example.com", tags: ["line:different-user"] })
+test("valid LINE identity tags match across the observed uppercase-U and lowercase-u variants", async () => {
+  const harness = createHarness({
+    profile: profile({ line_user_id: validLineUserId }),
+    master: contact(currentContactId, { tags: [`line:${lowercasePrefixLineUserId}`] }),
+    searchResults: []
   });
-  const differentResult = await different.service(baseRequest);
-  assert.equal(differentResult.decision, "IDENTITY_CONFLICT");
-  assert.deepEqual(differentResult.reasonCodes, ["CANDIDATE_LINE_TAG_DIFFERENT_USER"]);
+  const result = await harness.service(baseRequest);
 
-  const multiple = createHarness({
-    candidate: contact(candidateContactId, {
-      email: "person@example.com",
-      tags: [`line:${lineUserId}`, "line:different-user"]
+  assert.equal(result.decision, "NO_MATCH");
+  assert.equal(result.lineIdentityTags.master, "MATCH");
+});
+
+test("a different valid LINE identity body remains an identity conflict", async () => {
+  const harness = createHarness({
+    profile: profile({ line_user_id: validLineUserId }),
+    master: contact(currentContactId, { tags: [`line:${differentValidLineUserId}`] })
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "IDENTITY_CONFLICT");
+  assert.deepEqual(result.reasonCodes, ["MAPPED_CONTACT_LINE_TAG_DIFFERENT_USER"]);
+});
+
+test("malformed LINE identity tags fail closed", async () => {
+  const harness = createHarness({
+    profile: profile({ line_user_id: validLineUserId }),
+    master: contact(currentContactId, { tags: ["line:not-a-supported-line-user-id"] })
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(result.reasonCodes, ["MAPPED_CONTACT_LINE_IDENTITY_TAG_MALFORMED"]);
+  assert.equal(result.lineIdentityTags.master, "NOT_EVALUATED");
+});
+
+test("case variants of one valid LINE identity deduplicate without false ambiguity", async () => {
+  const uppercaseBodyVariant = `u${validLineUserId.slice(1).toUpperCase()}`;
+  const harness = createHarness({
+    profile: profile({ line_user_id: validLineUserId }),
+    master: contact(currentContactId, {
+      tags: [`line:${validLineUserId}`, `LINE:${lowercasePrefixLineUserId}`, `line:${uppercaseBodyVariant}`]
+    }),
+    searchResults: []
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "NO_MATCH");
+  assert.equal(result.lineIdentityTags.master, "MATCH");
+});
+
+test("multiple genuinely different canonical LINE identities remain ambiguous", async () => {
+  const harness = createHarness({
+    profile: profile({ line_user_id: validLineUserId }),
+    master: contact(currentContactId, {
+      tags: [`line:${lowercasePrefixLineUserId}`, `line:${differentValidLineUserId}`]
     })
   });
-  const multipleResult = await multiple.service(baseRequest);
-  assert.equal(multipleResult.decision, "AMBIGUOUS");
-  assert.deepEqual(multipleResult.reasonCodes, ["CANDIDATE_LINE_IDENTITY_TAGS_AMBIGUOUS"]);
+  const result = await harness.service(baseRequest);
 
-  const serialized = JSON.stringify([sameResult, differentResult, multipleResult]);
-  assert.doesNotMatch(serialized, new RegExp(lineUserId));
-  assert.doesNotMatch(serialized, /line:different-user/i);
+  assert.equal(result.decision, "AMBIGUOUS");
+  assert.deepEqual(result.reasonCodes, ["MAPPED_CONTACT_LINE_IDENTITY_TAGS_AMBIGUOUS"]);
+});
+
+test("existing exact-case LINE identity tags continue to pass and ordinary line tags remain non-identity", async () => {
+  const harness = createHarness({
+    profile: profile({ line_user_id: validLineUserId }),
+    master: contact(currentContactId, { tags: [`LINE:${validLineUserId}`] }),
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      tags: ["line", `line:${validLineUserId}`]
+    })
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "AUTO_SIMPLE");
+  assert.deepEqual(result.lineIdentityTags, { master: "MATCH", candidate: "MATCH" });
+  assert.equal(result.transferInventory.candidateOnlyNonIdentityTags, 1);
+});
+
+test("LINE identity normalization never exposes raw identities in responses or completion logs", async () => {
+  const originalInfo = logger.info;
+  const logged = [];
+  logger.info = (...args) => logged.push(args);
+
+  try {
+    const harness = createHarness({
+      profile: profile({ line_user_id: validLineUserId }),
+      master: contact(currentContactId, { tags: [`line:${lowercasePrefixLineUserId}`] }),
+      searchResults: []
+    });
+    const result = await harness.service(baseRequest);
+    const serialized = JSON.stringify({ result, logged });
+
+    assert.doesNotMatch(serialized, new RegExp(validLineUserId, "i"));
+    assert.doesNotMatch(serialized, new RegExp(lowercasePrefixLineUserId, "i"));
+  } finally {
+    logger.info = originalInfo;
+  }
 });
 
 test("LINE ID name and contact.line_id key are confirmed LINE identity fields", async () => {
