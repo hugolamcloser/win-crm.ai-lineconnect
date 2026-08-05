@@ -173,6 +173,14 @@ Seeing `Success. No rows returned` after running the migration is normal because
 
 The OAuth migrations create `ghl_oauth_tokens` for location-scoped Marketplace tokens plus `ghl_oauth_onboarding_sessions` and `ghl_pending_app_installs` for durable AppInstall correlation. Company credentials are server-only, capped to a short onboarding lifetime, and never stored as location tokens. Never expose token values from Supabase.
 
+## Development and Deployment Safety
+
+- Submit every change through a pull request; direct changes to the protected `main` branch are not permitted.
+- The GitHub Actions `validate` job must pass before a pull request can be merged.
+- Production uses Railway Wait for CI, and deployment readiness is verified through the `/health` endpoint.
+- Autonomous agents may create branches, validate changes, commit, push, and open pull requests.
+- Autonomous agents must not merge pull requests or manually deploy production.
+
 ## Install And Build
 
 ```bash
