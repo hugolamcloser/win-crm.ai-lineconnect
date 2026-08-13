@@ -58,7 +58,7 @@ The endpoint evaluates only `identity` values in the current request. It never r
 
 ## Field policy
 
-Field IDs are resolved at runtime from the location's contact custom-field definitions by stable `fieldKey` or exact field name; no tenant-specific field ID is hardcoded.
+Field IDs are resolved at runtime from the location's contact custom-field definitions by stable `fieldKey` or exact field name; no tenant-specific field ID is hardcoded. HighLevel `fieldKey` values are not assumed to be globally unique. Definitions with unrelated duplicate normalized keys remain separate protected fields by their unique IDs, while ambiguity is evaluated and rejected for each LINE identity or ignored temporary-field reference.
 
 - Every confirmed LINE identity custom-field value is checked independently against the immutable, tenant-scoped Supabase `lineUserId`. Empty values provide no evidence, an exact value is valid evidence, and any different non-empty value produces `IDENTITY_CONFLICT` without exposing either value. The mapped master's LINE identity fields are validated from location metadata even when contact search finds no distinct candidate; malformed or unavailable metadata fails closed without associated-record reads.
 - Stable LINE identity metadata includes `contact.line_user_id`, `contact.line_userid`, `contact.line_id`, `LINE User ID`, `LINE UserId`, and `LINE ID`. The configured `GHL_LINE_USER_ID_FIELD_ID` is recognized only when that exact ID exists in the current location metadata.
