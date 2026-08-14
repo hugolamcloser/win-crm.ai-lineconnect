@@ -470,6 +470,37 @@ test("valuable relationship and attribution fields are protected while true syst
   }
 });
 
+test("HighLevel-generated contact metadata is ignored on both mapped and candidate contacts", async () => {
+  const generatedMetadata = {
+    createdBy: { source: "highlevel" },
+    emailLowerCase: "person@example.com",
+    firstNameLowerCase: "person",
+    fullNameLowerCase: "person example",
+    lastNameLowerCase: "example"
+  };
+  const responses = [
+    { contact: { id: "contact-master", locationId: "location-test", ...generatedMetadata, tags: [], customFields: [] } },
+    { contact: { id: "contact-candidate", locationId: "location-test", ...generatedMetadata, tags: [], customFields: [] } }
+  ];
+  const client = createGhlReconciliationReadClient({
+    openOAuthSession: openSessionWithToken(token()),
+    fetchImpl: async () => jsonResponse(responses.shift())
+  });
+  const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
+  const master = await session.getContact("contact-master", Date.now() + 1_000);
+  const candidate = await session.getContact("contact-candidate", Date.now() + 1_000);
+
+  for (const fieldName of Object.keys(generatedMetadata)) {
+    assert.equal(classifyReconciliationStandardField(fieldName), "IGNORED_METADATA");
+  }
+  assert.equal(master.unclassifiedStandardFieldCount, 0);
+  assert.equal(candidate.unclassifiedStandardFieldCount, 0);
+  assert.deepEqual(master.standardFields, {});
+  assert.deepEqual(candidate.standardFields, {});
+  assert.equal(classifyReconciliationStandardField("attributionSource"), "PROTECTED_OR_UNSUPPORTED");
+  assert.equal(classifyReconciliationStandardField("futureBusinessValue"), "UNCLASSIFIED");
+});
+
 test("malformed contact tags are rejected instead of discarded", async () => {
   for (const tags of ["line", ["line", 42], ["line", "  "]]) {
     const client = createGhlReconciliationReadClient({
