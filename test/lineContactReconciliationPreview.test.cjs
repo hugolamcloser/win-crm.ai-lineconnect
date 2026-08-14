@@ -7,6 +7,9 @@ const {
 } = require("../dist/services/lineContactReconciliationPreviewService");
 const { logger } = require("../dist/config/logger");
 const { env } = require("../dist/config/env");
+const {
+  resolveReconciliationFieldPolicy
+} = require("../dist/config/lineContactReconciliationFieldPolicy");
 const { GhlReconciliationReadError } = require("../dist/integrations/ghlReconciliationReadClient");
 
 const locationId = "location-test";
@@ -776,6 +779,50 @@ test("duplicate custom-field metadata IDs fail closed", async () => {
 
   assert.equal(result.decision, "MANUAL_COMPLEX");
   assert.equal(result.fieldPolicy.status, "MALFORMED");
+});
+
+test("unrelated definitions may share a normalized fieldKey and remain protected independently by ID", () => {
+  const policy = resolveReconciliationFieldPolicy([
+    { id: "protected-one", fieldKey: "contact.shared_key", name: "First Business Field", model: "contact" },
+    { id: "protected-two", fieldKey: " CONTACT.SHARED_KEY ", name: "Second Business Field", model: "contact" }
+  ]);
+
+  assert.deepEqual([...policy.lineIdentityFieldIds], []);
+  assert.deepEqual([...policy.ignoredFieldIds], []);
+  assert.deepEqual([...policy.protectedBusinessFieldIds], ["protected-one", "protected-two"]);
+});
+
+test("field policy rejects duplicate definition IDs", () => {
+  assert.throws(() => resolveReconciliationFieldPolicy([
+    { id: "duplicate", fieldKey: "contact.one", name: "One", model: "contact" },
+    { id: "duplicate", fieldKey: "contact.two", name: "Two", model: "contact" }
+  ]), /Ambiguous HighLevel custom-field metadata/);
+});
+
+test("field policy rejects multiple definitions matching one LINE identity reference", () => {
+  assert.throws(() => resolveReconciliationFieldPolicy([
+    { id: "line-one", fieldKey: "contact.line_id", name: "First", model: "contact" },
+    { id: "line-two", fieldKey: " CONTACT.LINE_ID ", name: "Second", model: "contact" }
+  ]), /Ambiguous HighLevel custom-field policy metadata/);
+});
+
+test("field policy rejects multiple definitions matching one ignored temporary-field reference", () => {
+  assert.throws(() => resolveReconciliationFieldPolicy([
+    { id: "ignored-one", fieldKey: "contact.ai_event_command", name: "First", model: "contact" },
+    { id: "ignored-two", fieldKey: " CONTACT.AI_EVENT_COMMAND ", name: "Second", model: "contact" }
+  ]), /Ambiguous HighLevel custom-field policy metadata/);
+});
+
+test("one LINE identity definition resolves once alongside unrelated duplicate fieldKeys", () => {
+  const policy = resolveReconciliationFieldPolicy([
+    { id: "line-field", fieldKey: "contact.line_id", name: "LINE ID", model: "contact" },
+    { id: "protected-one", fieldKey: "contact.shared_key", name: "First Business Field", model: "contact" },
+    { id: "protected-two", fieldKey: " CONTACT.SHARED_KEY ", name: "Second Business Field", model: "contact" }
+  ]);
+
+  assert.deepEqual([...policy.lineIdentityFieldIds], ["line-field"]);
+  assert.deepEqual([...policy.ignoredFieldIds], []);
+  assert.deepEqual([...policy.protectedBusinessFieldIds], ["protected-one", "protected-two"]);
 });
 
 test("mapped and candidate contact 404 responses use distinct safe classifications", async () => {

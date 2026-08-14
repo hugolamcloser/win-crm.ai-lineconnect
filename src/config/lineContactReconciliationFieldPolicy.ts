@@ -48,21 +48,15 @@ export function resolveReconciliationFieldPolicy(
   configuredLineUserFieldId?: string
 ): ReconciliationFieldPolicy {
   const definitionIds = new Set<string>();
-  const fieldKeys = new Set<string>();
 
   for (const definition of definitions) {
     const definitionId = definition.id.trim();
-    const fieldKey = normalizeStableName(definition.fieldKey);
 
-    if (!definitionId || definitionIds.has(definitionId) || (fieldKey && fieldKeys.has(fieldKey))) {
+    if (!definitionId || definitionIds.has(definitionId)) {
       throw new Error("Ambiguous HighLevel custom-field metadata");
     }
 
     definitionIds.add(definitionId);
-
-    if (fieldKey) {
-      fieldKeys.add(fieldKey);
-    }
   }
 
   for (const reference of [...lineIdentityReferences, ...ignoredTemporaryReferences]) {
