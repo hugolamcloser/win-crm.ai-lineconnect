@@ -2,9 +2,23 @@
 
 ## Status and scope
 
-This document records behavior confirmed by the official EVERY8D specification. It is a Phase 1 research artifact only. It does not authorize runtime implementation, credential use, callback configuration, live SMS, database changes, production configuration, or deployment.
+This document records behavior confirmed by the official EVERY8D specification and the Phase 1B evidence classification completed for Issue #74. It remains a research artifact only. It does not authorize runtime implementation, credential use, callback configuration, live SMS, controlled testing, database changes, production configuration, or deployment.
 
 Undocumented or internally inconsistent behavior is not inferred. Open questions and the Phase 1 decision are recorded in [`every8d-feasibility-decision.md`](every8d-feasibility-decision.md).
+
+## Phase 1B evidence classification
+
+Issue #74 requires every conclusion to use one of these evidence classes:
+
+| Classification | Meaning in this contract |
+| --- | --- |
+| Confirmed by official EVERY8D documentation | The behavior is stated in the official API 2.1 specification and is recorded in the relevant contract section below. |
+| Confirmed by EVERY8D account/dashboard behavior | A non-sensitive observation from an authorized EVERY8D account demonstrates the behavior, but does not by itself establish an API guarantee. |
+| Requires written provider confirmation | The official specification does not establish the behavior or is internally inconsistent. EVERY8D must answer in writing before the behavior is designed as a guarantee. |
+| Requires a separately approved controlled test | Written confirmation should be verified against a sandbox or explicitly approved test process before the affected behavior is accepted. Issue #74 does not authorize such a test. |
+| Still unresolved | No qualifying official, dashboard, written-provider, or controlled-test evidence is available. |
+
+No EVERY8D account or dashboard evidence was supplied for Phase 1B. No provider question was sent and no controlled test was run. Accordingly, dashboard-only conclusions are absent and every gap below remains either a written-confirmation requirement, a separately approved controlled-test requirement, or unresolved.
 
 ## Source identity
 
@@ -579,6 +593,108 @@ The specification explicitly states:
 - The reply content is placed in `SM`.
 
 No callback authenticity, signature, or replay-protection mechanism is documented.
+
+## Phase 1B unresolved contract register
+
+This register narrows the existing Phase 1 gaps without creating a second blocker list. Blocker ownership and the Phase 1B decision remain in [`every8d-feasibility-decision.md`](every8d-feasibility-decision.md).
+
+### Sender identity and inbound reply model
+
+| Question | Existing official evidence | Phase 1B classification |
+| --- | --- | --- |
+| What identity is visible to an outbound recipient? | The send request defines destinations, content, subject, and optional `EventID`; it does not define a sender number or sender ID. | Requires written provider confirmation; still unresolved. |
+| What makes a message reply-capable? | `EventID` adds an interactive-reply link and `EventID=-1` selects a default activity channel. | The link behavior is confirmed by official documentation; the provisioning and ownership model requires written provider confirmation. |
+| Is ordinary carrier-native MO available? | The specification documents reply lookup and callback `STATUS=999`, but does not say whether those replies are carrier-native MO or only EventID web replies. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
+| How are inbound numbers or channels provisioned? | Not documented. | Requires written provider confirmation; still unresolved. |
+| Are receiving resources dedicated or shared? | Not documented. | Requires written provider confirmation; still unresolved. |
+| How is a reply associated with the original outbound message? | `BID`/`BATCHID` is used for reply lookup; callbacks include `BatchID`, `MR`, and an unclear `MSGID`. | The presence of these fields is confirmed; stable recipient-level correlation requires written provider confirmation and a separately approved controlled test. |
+| How is a sender or inbound resource associated with a Win-CRM tenant? | No tenant or customer-owned sender/channel identifier is defined. | Requires written provider confirmation; still unresolved. |
+
+There is no account/dashboard evidence for any of these questions. Dashboard labels, if later observed, must be recorded as dashboard-only evidence until the API contract or a controlled test establishes their runtime meaning.
+
+### Callback security and delivery contract
+
+| Behavior | Existing official evidence | Phase 1B classification |
+| --- | --- | --- |
+| Authentication, signature, shared secret, mTLS, or source allowlist | None documented. | Requires written provider confirmation; still unresolved. No security mechanism may be invented. |
+| Replay protection and immutable event identity | None documented. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
+| Successful acknowledgement | HTTP status `200` is treated as successful connectivity; no acknowledgement body is defined. | Status behavior is confirmed by official documentation; body requirements require written provider confirmation. |
+| Retry trigger | A non-200 response causes a retry. | Confirmed by official documentation. |
+| Retry count, interval, backoff, timeout, and maximum delivery age | Retries stop after an unspecified maximum; no other values are defined. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
+| Duplicate callbacks, ordering, and concurrency | Not documented. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
+
+### Correlation and message identity
+
+| Identifier | Confirmed documented purpose | Missing guarantee | Phase 1B classification |
+| --- | --- | --- | --- |
+| `BATCHID` | Returned by a successful send/schedule and used for DR, MO, callback reporting, and cancellation. | Scope, uniqueness duration, reuse, partial-send behavior, and tenant-safe lifecycle. | Documented purpose confirmed; guarantees require written provider confirmation and a separately approved lifecycle test. |
+| `BID` | Request field carrying the batch identifier for DR/MO queries and scheduled cancellation. | Whether it is always identical to the returned `BATCHID` in every endpoint and failure mode. | Documented use confirmed; complete relationship requires written provider confirmation. |
+| `MR` | Optional caller value for personalized/parameter sends, unique within a batch and returned in status reporting. The callback table also defines `MR` twice with conflicting meanings. | Stable source, uniqueness scope, exact callback meaning, and whether general sends expose a recipient-level value. | Documented uses confirmed but internally inconsistent; corrected schema and controlled samples are required. |
+| `MSGID` | Callback table describes it as supplied during sending. | No outbound SMS request table defines it; source, uniqueness, and lifecycle are unknown. | Requires corrected written provider documentation and a separately approved controlled test; still unresolved. |
+| `EventID` | Selects the interactive-reply activity/channel and causes a reply link to be added. | Activity lifecycle, tenant ownership, relation to callbacks/MO, and uniqueness. | Documented send behavior confirmed; routing guarantees require written provider confirmation and a separately approved test. |
+| Recipient-level identifier | No unambiguous immutable identifier is documented across send, DR, MO, and callback. | The key needed for end-to-end recipient correlation. | Requires written provider confirmation and a separately approved test; still unresolved. |
+
+No documented identifier can currently correlate the full Win-CRM request → EVERY8D submission → delivery status → inbound reply → callback chain without additional guarantees. None is documented as an idempotency key.
+
+### Retry and duplicate-send safety
+
+| Question | Existing official evidence | Phase 1B classification |
+| --- | --- | --- |
+| Is retry after an ambiguous HTTP timeout safe? | Not documented. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
+| Does EVERY8D provide native idempotency? | No idempotency key or idempotent send contract is documented. | Requires written provider confirmation; still unresolved. |
+| Is `MR` idempotent? | `MR` is documented as a within-batch correlation value for personalized/parameter sends. | Correlation is confirmed; idempotency is not documented and must not be inferred. |
+| What does `SendSMS4FilterMessage.ashx` compare? | Same content to the same mobile number within 24 hours; `IsSend=false` can evaluate without sending. | Character/number normalization, account/channel scope, time boundary, concurrency, and error behavior require written confirmation. |
+| Is duplicate filtering atomic and safe for client retries? | Not documented. | Requires written provider confirmation and a separately approved concurrency/timeout test; still unresolved. |
+
+Until those questions are resolved, an ambiguous send outcome must not be automatically retried and the filtered endpoint must not be treated as universal duplicate-send protection.
+
+### Authentication and token lifecycle
+
+| Behavior | Existing official evidence | Phase 1B classification |
+| --- | --- | --- |
+| Obtain, check, and close token operations | `VerifyType` values `1`, `2`, and `3` are documented. | Confirmed by official documentation. |
+| Recommended acquisition interval | Obtain a token once every eight hours. | Confirmed as a recommendation, not an exact lifetime. |
+| Exact lifetime, reuse, multiple active tokens, and rotation overlap | Not documented. | Requires written provider confirmation and a separately approved non-production test; still unresolved. |
+| Expiry, replacement, close/revocation propagation, and error response | Not documented beyond generic failure shapes. | Requires written provider confirmation and a separately approved non-production test; still unresolved. |
+| Safe retry after authentication failure | Not documented. | Requires written provider confirmation and a separately approved non-production test; still unresolved. |
+
+### Encoding, length, segmentation, and billing
+
+| Behavior | Existing official evidence | Phase 1B classification |
+| --- | --- | --- |
+| Request media types | JSON and form-encoded media types are identified per endpoint. | Confirmed by official documentation. |
+| Request/callback charset and percent-encoding | Not defined; the callback is only described as encoded. | Requires written provider confirmation and a separately approved test; still unresolved. |
+| Traditional Chinese and English replies | The callback `SM` description names Traditional Chinese and English. | Confirmed only for the documented reply-content field; it does not establish request charset or counting rules. |
+| ASCII, URLs, emoji, combining characters, and Unicode normalization | Not documented. | Requires written provider confirmation and separately approved representative tests; still unresolved. |
+| Long-message maximum and `EventID` overhead | Long SMS is described as up to 333 characters; content above 333 is split; the interactive link adds 17 characters. | Confirmed by official documentation. |
+| Counting algorithm, segment boundaries, maximum segments, and per-segment billing | Not documented. | Requires written provider confirmation and separately approved boundary tests; still unresolved. |
+
+### Taiwan phone-number normalization
+
+The official examples show a Taiwan national form and a `+886` form, but do not establish the accepted set. In particular, the contract does not confirm acceptance of all three candidate forms `09xxxxxxxx`, `8869xxxxxxxx`, and `+8869xxxxxxxx` or define punctuation, whitespace, and validation behavior.
+
+The eventual Win-CRM strategy should therefore be conditional and provider-neutral:
+
+1. Accept only explicitly approved Taiwan input forms at the external boundary.
+2. Parse and validate as a Taiwan mobile number without silently treating malformed input as valid.
+3. Normalize the internal destination to canonical E.164 (`+8869xxxxxxxx`) while retaining a redacted audit representation rather than logging the full number.
+4. Convert to the exact EVERY8D wire format only after written provider confirmation and controlled-test evidence establish that format.
+5. Reject missing, ambiguous, unsupported, or non-Taiwan destinations for the pilot; keep international sending out of scope.
+
+This is a recommended future design, not a provider-confirmed API behavior, and no normalization is implemented by Issue #74.
+
+### Provider limits, retention, and test availability
+
+| Limit or capability | Existing official evidence | Phase 1B classification |
+| --- | --- | --- |
+| DR page size | Up to 1,000 records per page. | Confirmed by official documentation. |
+| MO page size | The specification conflicts between 1,000 records and 10 records per page. | Requires corrected written confirmation and a separately approved multi-page test. |
+| QPS, concurrency, throughput, recipients/request, payload/batch size, throttling, and query frequency | Not documented. | Requires written provider confirmation; still unresolved. |
+| DR, MO, callback, and identifier retention | Not documented. | Requires written provider confirmation and later reconciliation testing; still unresolved. |
+| Sandbox, non-production endpoint, test credentials/numbers, or no-charge messages | Not documented. | Requires written provider confirmation; still unresolved. |
+| Provider-approved controlled production test | Not documented. | Requires explicit written provider and project approval. Issue #74 does not authorize it. |
+
+The proposed controlled-test matrix, message ceiling, cost gate, evidence requirements, and stop conditions are recorded in the feasibility decision. It is a readiness artifact only and must not be executed without a separate approval.
 
 ## Confirmed boundaries
 
