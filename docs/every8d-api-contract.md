@@ -18,7 +18,23 @@ Issue #74 requires every conclusion to use one of these evidence classes:
 | Requires a separately approved controlled test | Written confirmation should be verified against a sandbox or explicitly approved test process before the affected behavior is accepted. Issue #74 does not authorize such a test. |
 | Still unresolved | No qualifying official, dashboard, written-provider, or controlled-test evidence is available. |
 
-No EVERY8D account or dashboard evidence was supplied for Phase 1B. No provider question was sent and no controlled test was run. Accordingly, dashboard-only conclusions are absent and every gap below remains either a written-confirmation requirement, a separately approved controlled-test requirement, or unresolved.
+Authorized EVERY8D account/dashboard observations collected during Phase 1 research were supplied in a Phase 1B follow-up. They are recorded below as dashboard-only evidence. No provider question was sent and no controlled test was run. Dashboard observations narrow several gaps but do not establish API, security, delivery, correlation, idempotency, sender, tenant-routing, or sandbox guarantees.
+
+## Sanitized EVERY8D dashboard evidence
+
+The observations in this section came from an authenticated, active EVERY8D account. No account identity, credential, balance amount, phone number, recipient, message content, or customer information was captured in this repository.
+
+| Evidence ID | Sanitized dashboard observation | Classification and limit |
+| --- | --- | --- |
+| D1 | Account Settings contains `用戶發送回報設定` with a callback/report URL field, a callback attempt-count setting, encoding choices `BIG5` and `UTF-8`, and HTTP method choices `POST` and `GET`. | Confirmed by EVERY8D account/dashboard behavior only. It shows configurable UI controls, not callback authentication, retry semantics, wire encoding, HTTP payload, or delivery guarantees. |
+| D2 | Account Settings exposes `開啟回覆轉寄`. The `回覆轉寄說明` describes a flow where a recipient receives an SMS, can reply, and EVERY8D can forward the reply toward customer systems or email. SafeSay-related behavior is described separately. | Confirmed by EVERY8D account/dashboard behavior only. It does not establish sender identity, carrier-native MO, EventID relationship, provisioning, tenant routing, correlation, or forwarding guarantees. |
+| D3 | The UI exposes SMS send, parameterized SMS send, SMS send query, scheduled-message management, and SMS message/report management. | Confirmed by EVERY8D account/dashboard behavior only. UI availability does not establish API equivalence, limits, retention, state transitions, or idempotency. |
+| D4 | The UI exposes MMS equivalents as separate functions. | Confirmed by EVERY8D account/dashboard behavior only. It supports keeping MMS and SMS behavior separate and adds no SMS API guarantee. |
+| D5 | The SMS send-query UI exposes records/status querying. | Confirmed by EVERY8D account/dashboard behavior only. It does not define identifier guarantees, status finality, retention, pagination, or callback correlation. |
+| D6 | The dashboard exposes `查詢發送回覆明細`. | Confirmed by EVERY8D account/dashboard behavior only. It shows a reply-detail query function, not the reply transport, record schema, retention, or tenant-safe correlation contract. |
+| D7 | The authenticated account was active and displayed a prepaid balance. | Confirmed by EVERY8D account/dashboard behavior only. No amount is recorded. It does not establish pricing, credit expiry, sandbox/test status, or permission to send. |
+
+Where the official API specification independently establishes a related behavior, the official evidence remains the API source of truth. Dashboard controls must not override or silently extend the official contract.
 
 ## Source identity
 
@@ -600,27 +616,27 @@ This register narrows the existing Phase 1 gaps without creating a second blocke
 
 ### Sender identity and inbound reply model
 
-| Question | Existing official evidence | Phase 1B classification |
+| Question | Official and dashboard evidence | Phase 1B classification |
 | --- | --- | --- |
 | What identity is visible to an outbound recipient? | The send request defines destinations, content, subject, and optional `EventID`; it does not define a sender number or sender ID. | Requires written provider confirmation; still unresolved. |
-| What makes a message reply-capable? | `EventID` adds an interactive-reply link and `EventID=-1` selects a default activity channel. | The link behavior is confirmed by official documentation; the provisioning and ownership model requires written provider confirmation. |
-| Is ordinary carrier-native MO available? | The specification documents reply lookup and callback `STATUS=999`, but does not say whether those replies are carrier-native MO or only EventID web replies. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
-| How are inbound numbers or channels provisioned? | Not documented. | Requires written provider confirmation; still unresolved. |
+| What makes a message reply-capable? | Officially, `EventID` adds an interactive-reply link and `EventID=-1` selects a default activity channel. Dashboard evidence D2 shows a separately presented reply-forwarding feature and explanation. | The two observed capabilities are confirmed at their respective evidence levels; their relationship, provisioning, and ownership require written provider confirmation. |
+| Is ordinary carrier-native MO available? | The specification documents reply lookup and callback `STATUS=999`. Dashboard evidence D2 describes recipient reply and forwarding, but does not identify the underlying reply transport or its relationship to EventID/SafeSay. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
+| How are inbound numbers or channels provisioned? | Dashboard evidence D2 shows that reply forwarding can be enabled, but does not expose a sanitized provisioning or ownership contract. | Requires written provider confirmation; still unresolved. |
 | Are receiving resources dedicated or shared? | Not documented. | Requires written provider confirmation; still unresolved. |
-| How is a reply associated with the original outbound message? | `BID`/`BATCHID` is used for reply lookup; callbacks include `BatchID`, `MR`, and an unclear `MSGID`. | The presence of these fields is confirmed; stable recipient-level correlation requires written provider confirmation and a separately approved controlled test. |
+| How is a reply associated with the original outbound message? | Officially, `BID`/`BATCHID` is used for reply lookup and callbacks include `BatchID`, `MR`, and an unclear `MSGID`. Dashboard evidence D5/D6 shows send/status and reply-detail query functions, but no stable join key. | The fields and UI functions are confirmed at their respective evidence levels; stable recipient-level correlation requires written provider confirmation and a separately approved controlled test. |
 | How is a sender or inbound resource associated with a Win-CRM tenant? | No tenant or customer-owned sender/channel identifier is defined. | Requires written provider confirmation; still unresolved. |
 
-There is no account/dashboard evidence for any of these questions. Dashboard labels, if later observed, must be recorded as dashboard-only evidence until the API contract or a controlled test establishes their runtime meaning.
+Dashboard evidence narrows the existence of reply-forwarding and query functions, but it does not establish sender identity, native-MO transport, provisioning, ownership, tenant routing, or stable correlation.
 
 ### Callback security and delivery contract
 
-| Behavior | Existing official evidence | Phase 1B classification |
+| Behavior | Official and dashboard evidence | Phase 1B classification |
 | --- | --- | --- |
-| Authentication, signature, shared secret, mTLS, or source allowlist | None documented. | Requires written provider confirmation; still unresolved. No security mechanism may be invented. |
+| Authentication, signature, shared secret, mTLS, or source allowlist | None is documented by the official specification. Dashboard evidence D1 confirms callback configuration controls but supplies no authentication evidence. | Requires written provider confirmation; still unresolved. No security mechanism may be invented. |
 | Replay protection and immutable event identity | None documented. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
-| Successful acknowledgement | HTTP status `200` is treated as successful connectivity; no acknowledgement body is defined. | Status behavior is confirmed by official documentation; body requirements require written provider confirmation. |
+| HTTP method and successful acknowledgement | Officially, callbacks use GET and HTTP status `200` is successful connectivity; no acknowledgement body is defined. Dashboard evidence D1 offers `POST` and `GET` method choices. | Each observation is confirmed at its evidence level; the POST payload, method precedence, and acknowledgement body require written provider confirmation. |
 | Retry trigger | A non-200 response causes a retry. | Confirmed by official documentation. |
-| Retry count, interval, backoff, timeout, and maximum delivery age | Retries stop after an unspecified maximum; no other values are defined. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
+| Retry count, interval, backoff, timeout, and maximum delivery age | Officially, retries stop after an unspecified maximum. Dashboard evidence D1 shows an attempt-count setting, but no sanitized value, range, default, or retry semantics were supplied. | The configurable control is dashboard-confirmed; its meaning and the complete delivery policy require written provider confirmation and a separately approved controlled test. |
 | Duplicate callbacks, ordering, and concurrency | Not documented. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
 
 ### Correlation and message identity
@@ -635,6 +651,8 @@ There is no account/dashboard evidence for any of these questions. Dashboard lab
 | Recipient-level identifier | No unambiguous immutable identifier is documented across send, DR, MO, and callback. | The key needed for end-to-end recipient correlation. | Requires written provider confirmation and a separately approved test; still unresolved. |
 
 No documented identifier can currently correlate the full Win-CRM request → EVERY8D submission → delivery status → inbound reply → callback chain without additional guarantees. None is documented as an idempotency key.
+
+Dashboard evidence D3, D5, and D6 confirms management/query UI functions, but does not expose a sanitized identifier schema or uniqueness/lifecycle guarantee and therefore does not change that conclusion.
 
 ### Retry and duplicate-send safety
 
@@ -663,7 +681,7 @@ Until those questions are resolved, an ambiguous send outcome must not be automa
 | Behavior | Existing official evidence | Phase 1B classification |
 | --- | --- | --- |
 | Request media types | JSON and form-encoded media types are identified per endpoint. | Confirmed by official documentation. |
-| Request/callback charset and percent-encoding | Not defined; the callback is only described as encoded. | Requires written provider confirmation and a separately approved test; still unresolved. |
+| Request/callback charset and percent-encoding | Officially, the callback is only described as encoded. Dashboard evidence D1 offers `BIG5` and `UTF-8` report-encoding choices, but does not define byte encoding, percent/form encoding, default/selection scope, or error behavior. | The existence of the choices is dashboard-confirmed; their wire semantics require written provider confirmation and a separately approved test. |
 | Traditional Chinese and English replies | The callback `SM` description names Traditional Chinese and English. | Confirmed only for the documented reply-content field; it does not establish request charset or counting rules. |
 | ASCII, URLs, emoji, combining characters, and Unicode normalization | Not documented. | Requires written provider confirmation and separately approved representative tests; still unresolved. |
 | Long-message maximum and `EventID` overhead | Long SMS is described as up to 333 characters; content above 333 is split; the interactive link adds 17 characters. | Confirmed by official documentation. |
@@ -691,7 +709,7 @@ This is a recommended future design, not a provider-confirmed API behavior, and 
 | MO page size | The specification conflicts between 1,000 records and 10 records per page. | Requires corrected written confirmation and a separately approved multi-page test. |
 | QPS, concurrency, throughput, recipients/request, payload/batch size, throttling, and query frequency | Not documented. | Requires written provider confirmation; still unresolved. |
 | DR, MO, callback, and identifier retention | Not documented. | Requires written provider confirmation and later reconciliation testing; still unresolved. |
-| Sandbox, non-production endpoint, test credentials/numbers, or no-charge messages | Not documented. | Requires written provider confirmation; still unresolved. |
+| Sandbox, non-production endpoint, test credentials/numbers, or no-charge messages | Not documented. Dashboard evidence D7 confirms an active authenticated account with a prepaid balance, not a sandbox or test facility. | Requires written provider confirmation; still unresolved. |
 | Provider-approved controlled production test | Not documented. | Requires explicit written provider and project approval. Issue #74 does not authorize it. |
 
 The proposed controlled-test matrix, message ceiling, cost gate, evidence requirements, and stop conditions are recorded in the feasibility decision. It is a readiness artifact only and must not be executed without a separate approval.
