@@ -291,7 +291,17 @@ function buildRiskRequest(
     case "opportunities":
       return { path: "/opportunities/search", query: new URLSearchParams({ location_id: location, contact_id: contact, limit: "1" }) };
     case "orders":
-      return { path: "/payments/orders", query: new URLSearchParams({ altId: location, contactId: contact, limit: "1", offset: "0" }) };
+      return {
+        path: "/payments/orders",
+        query: new URLSearchParams({
+          locationId: location,
+          altId: location,
+          altType: "location",
+          contactId: contact,
+          limit: "1",
+          offset: "0"
+        })
+      };
     case "transactions":
       return { path: "/payments/transactions", query: new URLSearchParams({ altId: location, altType: "location", contactId: contact, limit: "1", offset: "0" }) };
     case "invoices":

@@ -370,6 +370,76 @@ test("associated record parsers report CLEAR, FOUND, MALFORMED, and MISSING_SCOP
   assert.equal(await deniedSession.checkAssociatedRecords("notes", "contact-test", Date.now() + 1_000), "MISSING_SCOPE");
 });
 
+test("Orders read uses the exact location-scoped contract and empty data is CLEAR", async () => {
+  const calls = [];
+  const client = createGhlReconciliationReadClient({
+    openOAuthSession: openSessionWithToken(token()),
+    fetchImpl: async (url, init) => {
+      calls.push({ url: new URL(url), init });
+      return jsonResponse({ data: [], totalCount: 0 });
+    }
+  });
+  const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
+
+  assert.equal(await session.checkAssociatedRecords("orders", "contact-test", Date.now() + 1_000), "CLEAR");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.pathname, "/payments/orders");
+  assert.equal(calls[0].init.method, "GET");
+  assert.deepEqual(Object.fromEntries(calls[0].url.searchParams), {
+    locationId: "location-test",
+    altId: "location-test",
+    altType: "location",
+    contactId: "contact-test",
+    limit: "1",
+    offset: "0"
+  });
+});
+
+test("Orders read reports FOUND for one or more orders and fails closed on malformed data", async () => {
+  const responses = [
+    { data: [{ id: "order-test" }], totalCount: 1 },
+    { totalCount: 0 }
+  ];
+  const client = createGhlReconciliationReadClient({
+    openOAuthSession: openSessionWithToken(token()),
+    fetchImpl: async () => jsonResponse(responses.shift())
+  });
+  const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
+
+  assert.equal(await session.checkAssociatedRecords("orders", "contact-test", Date.now() + 1_000), "FOUND");
+  assert.equal(await session.checkAssociatedRecords("orders", "contact-test", Date.now() + 1_000), "MALFORMED");
+});
+
+test("Orders 401 refreshes once and retries the same read contract", async () => {
+  const calls = [];
+  let refreshCount = 0;
+  const initial = token();
+  const refreshed = { ...token(), access_token: "refreshed-test-token" };
+  const client = createGhlReconciliationReadClient({
+    openOAuthSession: async () => oauthSession(initial, () => {
+      refreshCount += 1;
+      return refreshed;
+    }),
+    fetchImpl: async (url, init) => {
+      calls.push({
+        url: new URL(url),
+        authorization: init.headers.Authorization
+      });
+      return calls.length === 1
+        ? jsonResponse({ message: "expired" }, 401)
+        : jsonResponse({ data: [], totalCount: 0 });
+    }
+  });
+  const session = await client.openSession("location-test", "tenant-test", Date.now() + 1_000);
+
+  assert.equal(await session.checkAssociatedRecords("orders", "contact-test", Date.now() + 1_000), "CLEAR");
+  assert.equal(refreshCount, 1);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].url.toString(), calls[1].url.toString());
+  assert.equal(calls[0].authorization, `Bearer ${initial.access_token}`);
+  assert.equal(calls[1].authorization, `Bearer ${refreshed.access_token}`);
+});
+
 test("pagination uncertainty is malformed and count metadata cannot be mistaken for CLEAR", async () => {
   const responses = [
     { contacts: [{ id: "contact-candidate", locationId: "location-test", email: "person@example.com" }], total: 2 },
