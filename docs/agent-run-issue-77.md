@@ -35,6 +35,7 @@ The documented bearer-token path and endpoint shapes are sufficient for a mock-v
 | General send returns five comma-separated fields; failure returns status and message. | Sanitized API contract. | Parser accepts only the documented success shape and exposes provider status safely on failure. |
 | Delivery JSON returns `SMS_COUNT`, `BID`, and optional `DATA` records containing `MR` and `STATUS`. | Sanitized API contract. | Parser captures correlation and delivery fields without assuming state finality. |
 | Token lifecycle, idempotency, sender identity, encoding, segmentation, cost, and sandbox behavior remain unresolved. | Feasibility decision. | No retry, caching guarantee, production route, or inferred behavior was added. |
+| A real authentication-only invocation from the maintainer's local machine through a Taiwan Surfshark VPN reached `https://new.e8d.tw`, returned HTTP 200 with provider result `true`, and acquired a token. The token remained redacted, `realSendEnabled` was false, and the outcome was `authenticated_only`. | Maintainer-supplied sanitized Issue #77 evidence, 2026-08-17. | Confirms real connectivity and token acquisition in that network context. It does not prove send acceptance, token lifetime, delivery behavior, number normalization, or repeatability from other networks. |
 
 ## Commands executed and results
 
@@ -46,6 +47,7 @@ Commands and output contain no provider credentials, tokens, recipients, or cust
 | `npm run typecheck` | Type safety. | Passed. | TypeScript completed with no errors. |
 | `npm test` | Mocked spike and full regression suite. | Passed. | 306 tests passed; 0 failed, cancelled, skipped, or todo. |
 | `npm run build` | Production TypeScript build. | Passed. | TypeScript build completed with no errors. |
+| `npm run every8d:spike` with the master gate enabled and real-send gate disabled | Maintainer-controlled real authentication test through a Taiwan VPN. | Passed. | HTTP 200, provider result true, token acquired and redacted, outcome `authenticated_only`; no SMS sent. |
 
 ## Approaches attempted
 
@@ -89,8 +91,9 @@ Commands and output contain no provider credentials, tokens, recipients, or cust
 - Implementation correction loops used: zero
 - Reviewer correction loops used: zero
 - Repeated errors or failed approaches: none
-- Production credentials/data accessed: no
-- Provider requests or SMS sent: no
+- Agent access to provider credentials/data: none; the maintainer supplied and used credentials locally, and no value was recorded.
+- Provider requests: one maintainer-executed authentication-only request; no agent-executed provider request.
+- SMS sent: no
 - Stop rule triggered: no
 
 ## Unresolved decisions
@@ -100,4 +103,4 @@ Commands and output contain no provider credentials, tokens, recipients, or cust
 
 ## Recommended next action
 
-Complete mocked validation and publish a draft PR. Then stop before any real provider request or SMS and await separate approval.
+Prepare the exact one-recipient send command and stop. Do not execute it until the maintainer separately approves the exact recipient, message, account, network context, operator, test window, and cost exposure.

@@ -568,7 +568,7 @@ export class Every8dClient {
         providerResult: true,
         bid,
         smsCount,
-        messageReferences: records.map((record) => record.mr).filter(Boolean),
+        mrValues: records.map((record) => record.mr).filter(Boolean),
         deliveryStates: records.map((record) => record.status).filter(Boolean),
         durationMs
       },

@@ -53,6 +53,20 @@ The runner records sanitized HTTP/provider status, timing, `BATCHID`/`BID`, `MR`
 
 The delivery query occurs immediately after provider acceptance. An empty or pending result is possible and does not establish a final delivery state.
 
+## First controlled recipient format
+
+The official examples show both Taiwan national form and `+886` form, but the provider documentation does not establish the complete accepted set or normalization rules. The runner deliberately does not normalize a number.
+
+For the first domestic controlled test, the conservative operator choice is Taiwan national mobile form `09xxxxxxxx` (10 ASCII digits, no spaces or punctuation). This is a local test constraint based on the documented national-form example, not a provider-confirmed guarantee. Do not use `+8869xxxxxxxx` for the first test unless international-number handling has been separately confirmed and approved, because the documentation says international SMS is disabled by default at the account level.
+
+The exact same single value must be supplied as both `EVERY8D_APPROVED_RECIPIENT` and `EVERY8D_SPIKE_RECIPIENT`. The runner rejects commas, semicolons, carriage returns, newlines, missing values, and any requested/approved mismatch. It does not independently prove ownership of the handset or validate the number with EVERY8D before the send request; those remain human approval responsibilities.
+
+## Sanitized evidence capture
+
+On provider acceptance, the runner logs the returned `BATCHID` as `batchId`. It reuses that value as `BID` in one immediate `GetDeliveryStatus` request and logs the response `bid`, any returned `MR` values as `mrValues`, and documented delivery states. These identifiers are retained without logging the token, password, complete recipient, or message content.
+
+The token exists only in process memory long enough to authenticate the `SendSMS` and `GetDeliveryStatus` requests. The password is read from process environment for authentication. Neither value is included in structured log metadata, returned runner output, or documented evidence.
+
 ## Known limitations
 
 - Exact token lifetime, rotation overlap, and concurrent-token behavior remain undocumented.

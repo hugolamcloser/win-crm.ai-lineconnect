@@ -71,7 +71,7 @@ export async function runEvery8dConnectivitySpike(
       outcome: "sent_and_queried",
       batchId: send.batchId,
       bid: delivery.bid,
-      messageReferences: delivery.records.map((record) => record.mr).filter(Boolean),
+      mrValues: delivery.records.map((record) => record.mr).filter(Boolean),
       deliveryStates: delivery.records.map((record) => record.status).filter(Boolean)
     },
     "EVERY8D controlled connectivity spike completed"

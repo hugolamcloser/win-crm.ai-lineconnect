@@ -369,4 +369,9 @@ test("EVERY8D runner executes one mocked send and one mocked delivery query with
   assert.equal(requests[1].headers.authorization, "Bearer fixture-bearer-token");
   assert.equal(requests[2].headers.authorization, "Bearer fixture-bearer-token");
   assert.equal(new URLSearchParams(requests[1].body).getAll("DEST").length, 1);
+  const loggedEvidence = JSON.stringify(capture.entries);
+  assert.match(loggedEvidence, /batch-fixture-1/);
+  assert.match(loggedEvidence, /message-reference-1/);
+  assert.doesNotMatch(loggedEvidence, /fixture-bearer-token/);
+  assert.doesNotMatch(loggedEvidence, /fixture-password-do-not-use/);
 });
