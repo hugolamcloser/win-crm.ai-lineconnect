@@ -11,6 +11,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "npm run build && node --watch dist/server.js",
     "every8d:interactive-spike": "npm run build && node dist/scripts/every8dInteractiveReplySpike.js",
+    "every8d:phase-2b-outbound-validation": "npm run build && node dist/scripts/every8dPhase2bOutboundValidation.js",
     "every8d:reply-query": "npm run build && node dist/scripts/every8dReplyQuery.js",
     "every8d:spike": "npm run build && node dist/scripts/every8dConnectivitySpike.js",
     "start": "node dist/server.js",
