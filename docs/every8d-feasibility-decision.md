@@ -1,19 +1,19 @@
-# EVERY8D Phase 1B feasibility decision
+# EVERY8D Phase 1B/1D feasibility decision
 
 ## Scope and evidence boundary
 
-Issue #74 re-evaluates the ten hard blockers established by Issue #72 and PR #73. It does not create a replacement blocker list and does not authorize runtime implementation or testing.
+Issue #74 re-evaluated the ten hard blockers established by Issue #72 and PR #73. Issue #77 subsequently supplied separately approved, sanitized controlled evidence for basic outbound connectivity and an attempted interactive-reply path. This update does not authorize another provider request, production activation, deployment, or inbound/two-way implementation.
 
 The review uses only:
 
-- GitHub Issue #74;
+- GitHub Issues #74 and #77;
 - [`../AGENTS.md`](../AGENTS.md);
 - [`taiwan-sms-pilot-plan.md`](taiwan-sms-pilot-plan.md);
 - [`every8d-api-contract.md`](every8d-api-contract.md);
 - this document's existing Phase 1 blocker register; and
 - the official EVERY8D API 2.1 specification evidence already incorporated into Phase 1.
 
-No new official specification, written provider answer, credentials, sandbox evidence, callback delivery evidence, or controlled-test result was supplied. A Phase 1B follow-up supplied authorized observations from an authenticated EVERY8D dashboard. They are sanitized in the API contract and evaluated below only as account/dashboard evidence. No provider question was sent and no test was executed.
+Phase 1B supplied authorized observations from an authenticated EVERY8D dashboard. Phase 1D then supplied sanitized controlled results for authentication, one ordinary outbound send, delivery-status lookup, physical handset receipt, a failed ordinary carrier reply, and one rejected `EventID=-1` attempt. Additional sanitized UI evidence compares the documented SafeSay activity-channel controls with their absence on this account. These results are classified only within their observed scope; they do not create undocumented provider guarantees.
 
 ## Evidence classifications
 
@@ -21,8 +21,9 @@ No new official specification, written provider answer, credentials, sandbox evi
 | --- | --- |
 | Confirmed by official EVERY8D documentation | The API 2.1 specification explicitly states the behavior, as captured in the sanitized contract. |
 | Confirmed by EVERY8D account/dashboard behavior | An authorized, non-sensitive dashboard observation demonstrates behavior but is not treated as an API guarantee. No such evidence was available in this review. |
+| Confirmed by a separately approved controlled test | A bounded observed result establishes only the exact request/account/recipient behavior tested; it is not generalized to production, other tenants, other content, or undocumented semantics. |
 | Requires written provider confirmation | The official specification is silent, ambiguous, or internally inconsistent and EVERY8D must answer in writing. |
-| Requires a separately approved controlled test | Provider statements or unclear edge cases must be verified in a sandbox or explicitly approved test process. Issue #74 authorizes planning only. |
+| Requires a separately approved controlled test | Provider statements or unclear edge cases must be verified in a sandbox or explicitly approved test process. Issue #74 authorized planning only; Issue #77 later authorized specific bounded cases. |
 | Still unresolved | No qualifying evidence currently establishes the behavior. |
 
 Dashboard labels must never be promoted to an API guarantee without supporting written provider documentation or controlled evidence.
@@ -40,22 +41,49 @@ The sanitized evidence IDs below are defined in [`every8d-api-contract.md`](ever
 
 These observations narrow unanswered questions but do not resolve an implementation-safety blocker.
 
+## Phase 1D controlled evidence incorporated
+
+Evidence E1–E4 is defined in [`every8d-api-contract.md`](every8d-api-contract.md#sanitized-phase-1d-controlled-and-accountui-evidence).
+
+### Proven facts
+
+- One controlled authentication succeeded over HTTPS and produced a usable bearer token without exposing it.
+- One ordinary one-recipient `SendSMS` request succeeded, returned a `BATCHID`, and was physically delivered to the approved Taiwan handset.
+- `GetDeliveryStatus` accepted that batch as `BID` and returned a valid response.
+- Ordinary carrier reply from the exact iPhone conversation was not deliverable for that sender identity.
+- One `EventID=-1` request reached EVERY8D after successful transport/authentication and was rejected with provider status `-290`; no interactive SMS was delivered and no retry occurred.
+- The observed account does not expose the documented `互動回覆簡訊`, `活動頻道管理`, or `客服設定` controls, and the public SafeSay login path did not provide separate access.
+
+### Strong hypotheses, not provider guarantees
+
+- The `EventID=-1` rejection and missing account controls are consistent with a missing entitlement, missing activity-channel provisioning, or no usable default channel on this account.
+- The ordinary sender identity used by the successful outbound send appears unsuitable for direct carrier reply in the observed case.
+
+Neither hypothesis establishes sender ownership/directionality or the meaning of `-290`.
+
+### Still unresolved
+
+- The official meaning and permanence/transience classification of provider status `-290`.
+- How SafeSay access is entitled or provisioned, who creates activity channels, and how a default channel is assigned to this account.
+- Whether SafeSay, `EventID`, reply forwarding, carrier-native MO, and `GetReplyMessage` are separate or connected reply mechanisms.
+- Sender ownership/lifecycle, tenant routing, stable recipient-level correlation, callback security, provider idempotency, token lifecycle, encoding breadth, segmentation, rates, limits, retention, and sandbox availability.
+
 ## Blocker-resolution table
 
 This table updates the existing A1–A10 register below.
 
 | Item | Previous status | Evidence | New status | Next action |
 | --- | --- | --- | --- | --- |
-| A1 Callback authenticity | Hard blocker | Official specification confirms HTTPS GET callbacks but documents no signature, secret, mTLS, or source policy. D1 confirms report configuration controls, not authentication. | Remains hard blocker; unresolved. | Obtain written security contract; open an explicit security decision if no authenticity control exists. |
-| A2 Callback replay and deduplication | Hard blocker | Callback fields and non-200 retries are documented; D1 adds configuration UI but no immutable event ID, replay window, or deduplication guarantee. | Remains hard blocker; unresolved. | Obtain written event-identity contract, then run separately approved replay/duplicate tests. |
-| A3 Callback acknowledgement, retry, timeout, and ordering | Hard blocker | Official evidence confirms HTTP 200/non-200 behavior. D1 confirms configurable attempt count, encoding, and GET/POST, but not their semantics or the remaining delivery policy. | Remains hard blocker; unresolved. | Obtain written method/attempt/acknowledgement/delivery policy, then verify it in a separately approved test. |
-| A4 Outbound idempotency and ambiguous timeout | Hard blocker | `MR` correlation and 24-hour filtering are documented; D3/D5 confirms send/query UI, not idempotency or timeout retry safety. | Remains hard blocker; unresolved. | Obtain written idempotency/reconciliation rules, then test timeout and duplicate-filter behavior separately. |
-| A5 Token lifecycle | Hard blocker | Obtain/check/close operations and an eight-hour acquisition recommendation are documented; exact lifecycle and errors are not. | Remains hard blocker; unresolved. | Obtain written lifecycle contract, then test with non-production credentials under separate approval. |
-| A6 Sender identity, reply channel, and tenant routing | Hard blocker | Official `EventID` behavior plus D2 reply forwarding confirm two reply-related capabilities, but not their relationship, sender identity, native MO, provisioning, ownership, or tenant mapping. | Remains hard blocker; unresolved. | Obtain written sender/inbound/reply provisioning and tenant-routing contract, then verify with one approved test tenant. |
-| A7 Callback correlation (`MR`/`MSGID`) | Hard blocker | Official `BATCHID`/`BID` uses remain ambiguous at recipient level; D5/D6 confirms status/reply-detail query UI but no stable join key. | Remains hard blocker; unresolved. | Obtain corrected schema, identifier guarantees, and sanitized samples; then test end-to-end correlation. |
-| A8 Request and callback encoding | Hard blocker | Official media types remain incomplete. D1 confirms `BIG5`/`UTF-8` report choices, but not wire charset, escaping, scope/default, Unicode, or query limits. | Remains hard blocker; unresolved. | Obtain written charset/escaping/selection rules, then run representative separately approved tests. |
-| A9 Counting, segmentation, and charges | Hard blocker | The 333-character statement and 17-character `EventID` overhead are documented; D7 confirms prepaid balance UI but not counting, boundaries, maximum segments, or billing rates. | Remains hard blocker; unresolved. | Obtain written counting/charging table, then run separately approved boundary tests. |
-| A10 Non-production test capability | Hard blocker | The specification identifies no test facility. D7 confirms an active prepaid account, not a sandbox, test host, test credentials/numbers, or no-charge facility. | Remains hard blocker; unresolved. | Obtain written test-environment/process confirmation; seek separate project approval before any provider interaction or send. |
+| A1 Callback authenticity | Hard blocker | No new callback evidence. | Remains hard for inbound/callback phases; not required for a mock-only Phase 2A outbound foundation with no callback. | Obtain written security contract before Phase 3 or any callback activation. |
+| A2 Callback replay and deduplication | Hard blocker | No new callback evidence. | Remains hard for inbound/callback phases; not required for a callback-free Phase 2A foundation. | Obtain event-identity/replay contract before Phase 3. |
+| A3 Callback acknowledgement, retry, timeout, and ordering | Hard blocker | No new callback evidence. | Remains hard for inbound/callback phases; not required for a callback-free Phase 2A foundation. | Obtain delivery policy before Phase 3 or callback activation. |
+| A4 Outbound idempotency and ambiguous timeout | Hard blocker | E1 proves one successful send; it supplies no ambiguous-timeout or idempotency evidence. The spike intentionally does not retry. | Remains an outbound activation blocker. A Phase 2A implementation may proceed only with automatic provider retry disabled and no live sending. | Obtain written idempotency/reconciliation rules and separately approve timeout testing before activation. |
+| A5 Token lifecycle | Hard blocker | E1 proves acquisition and immediate reuse across one send/status sequence. | Basic acquisition/immediate reuse resolved for the controlled case; lifecycle/caching/rotation remains an activation blocker. | Keep Phase 2A token behavior replaceable and default-off; obtain the lifecycle contract before activation. |
+| A6 Sender identity, reply channel, and tenant routing | Hard blocker | E2 shows ordinary reply failure. E3 returned opaque `-290` for `EventID=-1`. E4 shows the documented SafeSay/channel controls are inaccessible on this account. | Strengthened hard blocker for interactive/two-way capability at the account/channel/provisioning layer. It does not block outbound-only foundation code that contains no inbound or interactive behavior. | Do not retry; obtain written status/provisioning/entitlement and tenant-routing answers. |
+| A7 Callback correlation (`MR`/`MSGID`) | Hard blocker | E1 proves `BATCHID`/`BID` correlation for one send/status query; no inbound event exists. | Outbound batch/status correlation resolved for the controlled case; inbound/callback recipient correlation remains hard-blocked. | Obtain corrected schema and provisioned reply test before inbound work. |
+| A8 Request and callback encoding | Hard blocker | E1 proves the exact controlled Traditional Chinese content traversed the ordinary send path and handset successfully. | Exact controlled outbound encoding works; general message/callback encoding remains an activation/inbound blocker. | Limit Phase 2A to mocks and explicit validation; obtain broader encoding evidence before activation. |
+| A9 Counting, segmentation, and charges | Hard blocker | E1 proves one short message can be delivered; no sanitized segment/charge boundary evidence was supplied. | Remains an outbound activation blocker; does not prevent default-off mock-only foundation work. | Obtain counting/segmentation/rate evidence before activation. |
+| A10 Non-production test capability | Hard blocker | Issue #77 demonstrates a project-approved bounded live test process, but no sandbox or provider-approved non-production facility. | Controlled-test execution is proven possible under explicit approval; sandbox/parity and repeatable test-process guarantees remain unresolved. | Phase 2A may use mocks only; require separate approval for every later provider interaction. |
 
 ## Existing hard blockers reviewed individually
 
@@ -100,66 +128,67 @@ This table updates the existing A1–A10 register below.
 - **Exact unanswered question:** What are the exact lifetime, reuse, concurrent-token, replacement, rotation-overlap, expiry, close/revocation, error-response, and authentication-retry rules?
 - **Why it matters:** Tenant-scoped caching, rotation, fail-closed behavior, and recovery cannot be designed from a refresh recommendation alone.
 - **Official evidence available:** Obtain, status-check, and close operations exist; obtaining a token every eight hours is recommended.
-- **Dashboard/account evidence:** D7 confirms the account was active and authenticated. It supplies no token lifecycle, rotation, expiry, revocation, or error evidence.
+- **Dashboard/account and controlled evidence:** D7 confirms the account was active. E1 proves token acquisition and immediate reuse across one send/status sequence; it supplies no lifecycle, rotation, expiry, revocation, or concurrency evidence.
 - **Evidence needed:** Written lifecycle/error contract plus a separately approved non-production lifecycle test.
-- **Status:** Remains a hard blocker.
+- **Status:** Basic acquisition and immediate reuse are resolved for the controlled case. Long-lived runtime lifecycle/caching remains an outbound activation blocker.
 
 ### A6. Sender identity, reply channel, and tenant routing
 
 - **Exact unanswered question:** What sender identity recipients see; whether replies use EventID web interaction or carrier-native MO; how inbound numbers/channels are provisioned; whether they are shared or dedicated; and what stable resource identifies a tenant?
 - **Why it matters:** Win-CRM must resolve the exact tenant, provider configuration, sender, and inbound resource without global or ambiguous routing.
 - **Official evidence available:** `EventID` adds an interactive-reply link, `-1` selects a default activity channel, replies can be queried by batch, and callback status `999` represents a reply. Sender and provisioning behavior are absent.
-- **Dashboard/account evidence:** D2 confirms `開啟回覆轉寄` and a dashboard explanation that a recipient can reply and EVERY8D can forward the reply toward customer systems/email; SafeSay is described separately. It does not identify the transport, sender, provisioning, ownership, EventID/SafeSay relationship, or tenant mapping.
+- **Dashboard/account and controlled evidence:** D2 documents reply forwarding. E2 shows ordinary carrier reply was not deliverable for the observed sender. E3 shows `EventID=-1` was rejected with undocumented status `-290`. E4 shows the documented SafeSay/channel administration is inaccessible on this account.
 - **Evidence needed:** Written sender/inbound provisioning, ownership, lifecycle, native-MO, and tenant-routing contract plus a separately approved single-tenant test.
-- **Status:** Remains a hard blocker.
+- **Status:** Remains a hard blocker for interactive/two-way capability and is now empirically localized to unresolved account/channel/provisioning behavior. Do not retry without new provider evidence.
 
 ### A7. Callback correlation ambiguity (`MR` and `MSGID`)
 
 - **Exact unanswered question:** What each `MR` row means, where `MSGID` originates, which values are unique and stable, and what recipient-level value joins send, DR, MO, and callback records?
 - **Why it matters:** Incorrect correlation can attach a delivery report or reply to the wrong recipient, tenant, or message.
 - **Official evidence available:** `BATCHID` is returned and `BID` carries it into queries/cancellation. Optional caller `MR` is unique within a personalized/parameter batch. The callback table duplicates `MR` with different meanings and refers to outbound `MSGID` that no send table defines.
-- **Dashboard/account evidence:** D5/D6 confirms records/status query and `查詢發送回覆明細` UI functions. No sanitized stable identifier, schema, uniqueness, or lifecycle evidence was supplied.
+- **Dashboard/account and controlled evidence:** D5/D6 confirms records/status and reply-detail UI functions. E1 proves `BATCHID`/`BID` correlation across one ordinary send/status query. No inbound event or stable end-to-end recipient identifier was observed.
 - **Evidence needed:** Corrected written schema, identifier scope/lifecycle guarantees, sanitized provider samples, and a separately approved end-to-end correlation test.
-- **Status:** Remains a hard blocker. No end-to-end correlation or idempotency key is established.
+- **Status:** Outbound batch/status correlation is resolved for the controlled case. Inbound/callback correlation remains a hard blocker; no end-to-end identifier or idempotency key is established.
 
 ### A8. Request and callback encoding
 
 - **Exact unanswered question:** How do the dashboard's `BIG5`/`UTF-8` report choices map to callback bytes/defaults and HTTP methods; and what form/query escaping, Unicode normalization, emoji/combining-character behavior, malformed-input behavior, and callback URL-length rules apply?
 - **Why it matters:** Incorrect encoding can corrupt content, change segment counts, break any future signature verification, or create unsafe parser differences.
 - **Official evidence available:** Endpoint media types are documented; the callback is described only as encoded; reply content identifies Traditional Chinese and English.
-- **Dashboard/account evidence:** D1 confirms `BIG5` and `UTF-8` report-encoding choices. It does not define the selected/default scope, actual wire encoding, percent/form encoding, Unicode behavior, or errors.
+- **Dashboard/account and controlled evidence:** D1 confirms report-encoding choices. E1 proves the exact controlled Traditional Chinese outbound content traversed the form-encoded request and arrived correctly; broader Unicode and callback encoding remain untested.
 - **Evidence needed:** Written charset/escaping contract plus separately approved Traditional Chinese, ASCII, URL, emoji, and combining-character tests.
-- **Status:** Remains a hard blocker.
+- **Status:** Resolved only for the exact controlled outbound content. General outbound and callback encoding remains an activation/inbound blocker.
 
 ### A9. Message counting, segmentation, and charge boundaries
 
 - **Exact unanswered question:** What algorithm counts characters, where segments split, how encoding affects the count, what the maximum segment count is, and how each segment/EventID reply feature is billed?
 - **Why it matters:** Win-CRM cannot validate content, predict cost, cap sending, or explain multipart delivery without those rules.
 - **Official evidence available:** Long SMS is described as supporting up to 333 characters, content above 333 is split, international long content is split, and the EventID link adds 17 characters.
-- **Dashboard/account evidence:** D7 confirms a visible prepaid balance existed. No balance amount, rate, segment count, charge calculation, or credit-expiry evidence is recorded.
+- **Dashboard/account and controlled evidence:** D7 confirms a visible prepaid balance; E1 proves one short message was deliverable. No rate, segment count, boundary, charge calculation, or credit-expiry evidence is recorded.
 - **Evidence needed:** Written counting/segmentation/charge table plus separately approved boundary and multilingual tests.
-- **Status:** Remains a hard blocker.
+- **Status:** Remains an outbound activation blocker; it does not prevent default-off, mock-only Phase 2A foundation work.
 
 ### A10. Non-production test capability
 
 - **Exact unanswered question:** Does EVERY8D provide a sandbox, test endpoint, test credentials/numbers, no-charge messages, callback simulator, or provider-approved controlled production process?
 - **Why it matters:** Contract validation must not require production credentials, customer recipients, or uncontrolled live sending.
 - **Official evidence available:** No sandbox or non-production facility is documented.
-- **Dashboard/account evidence:** D7 confirms an active authenticated prepaid account and D1–D6 confirm production-like account functions. None is identified as a sandbox, test endpoint, test credential/number, no-charge facility, or authorized test process.
+- **Dashboard/account and controlled evidence:** D7 confirms an active prepaid account and D1–D6 confirm production-like functions. Issue #77 proves a project-approved bounded live test process can be executed, but no sandbox, test endpoint, provider-approved test credential/number, no-charge facility, or repeatable provider test contract is identified.
 - **Evidence needed:** Written provider test-process confirmation followed by a separate project decision authorizing a bounded test.
-- **Status:** Remains a hard blocker. Issue #74 authorizes the plan below only.
+- **Status:** Mock-only Phase 2A work can proceed under a separate issue. Any additional provider interaction remains separately gated; sandbox/parity and provider test-process guarantees remain unresolved.
 
 ## Resolution summary
 
-- **Resolved blockers:** 0.
-- **Remaining hard blockers:** 10 (A1–A10).
-- **Written provider question groups still required:** 27 across the filtered checklist below.
-- **Separately approved controlled tests proposed:** 10 test cases. None is authorized or executed.
-- **Phase 2 gate:** Closed while any A1–A10 implementation-safety blocker remains.
+- **Fully resolved original A1–A10 blocker groups:** 0; their broad production/inbound guarantees remain incomplete.
+- **Resolved controlled outbound proof points:** HTTPS authentication, immediate token reuse within one invocation, one-recipient ordinary `SendSMS`, success parsing/`BATCHID`, `GetDeliveryStatus` with `BID`, and physical Taiwan handset delivery for the exact tested case.
+- **Interactive/two-way conclusion:** blocked at the account/channel/provisioning layer; `EventID=-1` returned undocumented status `-290`, no interactive message was delivered, and the expected SafeSay administration is inaccessible.
+- **Phase 2A implementation gate:** conditionally open only for a separately approved, default-off, mock-validated outbound foundation task with no real credentials/sends, no automatic provider retry, no callback, no inbound, and no production route or deployment.
+- **Outbound activation/deployment gate:** closed pending A4, the remaining A5 lifecycle questions, broader A8/A9 evidence, tenant/provider configuration design, and an explicitly approved staging/live process.
+- **Phase 3 inbound/two-way gate:** closed pending A1–A3, A6, A7, provisioned reply capability, and verified callback security/correlation.
 
 ## Prioritized provider-support checklist
 
-Every question below remains unanswered after combining the official specification with D1–D7. The dashboard evidence narrows several questions but does not eliminate any API/security/operational guarantee group, so 27 question groups remain. This is the filtered checklist to prepare for human-approved provider contact; Issue #74 does not authorize sending it automatically.
+Every question below remains incompletely answered after combining the official specification with D1–D7 and E1–E4. The controlled evidence resolves basic outbound connectivity but does not eliminate the API/security/operational guarantee groups needed for activation or inbound work. This is the filtered checklist for human-approved provider contact; no issue authorizes sending it automatically.
 
 ### Hard blockers
 
@@ -168,7 +197,7 @@ Every question below remains unanswered after combining the official specificati
 3. For D1's configurable GET/POST method and attempt count, what payload, allowed/default values, acknowledgement body, timeout, retry schedule/backoff, maximum delivery age, ordering, and concurrency rules apply?
 4. What native idempotency or timeout-reconciliation mechanism protects an accepted-but-unobserved outbound send?
 5. What exact token lifetime, reuse, concurrent-token, rotation-overlap, expiry, close/revocation, error-response, and authentication-retry rules apply?
-6. Given D2's reply-forwarding flow, what outbound sender identity and underlying reply transport apply; how does forwarding relate to EventID and SafeSay; and what inbound provisioning, shared/dedicated ownership, lifecycle, native-MO availability, and tenant-routing identifier apply?
+6. Given D2/E2–E4, what outbound sender identity and underlying reply transport apply; how does forwarding relate to EventID and SafeSay; what entitlement/provisioning exposes `互動回覆簡訊` and activity-channel administration; and what inbound shared/dedicated ownership, lifecycle, native-MO availability, and tenant-routing identifier apply?
 7. Please provide a corrected callback schema and identifier contract for `BATCHID`/`BID`, both `MR` entries, `MSGID`, `EventID`, and the stable recipient-level correlation value.
 8. For D1's `BIG5`/`UTF-8` report choices, what default/selection scope, actual callback bytes, GET/POST percent/form encoding, Unicode normalization, emoji/combining-character, malformed-input, and query/payload-length rules apply?
 9. What character-count, segmentation, maximum-segment, EventID-overhead, and per-segment/reply billing rules apply, including the 333-character boundary?
@@ -176,7 +205,7 @@ Every question below remains unanswered after combining the official specificati
 
 ### Controlled-test questions
 
-1. D3/D5 confirms send/query UI but not its API failure contract; what exhaustive HTTP/provider error catalogue, response content types, and permanent/transient/authentication/partial-failure classifications should tests assert?
+1. D3/D5 confirms send/query UI but not its API failure contract; what exhaustive HTTP/provider error catalogue, including the observed `-290`, response content types, and permanent/transient/authentication/partial-failure classifications should tests assert?
 2. Which Taiwan formats among `09xxxxxxxx`, `8869xxxxxxxx`, and `+8869xxxxxxxx` are accepted, and how are whitespace, punctuation, and invalid numbers handled?
 3. How does the 24-hour filter normalize and compare number/content, what is its account/channel/time scope, and is the operation atomic under concurrency?
 4. What QPS, concurrency, recipients/request, payload/batch, throughput, query, and throttling limits and retry guidance should tests enforce?
@@ -201,7 +230,7 @@ Every question below remains unanswered after combining the official specificati
 
 ### Authorization boundary
 
-This is a plan only. Current authorization permits **zero** SMS messages, zero credential use, zero callback configuration, and zero provider-account changes. Execution requires all of the following:
+Issue #77 separately authorized and completed one ordinary outbound case and one `EventID=-1` attempt. The ordinary case delivered; the interactive case was rejected with opaque status `-290` and was not retried. Current authorization has returned to **zero further provider requests or SMS messages**, zero callback configuration, and zero provider-account changes. Any additional execution requires all of the following:
 
 1. Written EVERY8D answers for the relevant checklist items.
 2. A provider-supported sandbox or explicitly approved controlled process.
@@ -212,6 +241,8 @@ This is a plan only. Current authorization permits **zero** SMS messages, zero c
 ### Proposed test matrix
 
 All future outbound cases use one maintainer-approved Taiwan test handset. Sanitized hashes/references, not full credentials or phone numbers, are recorded in project evidence.
+
+Issue #77 supplies partial evidence for T3 (one short Traditional Chinese ordinary send delivered) and T7 (the send request reached the provider but was rejected before delivery/reply because `EventID=-1` returned `-290`). T7 remains incomplete and blocked; it must not be retried until provisioning evidence changes.
 
 | Test | Exact behavior | Evidence to capture | Maximum outbound submissions |
 | --- | --- | --- | ---: |
@@ -231,6 +262,7 @@ The future plan ceiling is 12 provider-accepted outbound submissions to one appr
 ### Cost exposure
 
 - **Issue #74 authorized exposure:** zero.
+- **Issue #77 observed exposure:** one delivered ordinary SMS and one provider-rejected interactive attempt; no amount, balance, recipient, or credential is recorded.
 - **Future controlled-test estimate:** no numeric estimate is possible from current evidence because per-segment, EventID/reply, and tax pricing are undocumented.
 - Before separate approval, the owner must record an exact currency amount calculated as no more than 18 domestic billed segments plus at most one EventID/reply fee and applicable tax.
 - The separately approved issue must state that absolute monetary cap. Missing price evidence or inability to enforce the cap is a stop condition.
@@ -254,6 +286,7 @@ Rollback consists of disabling/closing only the purpose-created test token/accou
 
 - Official behavior is limited to what the Phase 1 sanitized contract records; common SMS practices are not treated as EVERY8D guarantees.
 - Dashboard evidence D1–D7 is accepted only as authenticated account/UI behavior and is not promoted to an API guarantee.
+- Controlled evidence E1–E4 is accepted only for the exact account, request, recipient, and outcomes observed; it is not generalized to production or other tenants.
 - No identifier is assumed to provide tenant-safe correlation or idempotency.
 - No callback authenticity or replay control is assumed.
 - No charset, segment, price, rate, retention, sender, sandbox, or token-lifecycle value is inferred.
@@ -263,17 +296,19 @@ Rollback consists of disabling/closing only the purpose-created test token/accou
 
 ## Recommended next action
 
-Phase 2 runtime implementation is not authorized. The smallest safe next task is a provider-evidence collection and decision issue that:
+The smallest safe next implementation task may be a separately approved **Phase 2A — Default-off tenant-aware EVERY8D outbound foundation**. This is supported because basic ordinary outbound connectivity is empirically proven, but it must be limited to:
 
-1. has a human owner send only the filtered checklist above;
-2. records sanitized written answers as repository evidence;
-3. updates the contract and A1–A10 statuses without guessing;
-4. decides whether the ten-case controlled plan can be separately authorized; and
-5. keeps runtime implementation blocked until every implementation-safety blocker is resolved.
+1. exact tenant/provider configuration resolution with placeholders and mocks only;
+2. the isolated provider boundary and normalized outbound result types;
+3. automatic provider retry disabled until A4 is resolved;
+4. replaceable token handling without claiming long-term lifecycle guarantees;
+5. strict content/destination validation that does not generalize beyond proven/documented behavior;
+6. secret-safe logging, deterministic mocked failures, and LINE regression coverage; and
+7. no live credentials, provider request, SMS, production route, deployment, callback, inbound handling, GHL integration, Supabase migration, or reconciliation change.
 
-If that gate later passes, the conditional next implementation issue should be **Phase 2 — Tenant-aware EVERY8D provider foundation and safe outbound sending**, limited to the approved contract, mocks or the approved non-production environment, exact tenant/provider resolution, bounded timeout/retry and duplicate-send controls, secret-safe logging, and automated tests. Inbound SMS, GHL integration, LINE changes, production configuration, live credentials, and live sends must remain out of scope.
+Phase 2A requires its own GitHub issue, review, branch, and PR. The ordinary outbound evidence is sufficient to begin that implementation-only task, not to activate or deploy outbound SMS. Provider-evidence collection must continue in parallel for A4/A5/A8/A9/A10, and interactive/inbound work remains blocked by A1–A3/A6/A7.
 
-## Task evidence record
+## Historical Phase 1B task evidence record
 
 ### Task identification
 
@@ -319,8 +354,8 @@ If that gate later passes, the conditional next implementation issue should be *
 - Runtime, Railway, Supabase, GHL, LINE, contact reconciliation, or production configuration changed: no
 - Stop rule triggered: no; missing evidence is explicitly unresolved
 
-## Phase 1B decision
+## Current Phase 1B/1D decision
 
-**NOT YET FEASIBLE**
+**ORDINARY OUTBOUND CONNECTIVITY PROVEN; PHASE 2A IMPLEMENTATION-ONLY CONDITIONALLY FEASIBLE; INTERACTIVE/INBOUND BLOCKED**
 
-All ten implementation-safety blockers remain open. EVERY8D is not rejected, but Phase 2 must remain blocked until written provider evidence and any separately approved controlled tests establish a contract that can be implemented and tested without guessing.
+The Issue #77 evidence is sufficient to begin a separately gated, default-off, mock-only Phase 2A outbound foundation task under the restrictions above. It is not sufficient to enable production outbound sending, add a production route, deploy, or use live credentials. Interactive/two-way capability remains blocked at the account/channel/provisioning layer, and no additional `EventID=-1` send or `GetReplyMessage` query should occur without new documented provisioning evidence and separate approval.
