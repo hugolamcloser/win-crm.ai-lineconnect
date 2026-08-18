@@ -2,7 +2,7 @@
 
 ## Status and scope
 
-This document records behavior confirmed by the official EVERY8D specification and the Phase 1B evidence classification completed for Issue #74. It remains a research artifact only. It does not authorize runtime implementation, credential use, callback configuration, live SMS, controlled testing, database changes, production configuration, or deployment.
+This document records behavior confirmed by the official EVERY8D specification, the Phase 1B evidence classification completed for Issue #74, and sanitized controlled/UI evidence accepted under Issue #77. It remains an evidence artifact only. It does not authorize further provider requests, runtime activation, credential use, callback configuration, live SMS, database changes, production configuration, or deployment.
 
 Undocumented or internally inconsistent behavior is not inferred. Open questions and the Phase 1 decision are recorded in [`every8d-feasibility-decision.md`](every8d-feasibility-decision.md).
 
@@ -35,6 +35,17 @@ The observations in this section came from an authenticated, active EVERY8D acco
 | D7 | The authenticated account was active and displayed a prepaid balance. | Confirmed by EVERY8D account/dashboard behavior only. No amount is recorded. It does not establish pricing, credit expiry, sandbox/test status, or permission to send. |
 
 Where the official API specification independently establishes a related behavior, the official evidence remains the API source of truth. Dashboard controls must not override or silently extend the official contract.
+
+## Sanitized Phase 1D controlled and account/UI evidence
+
+No account identity, credential, token, full phone number, message content, `BATCHID`, `BID`, or `MR` value is recorded below.
+
+| Evidence ID | Sanitized observation | Proven scope and limit |
+| --- | --- | --- |
+| E1 | A separately approved controlled invocation authenticated successfully, sent one ordinary SMS successfully, queried delivery status successfully, and the approved Taiwan handset physically received the message. | Proves basic authentication, one-recipient general `SendSMS`, response parsing, `BATCHID` retention, delivery-status lookup, and physical outbound delivery for that controlled case. It does not prove production scale, safe retry, arbitrary content/number formats, token lifecycle, or billing boundaries. |
+| E2 | The approved handset attempted an ordinary carrier reply from the exact iPhone SMS conversation and iOS reported the reply as not delivered/unable to send. | Proves only that ordinary carrier reply to the sender identity used in E1 did not work at that time. It does not identify whether the sender was shared, dedicated, temporary, misconfigured, or inherently one-way. |
+| E3 | A separately approved interactive send using `EventID=-1` reached EVERY8D after successful HTTP transport/authentication, but the provider rejected it with status `-290`; no interactive SMS was delivered and no retry was made. | Proves that this account did not accept that controlled `EventID=-1` request. No captured official error catalogue defines `-290`, so its exact meaning is not inferred. |
+| E4 | Supplied official EVERY8D/SafeSay documentation describes an `互動回覆簡訊` entry leading to a SafeSay backend with `活動頻道管理`, `客服設定`, customer-reply enablement, and a configurable default channel. On the observed account, no visible `互動回覆簡訊` entry was available; the public SafeSay login path returned to the same EVERY8D login flow; and the operator could not access or configure those channel/customer-service controls. | Establishes a documentation/account-UI mismatch and that no usable default interactive activity channel is empirically verified for this account. It does not prove why access is absent, whether an entitlement or provider-side provisioning step is required, or what `-290` means. |
 
 ## Source identity
 
@@ -619,9 +630,9 @@ This register narrows the existing Phase 1 gaps without creating a second blocke
 | Question | Official and dashboard evidence | Phase 1B classification |
 | --- | --- | --- |
 | What identity is visible to an outbound recipient? | The send request defines destinations, content, subject, and optional `EventID`; it does not define a sender number or sender ID. | Requires written provider confirmation; still unresolved. |
-| What makes a message reply-capable? | Officially, `EventID` adds an interactive-reply link and `EventID=-1` selects a default activity channel. Dashboard evidence D2 shows a separately presented reply-forwarding feature and explanation. | The two observed capabilities are confirmed at their respective evidence levels; their relationship, provisioning, and ownership require written provider confirmation. |
-| Is ordinary carrier-native MO available? | The specification documents reply lookup and callback `STATUS=999`. Dashboard evidence D2 describes recipient reply and forwarding, but does not identify the underlying reply transport or its relationship to EventID/SafeSay. | Requires written provider confirmation and a separately approved controlled test; still unresolved. |
-| How are inbound numbers or channels provisioned? | Dashboard evidence D2 shows that reply forwarding can be enabled, but does not expose a sanitized provisioning or ownership contract. | Requires written provider confirmation; still unresolved. |
+| What makes a message reply-capable? | Officially, `EventID` adds an interactive-reply link and `EventID=-1` selects a default activity channel. D2 shows a separately presented reply-forwarding feature. E3/E4 show that `EventID=-1` was rejected with opaque status `-290` and the documented SafeSay/channel controls are inaccessible on this account. | Interactive capability remains blocked at the account/channel/provisioning layer. The cause, entitlement, provisioning process, and EventID/SafeSay relationship require written provider confirmation. |
+| Is ordinary carrier-native MO available? | The specification documents reply lookup and callback `STATUS=999`. D2 describes reply forwarding. E2 shows an ordinary carrier reply was not deliverable for the observed sender identity. | Ordinary carrier reply was unsuccessful for the observed case; general availability, sender directionality, and the failure cause still require written provider confirmation. |
+| How are inbound numbers or channels provisioned? | D2 shows reply forwarding controls. E4 shows the documented SafeSay activity-channel administration is inaccessible on this account. | Requires written provider confirmation of entitlement, provisioning, ownership, and account enablement; still unresolved. |
 | Are receiving resources dedicated or shared? | Not documented. | Requires written provider confirmation; still unresolved. |
 | How is a reply associated with the original outbound message? | Officially, `BID`/`BATCHID` is used for reply lookup and callbacks include `BatchID`, `MR`, and an unclear `MSGID`. Dashboard evidence D5/D6 shows send/status and reply-detail query functions, but no stable join key. | The fields and UI functions are confirmed at their respective evidence levels; stable recipient-level correlation requires written provider confirmation and a separately approved controlled test. |
 | How is a sender or inbound resource associated with a Win-CRM tenant? | No tenant or customer-owned sender/channel identifier is defined. | Requires written provider confirmation; still unresolved. |
@@ -647,7 +658,7 @@ Dashboard evidence narrows the existence of reply-forwarding and query functions
 | `BID` | Request field carrying the batch identifier for DR/MO queries and scheduled cancellation. | Whether it is always identical to the returned `BATCHID` in every endpoint and failure mode. | Documented use confirmed; complete relationship requires written provider confirmation. |
 | `MR` | Optional caller value for personalized/parameter sends, unique within a batch and returned in status reporting. The callback table also defines `MR` twice with conflicting meanings. | Stable source, uniqueness scope, exact callback meaning, and whether general sends expose a recipient-level value. | Documented uses confirmed but internally inconsistent; corrected schema and controlled samples are required. |
 | `MSGID` | Callback table describes it as supplied during sending. | No outbound SMS request table defines it; source, uniqueness, and lifecycle are unknown. | Requires corrected written provider documentation and a separately approved controlled test; still unresolved. |
-| `EventID` | Selects the interactive-reply activity/channel and causes a reply link to be added. | Activity lifecycle, tenant ownership, relation to callbacks/MO, and uniqueness. | Documented send behavior confirmed; routing guarantees require written provider confirmation and a separately approved test. |
+| `EventID` | Selects the interactive-reply activity/channel and causes a reply link to be added. | Activity lifecycle, tenant ownership, relation to callbacks/MO, uniqueness, provisioning, and `-290` semantics. | E3/E4 show that default `-1` is not currently usable on the observed account; interactive routing remains blocked pending written provisioning/status evidence. |
 | Recipient-level identifier | No unambiguous immutable identifier is documented across send, DR, MO, and callback. | The key needed for end-to-end recipient correlation. | Requires written provider confirmation and a separately approved test; still unresolved. |
 
 No documented identifier can currently correlate the full Win-CRM request → EVERY8D submission → delivery status → inbound reply → callback chain without additional guarantees. None is documented as an idempotency key.

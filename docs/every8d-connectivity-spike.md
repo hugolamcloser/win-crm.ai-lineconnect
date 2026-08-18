@@ -96,7 +96,7 @@ Neither evidence item requires another outbound SMS. Do not configure a callback
 
 No real `GetReplyMessage` query is currently authorized. The approved recipient's ordinary carrier reply attempt failed before a proven inbound event existed, so querying that earlier batch now would produce ambiguous evidence.
 
-## Controlled interactive-reply test preparation
+## Controlled interactive-reply test and result
 
 The documented interactive mechanism uses the existing general endpoint:
 
@@ -110,6 +110,16 @@ MSG=<controlled-content>&DEST=<one-approved-recipient>&EventID=-1
 
 The official contract says that supplying `EventID` causes EVERY8D to add an interactive-reply link to the SMS content and adds 17 characters. `EventID=-1` selects the account's default activity channel. It does not prove that a default channel is provisioned, active, uniquely owned, or mapped to this account/tenant. Dashboard evidence mentions SafeSay separately, so the captured evidence does not prove that the link produced by `EventID=-1` will be SafeSay-branded.
 
+A separately approved invocation authenticated and reached the `SendSMS` endpoint successfully, but EVERY8D rejected the `EventID=-1` request with provider status `-290`. No interactive SMS was delivered, the runner did not proceed to delivery-status or reply querying, and the send was not retried. The captured official API contract contains no definition for status `-290`; this document therefore records the code without assigning it a meaning.
+
+Supplied official EVERY8D/SafeSay documentation describes an `互動回覆簡訊` entry that should open a SafeSay backend containing `活動頻道管理` and `客服設定`, where customer reply can be enabled and a channel can be selected as default. On the observed account:
+
+- no visible `互動回覆簡訊` entry was available;
+- the public SafeSay / `企業與顧客安全互動平台` login path returned to the same EVERY8D login flow; and
+- the operator could not access activity-channel/customer-service controls or create/configure a default interactive channel.
+
+These observations establish that no usable default interactive activity channel is empirically verified for this account. They are consistent with missing entitlement or provider-side provisioning, but do not prove either hypothesis and do not explain `-290`.
+
 The controlled runner permits only `EventID=-1`. It is disabled by default and requires all of the following before constructing a provider client:
 
 1. `EVERY8D_INTERACTIVE_ENABLED=true`.
@@ -122,7 +132,7 @@ The controlled runner permits only `EventID=-1`. It is disabled by default and r
 8. `EVERY8D_REPLY_QUERY_ENABLED=false` or unset.
 9. Complete provider authentication configuration.
 
-The proposed controlled content is:
+The controlled content configured for the attempt was:
 
 ```text
 WinCRM EVERY8D 雙向回覆測試，請依簡訊內回覆方式回覆 TEST01。
@@ -138,7 +148,7 @@ After every gate passes, one invocation performs exactly:
 
 There is no retry after provider rejection, network failure, timeout, or ambiguous send outcome. The runner never calls `GetReplyMessage`, creates a callback, or imports application routes, GHL, LINE, Supabase, reconciliation, Railway, or deployment code.
 
-Expected recipient flow, subject to real provider behavior, is: receive one SMS containing the controlled content plus a provider-added reply link; open that link; submit exactly `TEST01` through the provider's interactive flow. Ordinary reply in the iPhone SMS composer is not the planned mechanism. The account's default activity channel may be absent or unusable, in which case the link may be missing or fail—this outcome would be useful evidence but would not establish why provisioning failed.
+The documented expected recipient flow was: receive one SMS containing the controlled content plus a provider-added reply link; open that link; submit exactly `TEST01` through the provider's interactive flow. That flow was not reached because the provider rejected the send before delivery. Ordinary reply in the iPhone SMS composer is not a substitute for the documented interactive flow and had already failed for the ordinary sender identity.
 
 The send retains `BATCHID`; delivery lookup carries it as `BID` and may return `MR`; the runner records `EventID=-1` as request context. A later separately approved `GetReplyMessage` query would use `BID=BATCHID`. The documented reply response contains `BID` but not `EventID` or `MR`, so recipient-level joining remains empirically and contractually uncertain.
 
@@ -149,6 +159,8 @@ Two-way capability would require all of the following evidence:
 - EVERY8D accepts and records that reply;
 - a later separately approved query or sanitized provider UI shows the exact reply associated with the same `BATCHID`/`BID`; and
 - any available `MR`/`EventID` evidence remains consistent without relying on an undocumented join.
+
+No further interactive send or `GetReplyMessage` query should occur until EVERY8D supplies documented `-290` semantics and account-specific SafeSay/activity-channel provisioning or entitlement evidence, followed by a new explicit approval.
 
 ## First controlled recipient format
 
@@ -170,6 +182,14 @@ Maintainer-supplied evidence confirms that the previously approved one-recipient
 
 The approved recipient then attempted an ordinary carrier reply from the exact iPhone SMS conversation. iOS reported the reply as not delivered/unable to send. This establishes only that ordinary carrier reply to the sender identity used by that controlled `SendSMS` invocation was not working at that time. It does not establish whether the sender was shared, dedicated, temporary, inherently one-way, misconfigured, or unrelated to the documented `EventID` interactive mechanism.
 
+The later `EventID=-1` attempt was rejected by EVERY8D with opaque provider status `-290` after successful transport/authentication. No interactive SMS was delivered and no retry occurred. Together with the inaccessible SafeSay/channel controls, this leaves interactive/two-way capability blocked at the account/channel/provisioning layer while leaving the exact cause unresolved.
+
+## Current Issue #77 conclusion
+
+- Ordinary outbound EVERY8D connectivity is empirically proven for the exact controlled account, request, recipient, and content tested.
+- Interactive/two-way capability is not proven and is currently blocked by unresolved account/channel/provisioning access.
+- The evidence is sufficient to propose a separate default-off, mock-only Phase 2A outbound foundation issue. It is not sufficient to activate, deploy, or expose production outbound sending.
+
 ## Known limitations
 
 - Exact token lifetime, rotation overlap, and concurrent-token behavior remain undocumented.
@@ -179,5 +199,6 @@ The approved recipient then attempted an ordinary carrier reply from the exact i
 - `MR`/`MSGID` callback semantics remain internally inconsistent in the provider documentation.
 - Encoding, segmentation, charge boundaries, rate limits, status retention, and idempotent retry behavior remain unresolved.
 - No sandbox SiteURL is documented.
+- Provider status `-290` is observed but undocumented; permanence, retry classification, and required remediation are unknown.
 - The runner makes no automatic retry after an ambiguous send timeout because that could duplicate a billed SMS.
 - Immediate delivery querying cannot prove callback behavior, final-state timing, or status-transition guarantees.
