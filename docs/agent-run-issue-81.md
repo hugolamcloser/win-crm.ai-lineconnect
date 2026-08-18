@@ -5,7 +5,7 @@
 - GitHub task: Issue #81 — Phase 2B — Controlled Live EVERY8D Outbound Runtime Validation (Default-Off, Single-Tenant, Approval-Gated)
 - Approved branch: `codex/issue-81-every8d-live-outbound-validation`
 - Base and pre-implementation HEAD: `6fb5dee1e24656cffb52ce0e61ddc992839a825d`
-- Authority: implementation and mock-only validation; no real provider request, credential use, SMS, commit, push, PR, deployment, Railway, Supabase, LINE, GHL, workflow, route, callback, inbound/MO, SafeSay, or EventID change
+- Initial authority: implementation and mock-only validation. A later, separately approved controlled execution completed exactly one `SendSMS` attempt; this evidence update does not authorize another provider request or SMS. No deployment, Railway, Supabase, LINE, GHL, workflow, route, callback, inbound/MO, SafeSay, or EventID change was authorized or performed.
 - Date: 2026-08-18
 
 ## Task objective
@@ -85,7 +85,7 @@ There is no automatic retry. Provider rejection, timeout, network failure, malfo
 | `EVERY8D_PASSWORD` | Runtime-only credential; never logged |
 | `EVERY8D_TIMEOUT_MS` | Optional integer 100–60,000; defaults to `10000` |
 
-The runtime values must remain outside the repository and Railway. No real value was used during implementation or testing.
+The runtime values must remain outside the repository and Railway. No real value was used during implementation or automated testing. The separately approved controlled execution supplied its values only at local runtime; no credential, full recipient, or complete message was stored in this repository.
 
 ## Logging and evidence boundary
 
@@ -110,6 +110,33 @@ The runtime values must remain outside the repository and Railway. No real value
 
 The dedicated Phase 2B test suite uses only queued in-memory transports. Its accepted case observes exactly two mocked requests: one authentication and one `SendSMS`. Failure cases prove that rejection, timeout, network failure, and malformed response each produce no more than one `SendSMS` request. Static/import checks prove that application startup and all other source modules do not reference the manual runner. The controlled-live factory also rejects the Phase 2A mock transport marker.
 
+## Controlled live execution evidence
+
+The separately approved Phase 2B execution completed on 2026-08-18 from the controlled local Windows environment. Approved and requested tenant/location exact-match gates passed, and the resolved provider was `every8d`. Runtime credentials, the full recipient, and the complete message were not captured in repository evidence.
+
+| Evidence | Sanitized result |
+| --- | --- |
+| Outcome | `accepted` |
+| Maximum authorized `SendSMS` attempts | 1 |
+| Actual `providerAttempts` | 1 |
+| Authentication HTTP status | 200 |
+| Authentication `providerResult` | `true` |
+| `SendSMS` HTTP status | 200 |
+| `SendSMS` `providerResult` | `true` |
+| `sentCount` / `unsentCount` | 1 / 0 |
+| Provider `cost` | 1 |
+| `retryAttempted` | `false` |
+| `interactiveReplyRequested` | `false` |
+| Returned `BATCHID` | `8cf50a74-9c06-40ed-b7a1-edc192654a13` |
+| Preserved `BID` | `8cf50a74-9c06-40ed-b7a1-edc192654a13` |
+| `bidSource` | `batch_id` |
+
+The approved Taiwan handset physically received the single controlled SMS at approximately 18:20 GMT+8. The recipient-provided screenshot showed that the received content matched the approved Phase 2B test message. The screenshot and full phone number remain outside the repository and PR.
+
+The Taiwan VPN/network remained stable during the execution. This proves successful delivery under that specific network condition only; it does not establish that EVERY8D requires a Taiwan VPN.
+
+No second SMS was sent and no automatic retry occurred. The execution did not call `GetDeliveryStatus`, `GetReplyMessage`, SafeSay, EventID, inbound/MO, or callback operations. It did not change any GHL route, LINE route, Express route, production startup behavior, Supabase schema/data, Railway configuration, or reconciliation behavior.
+
 ## Validation summary
 
 | Check | Result | Notes |
@@ -118,6 +145,7 @@ The dedicated Phase 2B test suite uses only queued in-memory transports. Its acc
 | `npm run typecheck` | Passed | TypeScript completed without errors. |
 | `npm test` | Passed | 369 passed; 0 failed, cancelled, skipped, or todo. Includes 23 Phase 2B tests. |
 | `npm run build` | Passed | TypeScript production build completed without errors. |
+| `git diff --check` | Passed | Evidence-only documentation diff has no whitespace errors. |
 
 ## Protected systems confirmed unchanged
 
@@ -136,14 +164,15 @@ The dedicated Phase 2B test suite uses only queued in-memory transports. Its acc
 - Implementation correction loops used: one (tightened leading/trailing recipient-space rejection during final requirements audit)
 - Reviewer correction loops used: zero
 - Repeated errors or failed approaches: none
-- Provider credentials/data accessed: no
-- Provider requests or SMS: zero
-- Stop rule triggered: yes; stop after mock validation and before any real invocation
+- Provider credentials: supplied only at runtime for the separately approved controlled execution; not printed, logged, or stored
+- Provider operations: one authentication request and one `SendSMS` attempt; no retry, status query, reply query, inbound/MO, callback, SafeSay, or EventID operation
+- SMS outcome: exactly one accepted send and one sanitized handset receipt confirmation; no second SMS
+- Stop rule triggered: yes; stop after recording the completed approved execution, with no further provider request authorized
 
 ## Unresolved decisions and next approval
 
-Implementation and mock validation do not authorize a real provider request. Before the manual command can run, the maintainer must separately approve the exact tenant, location, account owner, one recipient, fixed message, operator, execution environment/network, test window, maximum count of one SMS, and accepted cost exposure. Runtime-only credentials must then be supplied outside the repository.
+The one separately approved controlled execution is complete. It does not authorize a second send, a delivery-status query, a reply-message query, deployment, or production/GHL integration. Any next phase requires its own scope, safety review, implementation task, and explicit approval.
 
 ## Recommended next action
 
-Review the final implementation, mandatory validation results, scope audit, and this sanitized run log. If accepted, decide whether to publish a Draft PR. Continue to stop before the single real controlled test until a separate explicit live-execution approval is recorded.
+Review the implementation, validation results, scope audit, and sanitized empirical evidence in Draft PR #82. If accepted, decide whether to mark the PR ready for review and merge it. Do not merge, deploy, send another SMS, query delivery/replies, or begin production/GHL integration under Issue #81 authority.
