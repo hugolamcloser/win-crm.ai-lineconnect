@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 
-export type Every8dOperation = "authenticate" | "send_sms" | "get_delivery_status";
+export type Every8dOperation =
+  | "authenticate"
+  | "send_sms"
+  | "get_delivery_status"
+  | "get_reply_messages";
 
 export interface Every8dHttpRequest {
   url: string;
@@ -42,6 +46,7 @@ export interface Every8dSendSmsInput {
   token: string;
   recipient: string;
   message: string;
+  eventId?: string;
 }
 
 export interface Every8dSendSmsResult {
@@ -70,6 +75,21 @@ export interface Every8dDeliveryStatusResult {
   smsCount: number;
   bid: string;
   records: Every8dDeliveryRecord[];
+  httpStatus: number;
+  durationMs: number;
+}
+
+export interface Every8dReplyRecord {
+  name?: string;
+  mobile?: string;
+  content?: string;
+  receivedTime?: string;
+}
+
+export interface Every8dReplyMessagesResult {
+  smsCount: number;
+  bid: string;
+  records: Every8dReplyRecord[];
   httpStatus: number;
   durationMs: number;
 }
@@ -401,6 +421,8 @@ export class Every8dClient {
     const token = requireNonEmpty(input.token, "token", operation);
     const recipient = requireNonEmpty(input.recipient, "recipient", operation);
     const message = requireNonEmpty(input.message, "message", operation);
+    const eventId =
+      input.eventId === undefined ? undefined : requireNonEmpty(input.eventId, "eventId", operation);
 
     if (/[,;\r\n]/.test(recipient)) {
       throw new Every8dClientError({
@@ -423,12 +445,20 @@ export class Every8dClient {
       {
         operation,
         recipientRef: buildReference(recipient),
-        contentLength: Array.from(message).length
+        contentLength: Array.from(message).length,
+        interactiveReplyRequested: eventId !== undefined,
+        eventId
       },
       "EVERY8D operation started"
     );
 
-    const body = new URLSearchParams({ MSG: message, DEST: recipient }).toString();
+    const parameters = new URLSearchParams({ MSG: message, DEST: recipient });
+
+    if (eventId !== undefined) {
+      parameters.set("EventID", eventId);
+    }
+
+    const body = parameters.toString();
     const response = await this.execute(operation, {
       url: `${this.siteUrl}/API21/HTTP/SendSMS.ashx`,
       method: "POST",
@@ -570,6 +600,107 @@ export class Every8dClient {
         smsCount,
         mrValues: records.map((record) => record.mr).filter(Boolean),
         deliveryStates: records.map((record) => record.status).filter(Boolean),
+        durationMs
+      },
+      "EVERY8D operation completed"
+    );
+
+    return result;
+  }
+
+  async getReplyMessages(
+    tokenValue: string,
+    batchIdValue: string,
+    pageNumber = 1
+  ): Promise<Every8dReplyMessagesResult> {
+    const operation: Every8dOperation = "get_reply_messages";
+    const token = requireNonEmpty(tokenValue, "token", operation);
+    const batchId = requireNonEmpty(batchIdValue, "batchId", operation);
+
+    if (!Number.isSafeInteger(pageNumber) || pageNumber < 1) {
+      throw new Every8dClientError({
+        code: "invalid_request",
+        operation,
+        message: "EVERY8D reply page number must be a positive integer"
+      });
+    }
+
+    const startedAt = Date.now();
+    this.logger.info({ operation, batchId, pageNumber }, "EVERY8D operation started");
+
+    const body = new URLSearchParams({
+      BID: batchId,
+      PNO: String(pageNumber),
+      RESPFORMAT: "1"
+    }).toString();
+    const response = await this.execute(operation, {
+      url: `${this.siteUrl}/API21/HTTP/GetReplyMessage.ashx`,
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/x-www-form-urlencoded"
+      },
+      body,
+      timeoutMs: this.timeoutMs
+    });
+    const durationMs = Date.now() - startedAt;
+    const payload = parseJsonObject(response.body, operation);
+    const smsCount = parseDeliveryCount(payload.SMS_COUNT);
+    const bid = deliveryString(payload, "BID");
+
+    if (smsCount === undefined || !bid) {
+      const error = new Every8dClientError({
+        code: "malformed_response",
+        operation,
+        httpStatus: response.status,
+        message: "EVERY8D reply response omitted SMS_COUNT or BID"
+      });
+      this.logFailure(error, durationMs);
+      throw error;
+    }
+
+    const rawRecords = payload.DATA === undefined && smsCount === 0 ? [] : payload.DATA;
+
+    if (
+      !Array.isArray(rawRecords) ||
+      rawRecords.some((record) => !record || typeof record !== "object" || Array.isArray(record))
+    ) {
+      const error = new Every8dClientError({
+        code: "malformed_response",
+        operation,
+        httpStatus: response.status,
+        message: "EVERY8D reply response DATA was invalid"
+      });
+      this.logFailure(error, durationMs);
+      throw error;
+    }
+
+    const records = rawRecords.map((rawRecord) => {
+      const record = rawRecord as Record<string, unknown>;
+      return {
+        name: deliveryString(record, "NAME"),
+        mobile: deliveryString(record, "MOBILE"),
+        content: deliveryString(record, "CONTENT"),
+        receivedTime: deliveryString(record, "RECEIVED_TIME")
+      } satisfies Every8dReplyRecord;
+    });
+
+    const result: Every8dReplyMessagesResult = {
+      smsCount,
+      bid,
+      records,
+      httpStatus: response.status,
+      durationMs
+    };
+
+    this.logger.info(
+      {
+        operation,
+        httpStatus: response.status,
+        providerResult: true,
+        bid,
+        smsCount,
+        pageNumber,
         durationMs
       },
       "EVERY8D operation completed"
