@@ -1,4 +1,5 @@
 import {
+  createEvery8dFetchTransport,
   Every8dClient,
   Every8dClientError,
   type Every8dLogger,
@@ -22,6 +23,14 @@ export const EVERY8D_MOCK_TRANSPORT_KIND = "every8d_mock_only" as const;
 
 export interface Every8dMockOnlyTransport extends Every8dTransport {
   readonly kind: typeof EVERY8D_MOCK_TRANSPORT_KIND;
+}
+
+export const EVERY8D_PHASE_2B_CONTROLLED_LIVE_TRANSPORT_KIND =
+  "every8d_phase_2b_controlled_live" as const;
+
+export interface Every8dPhase2bControlledLiveTransport
+  extends Every8dTransport {
+  readonly kind: typeof EVERY8D_PHASE_2B_CONTROLLED_LIVE_TRANSPORT_KIND;
 }
 
 export interface Every8dSmsProviderFactoryOptions {
@@ -62,12 +71,12 @@ function mapClientError(error: Every8dClientError): SmsNormalizedFailure {
 
 class Every8dSmsProvider implements SmsProvider {
   private readonly configuration: Every8dSmsProviderConfiguration;
-  private readonly transport: Every8dMockOnlyTransport;
+  private readonly transport: Every8dTransport;
   private readonly logger: Every8dLogger;
 
   constructor(
     configuration: Every8dSmsProviderConfiguration,
-    transport: Every8dMockOnlyTransport,
+    transport: Every8dTransport,
     logger: Every8dLogger,
   ) {
     this.configuration = configuration;
@@ -126,6 +135,55 @@ export class Every8dSmsProviderFactory implements SmsProviderFactory {
     if (options.transport.kind !== EVERY8D_MOCK_TRANSPORT_KIND) {
       throw new Error(
         "Phase 2A EVERY8D adapter requires a mock-only transport",
+      );
+    }
+
+    this.transport = options.transport;
+    this.logger = options.logger;
+  }
+
+  create(configuration: SmsProviderConfiguration): SmsProvider {
+    if (configuration.provider !== "every8d") {
+      throw new Error(
+        "EVERY8D adapter received an unsupported provider configuration",
+      );
+    }
+
+    return new Every8dSmsProvider(configuration, this.transport, this.logger);
+  }
+}
+
+export interface Every8dPhase2bControlledLiveSmsProviderFactoryOptions {
+  transport: Every8dPhase2bControlledLiveTransport;
+  logger: Every8dLogger;
+}
+
+export function createEvery8dPhase2bControlledLiveTransport(
+  fetchImplementation: typeof fetch = globalThis.fetch,
+): Every8dPhase2bControlledLiveTransport {
+  const transport = createEvery8dFetchTransport(fetchImplementation);
+
+  return {
+    kind: EVERY8D_PHASE_2B_CONTROLLED_LIVE_TRANSPORT_KIND,
+    request: (request) => transport.request(request),
+  };
+}
+
+export class Every8dPhase2bControlledLiveSmsProviderFactory
+  implements SmsProviderFactory
+{
+  private readonly transport: Every8dPhase2bControlledLiveTransport;
+  private readonly logger: Every8dLogger;
+
+  constructor(
+    options: Every8dPhase2bControlledLiveSmsProviderFactoryOptions,
+  ) {
+    if (
+      options.transport.kind !==
+      EVERY8D_PHASE_2B_CONTROLLED_LIVE_TRANSPORT_KIND
+    ) {
+      throw new Error(
+        "Phase 2B EVERY8D adapter requires the controlled-live transport",
       );
     }
 
