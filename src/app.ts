@@ -10,6 +10,7 @@ import { adminRouter } from "./routes/admin";
 import { appLineRouter } from "./routes/appLine";
 import { debugRouter } from "./routes/debug";
 import { ghlAppInstallWebhookRouter } from "./routes/ghlAppInstallWebhook";
+import { ghlSmsProviderWebhookRouter } from "./routes/ghlSmsProviderWebhook";
 import { ghlWebhookRouter } from "./routes/ghlWebhook";
 import { healthRouter } from "./routes/health";
 import { lineWebhookRouter } from "./routes/lineWebhook";
@@ -210,6 +211,7 @@ export function createApp() {
   app.use(debugRouter);
   app.use(oauthRouter);
   app.use(ghlAppInstallWebhookRouter);
+  app.use(ghlSmsProviderWebhookRouter);
   app.use(lineWebhookRouter);
   app.use(ghlWebhookRouter);
   app.use(appLineRouter);

@@ -60,6 +60,16 @@ const envSchema = z.object({
     .transform((value) => value === "true"),
   GHL_WORKFLOW_PROVIDER_FIRST_V3_TENANT_ALLOWLIST: z.string().default(""),
   GHL_WORKFLOW_PROVIDER_FIRST_V3_TENANT_DENYLIST: z.string().default(""),
+  GHL_SMS_PHASE_2C_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
+  GHL_SMS_PHASE_2C_CONFIRMATION: z.string().default(""),
+  GHL_SMS_PHASE_2C_ALLOWED_LOCATION_ID: z.string().default(""),
+  GHL_SMS_PHASE_2C_ALLOWED_TENANT_ID: z.string().default(""),
+  GHL_SMS_PHASE_2C_ALLOWED_CONTACT_ID: z.string().default(""),
+  GHL_SMS_PHASE_2C_ALLOWED_PHONE: z.string().default(""),
+  GHL_SMS_PHASE_2C_ALLOWED_MESSAGE: z.string().default(""),
   GHL_LINE_USER_ID_FIELD_ID: z.string().default(""),
   GHL_LINE_DISPLAY_NAME_FIELD_ID: z.string().default(""),
 
@@ -108,6 +118,13 @@ export const optionalEnvCheckKeys = [
   "GHL_WORKFLOW_PROVIDER_FIRST_V3_GLOBAL_ENABLED",
   "GHL_WORKFLOW_PROVIDER_FIRST_V3_TENANT_ALLOWLIST",
   "GHL_WORKFLOW_PROVIDER_FIRST_V3_TENANT_DENYLIST",
+  "GHL_SMS_PHASE_2C_ENABLED",
+  "GHL_SMS_PHASE_2C_CONFIRMATION",
+  "GHL_SMS_PHASE_2C_ALLOWED_LOCATION_ID",
+  "GHL_SMS_PHASE_2C_ALLOWED_TENANT_ID",
+  "GHL_SMS_PHASE_2C_ALLOWED_CONTACT_ID",
+  "GHL_SMS_PHASE_2C_ALLOWED_PHONE",
+  "GHL_SMS_PHASE_2C_ALLOWED_MESSAGE",
   "GHL_LINE_USER_ID_FIELD_ID",
   "GHL_LINE_DISPLAY_NAME_FIELD_ID",
   "CUSTOM_PAGE_FRAME_ANCESTORS"
