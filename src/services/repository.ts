@@ -132,6 +132,42 @@ export type FinalizeGhlOutboundProviderDeliveryInput = {
   requestPayload: unknown;
 };
 
+export type GhlSmsOutboundOperationState =
+  | "processing"
+  | "accepted"
+  | "definitive_failed"
+  | "ambiguous";
+
+export type ClaimGhlSmsOutboundOperationInput = {
+  tenantId: string;
+  locationId: string;
+  ghlMessageId: string;
+};
+
+export type GhlSmsOutboundOperationClaimResult =
+  | { claimed: true; operationId: string }
+  | { claimed: false };
+
+export type GhlSmsOutboundOperationIdentity = {
+  operationId: string;
+  tenantId: string;
+  locationId: string;
+  ghlMessageId: string;
+};
+
+export type FinalizeGhlSmsOutboundOperationInput =
+  GhlSmsOutboundOperationIdentity & {
+    state: Exclude<GhlSmsOutboundOperationState, "processing">;
+    failureCode?: string;
+    providerHttpStatus?: number;
+    providerStatus?: string;
+    providerSentCount?: number;
+    providerUnsentCount?: number;
+    providerBatchId?: string;
+    providerBid?: string;
+    providerBidSource?: "provider" | "batch_id";
+  };
+
 export type GhlOAuthTokenRecord = {
   id: string;
   tenant_id: string | null;
@@ -1302,6 +1338,162 @@ export async function findWorkflowProviderDispatchMessageEvent(input: {
   }
 
   return record;
+}
+
+function normalizeGhlSmsOutboundOperationIdentity(input: {
+  operationId?: string;
+  tenantId: string;
+  locationId: string;
+  ghlMessageId: string;
+}): GhlSmsOutboundOperationIdentity {
+  const operationId = input.operationId?.trim() ?? "";
+  const tenantId = input.tenantId.trim();
+  const locationId = input.locationId.trim();
+  const ghlMessageId = input.ghlMessageId.trim();
+
+  if (!tenantId || !locationId || !ghlMessageId) {
+    throw new Error(
+      "tenantId, locationId, and ghlMessageId are required for an outbound SMS operation",
+    );
+  }
+
+  if (input.operationId !== undefined && !operationId) {
+    throw new Error("operationId is required for an existing outbound SMS operation");
+  }
+
+  return { operationId, tenantId, locationId, ghlMessageId };
+}
+
+function optionalTrimmedValue(value: string | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized || null;
+}
+
+function optionalNormalizedCode(value: string | undefined): string | null {
+  const normalized = value?.trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(normalized)) {
+    throw new Error("Outbound SMS status and failure codes must be normalized");
+  }
+
+  return normalized;
+}
+
+export async function claimGhlSmsOutboundOperation(
+  input: ClaimGhlSmsOutboundOperationInput,
+): Promise<GhlSmsOutboundOperationClaimResult> {
+  const identity = normalizeGhlSmsOutboundOperationIdentity(input);
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("ghl_sms_outbound_operations")
+    .insert({
+      tenant_id: identity.tenantId,
+      location_id: identity.locationId,
+      ghl_message_id: identity.ghlMessageId,
+      provider: "every8d",
+      provider_mode: "mock",
+      state: "processing",
+      provider_attempts: 0,
+    })
+    .select("id")
+    .single();
+
+  if (error?.code === "23505") {
+    return { claimed: false };
+  }
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const operationId =
+    isRecord(data) && typeof data.id === "string" ? data.id : undefined;
+
+  if (!operationId) {
+    throw new Error("Outbound SMS operation claim did not return an operation ID");
+  }
+
+  return { claimed: true, operationId };
+}
+
+export async function markGhlSmsOutboundOperationSendStarted(
+  input: GhlSmsOutboundOperationIdentity,
+): Promise<boolean> {
+  const identity = normalizeGhlSmsOutboundOperationIdentity(input);
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("ghl_sms_outbound_operations")
+    .update({
+      send_started_at: new Date().toISOString(),
+      provider_attempts: 1,
+    })
+    .eq("id", identity.operationId)
+    .eq("tenant_id", identity.tenantId)
+    .eq("location_id", identity.locationId)
+    .eq("ghl_message_id", identity.ghlMessageId)
+    .eq("provider", "every8d")
+    .eq("provider_mode", "mock")
+    .eq("state", "processing")
+    .is("send_started_at", null)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return Boolean(data);
+}
+
+export async function finalizeGhlSmsOutboundOperation(
+  input: FinalizeGhlSmsOutboundOperationInput,
+): Promise<boolean> {
+  const identity = normalizeGhlSmsOutboundOperationIdentity(input);
+
+  if (input.state === "accepted" && input.failureCode) {
+    throw new Error("Accepted outbound SMS operations cannot have a failure code");
+  }
+
+  if (input.state !== "accepted" && !input.failureCode?.trim()) {
+    throw new Error("Failed outbound SMS operations require a normalized failure code");
+  }
+
+  const updatePayload = {
+    state: input.state,
+    provider_http_status: input.providerHttpStatus ?? null,
+    provider_status: optionalNormalizedCode(input.providerStatus),
+    provider_sent_count: input.providerSentCount ?? null,
+    provider_unsent_count: input.providerUnsentCount ?? null,
+    failure_code: optionalNormalizedCode(input.failureCode),
+    provider_batch_id: optionalTrimmedValue(input.providerBatchId),
+    provider_bid: optionalTrimmedValue(input.providerBid),
+    provider_bid_source: input.providerBidSource ?? null,
+    finalized_at: new Date().toISOString(),
+  };
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("ghl_sms_outbound_operations")
+    .update(updatePayload)
+    .eq("id", identity.operationId)
+    .eq("tenant_id", identity.tenantId)
+    .eq("location_id", identity.locationId)
+    .eq("ghl_message_id", identity.ghlMessageId)
+    .eq("provider", "every8d")
+    .eq("provider_mode", "mock")
+    .eq("state", "processing")
+    .not("send_started_at", "is", null)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return Boolean(data);
 }
 
 export async function claimGhlOutboundProviderDelivery(
