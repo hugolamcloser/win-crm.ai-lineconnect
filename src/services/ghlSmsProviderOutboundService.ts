@@ -10,14 +10,22 @@ import type { GhlSmsProviderPayload } from "../routes/ghlSmsProviderWebhook";
 import { SmsProviderConfigService } from "./smsProviderConfigService";
 import { SmsOutboundService } from "./smsOutboundService";
 import {
+  claimGhlSmsOutboundOperation,
+  finalizeGhlSmsOutboundOperation,
   getTenantById,
   getTenantIdsByLocationId,
+  markGhlSmsOutboundOperationSendStarted,
+  type ClaimGhlSmsOutboundOperationInput,
+  type FinalizeGhlSmsOutboundOperationInput,
+  type GhlSmsOutboundOperationClaimResult,
+  type GhlSmsOutboundOperationIdentity,
   type TenantRecord,
 } from "./repository";
+import type { SmsFailureCode } from "../types/sms";
 
 export interface GhlSmsProviderOutboundResponse {
   ok: boolean;
-  status: "mocked" | "failed";
+  status: "mocked" | "duplicate" | "failed";
   provider: "every8d";
   providerAttempts: 0 | 1;
   retryAttempted: false;
@@ -32,6 +40,13 @@ export interface GhlSmsProviderOutboundResult {
 export interface GhlSmsProviderOutboundDependencies {
   getTenantIdsByLocationId(locationId: string): Promise<string[]>;
   getTenantById(tenantId: string): Promise<TenantRecord | null>;
+  claimOperation(
+    input: ClaimGhlSmsOutboundOperationInput,
+  ): Promise<GhlSmsOutboundOperationClaimResult>;
+  markSendStarted(input: GhlSmsOutboundOperationIdentity): Promise<boolean>;
+  finalizeOperation(
+    input: FinalizeGhlSmsOutboundOperationInput,
+  ): Promise<boolean>;
   createMockTransport(): Every8dMockOnlyTransport;
   logger: Every8dLogger;
 }
@@ -69,6 +84,56 @@ function failureResult(
       error,
     },
   };
+}
+
+function duplicateResult(): GhlSmsProviderOutboundResult {
+  return {
+    httpStatus: 200,
+    body: {
+      ok: true,
+      status: "duplicate",
+      provider: "every8d",
+      providerAttempts: 0,
+      retryAttempted: false,
+      error: "",
+    },
+  };
+}
+
+const DEFINITIVE_FAILURE_CODES = new Set<SmsFailureCode>([
+  "service_disabled",
+  "missing_tenant_id",
+  "missing_location_id",
+  "missing_provider",
+  "unsupported_provider",
+  "invalid_destination",
+  "invalid_message",
+  "invalid_reference",
+  "configuration_not_found",
+  "tenant_mismatch",
+  "location_mismatch",
+  "ambiguous_configuration",
+  "configuration_disabled",
+  "provider_configuration_invalid",
+  "provider_rejected",
+]);
+
+function classifyFailure(
+  failureCode: SmsFailureCode,
+): "definitive_failed" | "ambiguous" {
+  return DEFINITIVE_FAILURE_CODES.has(failureCode)
+    ? "definitive_failed"
+    : "ambiguous";
+}
+
+function sanitizedProviderStatus(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+
+  if (!normalized || !/^[A-Za-z0-9_.:-]{1,64}$/.test(normalized)) {
+    return undefined;
+  }
+
+  return normalized;
 }
 
 function hasCompleteApprovedConfiguration(): boolean {
@@ -148,6 +213,41 @@ export function createGhlSmsProviderOutboundService(
       return failureResult(409, "tenant_binding_invalid");
     }
 
+    let claim: GhlSmsOutboundOperationClaimResult;
+
+    try {
+      claim = await dependencies.claimOperation({
+        tenantId: derivedTenantId,
+        locationId: payload.locationId,
+        ghlMessageId: payload.messageId,
+      });
+    } catch {
+      return failureResult(503, "sms_operation_claim_failed");
+    }
+
+    if (!claim.claimed) {
+      return duplicateResult();
+    }
+
+    const operationIdentity: GhlSmsOutboundOperationIdentity = {
+      operationId: claim.operationId,
+      tenantId: derivedTenantId,
+      locationId: payload.locationId,
+      ghlMessageId: payload.messageId,
+    };
+
+    let sendStarted: boolean;
+
+    try {
+      sendStarted = await dependencies.markSendStarted(operationIdentity);
+    } catch {
+      return failureResult(503, "sms_operation_send_start_failed");
+    }
+
+    if (!sendStarted) {
+      return failureResult(503, "sms_operation_send_start_failed");
+    }
+
     let providerFactory: Every8dSmsProviderFactory;
 
     try {
@@ -156,6 +256,22 @@ export function createGhlSmsProviderOutboundService(
         logger: dependencies.logger,
       });
     } catch {
+      let finalized: boolean;
+
+      try {
+        finalized = await dependencies.finalizeOperation({
+          ...operationIdentity,
+          state: "definitive_failed",
+          failureCode: "provider_configuration_invalid",
+        });
+      } catch {
+        finalized = false;
+      }
+
+      if (!finalized) {
+        return failureResult(500, "sms_operation_finalization_failed", 1);
+      }
+
       return failureResult(503, "mock_provider_unavailable");
     }
 
@@ -190,7 +306,51 @@ export function createGhlSmsProviderOutboundService(
     });
 
     if (!result.ok) {
+      let finalized: boolean;
+
+      try {
+        finalized = await dependencies.finalizeOperation({
+          ...operationIdentity,
+          state: classifyFailure(result.failure.code),
+          failureCode: result.failure.code,
+          providerHttpStatus: result.failure.httpStatus,
+          providerStatus: sanitizedProviderStatus(
+            result.failure.providerStatus,
+          ),
+        });
+      } catch {
+        finalized = false;
+      }
+
+      if (!finalized) {
+        return failureResult(500, "sms_operation_finalization_failed", 1);
+      }
+
       return failureResult(502, result.failure.code, result.providerAttempts);
+    }
+
+    let finalized: boolean;
+
+    try {
+      finalized = await dependencies.finalizeOperation({
+        ...operationIdentity,
+        state: "accepted",
+        providerHttpStatus: result.providerResult.httpStatus,
+        providerStatus: sanitizedProviderStatus(
+          result.providerResult.providerStatus,
+        ),
+        providerSentCount: result.providerResult.sentCount,
+        providerUnsentCount: result.providerResult.unsentCount,
+        providerBatchId: result.correlation.batchId,
+        providerBid: result.correlation.bid,
+        providerBidSource: result.correlation.bidSource,
+      });
+    } catch {
+      finalized = false;
+    }
+
+    if (!finalized) {
+      return failureResult(500, "sms_operation_finalization_failed", 1);
     }
 
     return {
@@ -211,6 +371,9 @@ export const processGhlSmsProviderOutbound =
   createGhlSmsProviderOutboundService({
     getTenantIdsByLocationId,
     getTenantById,
+    claimOperation: claimGhlSmsOutboundOperation,
+    markSendStarted: markGhlSmsOutboundOperationSendStarted,
+    finalizeOperation: finalizeGhlSmsOutboundOperation,
     createMockTransport: createEvery8dPhase2cMockTransport,
     logger,
   });

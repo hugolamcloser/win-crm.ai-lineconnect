@@ -83,6 +83,94 @@ function captureLogger() {
   };
 }
 
+function persistenceDependencies(overrides = {}) {
+  return {
+    async claimOperation() {
+      return { claimed: true, operationId: "sms-operation-fixture" };
+    },
+    async markSendStarted() {
+      return true;
+    },
+    async finalizeOperation() {
+      return true;
+    },
+    ...overrides,
+  };
+}
+
+function durablePersistenceHarness() {
+  const records = new Map();
+  const calls = { claims: 0, sendStarts: 0, finalizations: 0 };
+  let operationSequence = 0;
+  const operationKey = ({ tenantId, locationId, ghlMessageId }) =>
+    `${tenantId}:${locationId}:${ghlMessageId}`;
+
+  return {
+    calls,
+    records,
+    dependencies: {
+      async claimOperation(input) {
+        calls.claims += 1;
+        const key = operationKey(input);
+
+        if (records.has(key)) {
+          return { claimed: false };
+        }
+
+        operationSequence += 1;
+        records.set(key, {
+          id: `sms-operation-${operationSequence}`,
+          tenantId: input.tenantId,
+          locationId: input.locationId,
+          ghlMessageId: input.ghlMessageId,
+          provider: "every8d",
+          providerMode: "mock",
+          state: "processing",
+          sendStartedAt: null,
+          providerAttempts: 0,
+        });
+        return {
+          claimed: true,
+          operationId: `sms-operation-${operationSequence}`,
+        };
+      },
+      async markSendStarted(input) {
+        calls.sendStarts += 1;
+        const record = records.get(operationKey(input));
+
+        if (
+          !record ||
+          record.id !== input.operationId ||
+          record.state !== "processing" ||
+          record.sendStartedAt !== null
+        ) {
+          return false;
+        }
+
+        record.sendStartedAt = "persisted-before-service";
+        record.providerAttempts = 1;
+        return true;
+      },
+      async finalizeOperation(input) {
+        calls.finalizations += 1;
+        const record = records.get(operationKey(input));
+
+        if (
+          !record ||
+          record.id !== input.operationId ||
+          record.state !== "processing" ||
+          !record.sendStartedAt
+        ) {
+          return false;
+        }
+
+        Object.assign(record, input, { finalized: true });
+        return true;
+      },
+    },
+  };
+}
+
 const phase2cEnvKeys = [
   "GHL_SMS_PHASE_2C_ENABLED",
   "GHL_SMS_PHASE_2C_CONFIRMATION",
@@ -332,8 +420,29 @@ test("Phase 2C SMS provider service is disabled by default with zero downstream 
   const originalEnabled = env.GHL_SMS_PHASE_2C_ENABLED;
   env.GHL_SMS_PHASE_2C_ENABLED = false;
   const capture = captureLogger();
-  const calls = { tenantIds: 0, tenant: 0, mockTransport: 0 };
+  const calls = {
+    tenantIds: 0,
+    tenant: 0,
+    claim: 0,
+    sendStart: 0,
+    finalize: 0,
+    mockTransport: 0,
+  };
   const service = createGhlSmsProviderOutboundService({
+    ...persistenceDependencies({
+      async claimOperation() {
+        calls.claim += 1;
+        throw new Error("claim must not run");
+      },
+      async markSendStarted() {
+        calls.sendStart += 1;
+        throw new Error("send start must not run");
+      },
+      async finalizeOperation() {
+        calls.finalize += 1;
+        throw new Error("finalization must not run");
+      },
+    }),
     logger: capture.logger,
     async getTenantIdsByLocationId() {
       calls.tenantIds += 1;
@@ -366,6 +475,9 @@ test("Phase 2C SMS provider service is disabled by default with zero downstream 
     assert.deepEqual(calls, {
       tenantIds: 0,
       tenant: 0,
+      claim: 0,
+      sendStart: 0,
+      finalize: 0,
       mockTransport: 0,
     });
     assert.deepEqual(capture.entries, []);
@@ -379,6 +491,7 @@ test("Phase 2C requires exact server configuration and signed fixture allowlists
   const capture = captureLogger();
   let tenantLookups = 0;
   const service = createGhlSmsProviderOutboundService({
+    ...persistenceDependencies(),
     logger: capture.logger,
     async getTenantIdsByLocationId() {
       tenantLookups += 1;
@@ -433,6 +546,7 @@ test("Phase 2C requires exact server configuration and signed fixture allowlists
 test("Phase 2C derives exactly one tenant from signed locationId and rejects every ambiguous binding", async () => {
   const restoreEnv = setApprovedPhase2cEnv();
   const capture = captureLogger();
+  let claimCalls = 0;
   let mockTransports = 0;
 
   try {
@@ -479,6 +593,12 @@ test("Phase 2C derives exactly one tenant from signed locationId and rejects eve
     ]) {
       let tenantRowLookups = 0;
       const service = createGhlSmsProviderOutboundService({
+        ...persistenceDependencies({
+          async claimOperation() {
+            claimCalls += 1;
+            throw new Error("claim must not run for an invalid tenant binding");
+          },
+        }),
         logger: capture.logger,
         async getTenantIdsByLocationId(locationId) {
           assert.equal(locationId, "location-phase-2c-approved");
@@ -503,6 +623,7 @@ test("Phase 2C derives exactly one tenant from signed locationId and rejects eve
         scenario.tenantIds.length === 1 ? 1 : 0,
       );
     }
+    assert.equal(claimCalls, 0);
     assert.equal(mockTransports, 0);
   } finally {
     restoreEnv();
@@ -522,6 +643,7 @@ test("approved Phase 2C request invokes the mock EVERY8D provider exactly once w
   };
 
   const service = createGhlSmsProviderOutboundService({
+    ...persistenceDependencies(),
     logger: capture.logger,
     async getTenantIdsByLocationId(locationId) {
       assert.equal(locationId, "location-phase-2c-approved");
@@ -562,12 +684,254 @@ test("approved Phase 2C request invokes the mock EVERY8D provider exactly once w
   }
 });
 
-test("approved Phase 2C request invokes SmsOutboundService exactly once", async () => {
+test("durable claim makes accepted callbacks non-resendable across sequential and fresh service instances", async () => {
+  const restoreEnv = setApprovedPhase2cEnv();
+  const persistence = durablePersistenceHarness();
+  const transport = createEvery8dPhase2cMockTransport();
+  let mockTransportCalls = 0;
+  const createService = () =>
+    createGhlSmsProviderOutboundService({
+      ...persistence.dependencies,
+      logger: captureLogger().logger,
+      async getTenantIdsByLocationId() {
+        return ["tenant-phase-2c-approved"];
+      },
+      async getTenantById() {
+        return approvedTenant();
+      },
+      createMockTransport() {
+        mockTransportCalls += 1;
+        return transport;
+      },
+    });
+
+  try {
+    const firstService = createService();
+    const first = await firstService(providerPayload());
+    const sequentialDuplicate = await firstService(providerPayload());
+    const freshInstanceDuplicate = await createService()(providerPayload());
+    const record = [...persistence.records.values()][0];
+
+    assert.deepEqual(first, mockedResult());
+    for (const duplicate of [sequentialDuplicate, freshInstanceDuplicate]) {
+      assert.equal(duplicate.httpStatus, 200);
+      assert.equal(duplicate.body.status, "duplicate");
+      assert.equal(duplicate.body.providerAttempts, 0);
+    }
+    assert.equal(persistence.calls.claims, 3);
+    assert.equal(persistence.calls.sendStarts, 1);
+    assert.equal(persistence.calls.finalizations, 1);
+    assert.equal(mockTransportCalls, 1);
+    assert.equal(
+      transport.requests.filter((request) => request.url.endsWith("/SendSMS.ashx"))
+        .length,
+      1,
+    );
+    assert.equal(record.state, "accepted");
+    assert.equal(record.providerBatchId, "phase-2c-mock-batch");
+    assert.equal(record.providerBid, "phase-2c-mock-batch");
+    assert.equal(record.providerBidSource, "batch_id");
+    assert.equal(record.providerHttpStatus, 200);
+    assert.equal(record.providerSentCount, 1);
+    assert.equal(record.providerUnsentCount, 0);
+    const stored = JSON.stringify(record);
+    assert.doesNotMatch(stored, /0912345678/);
+    assert.doesNotMatch(stored, /Phase 2C mock-only SMS fixture/);
+    assert.doesNotMatch(stored, /contact-phase-2c-approved/);
+    assert.doesNotMatch(stored, /phase-2c-mock-bearer/);
+  } finally {
+    restoreEnv();
+  }
+});
+
+test("concurrent identical callbacks produce one durable winner and one mock send", async () => {
+  const restoreEnv = setApprovedPhase2cEnv();
+  const persistence = durablePersistenceHarness();
+  const transport = createEvery8dPhase2cMockTransport();
+  let mockTransportCalls = 0;
+  const service = createGhlSmsProviderOutboundService({
+    ...persistence.dependencies,
+    logger: captureLogger().logger,
+    async getTenantIdsByLocationId() {
+      return ["tenant-phase-2c-approved"];
+    },
+    async getTenantById() {
+      return approvedTenant();
+    },
+    createMockTransport() {
+      mockTransportCalls += 1;
+      return transport;
+    },
+  });
+
+  try {
+    const results = await Promise.all([
+      service(providerPayload()),
+      service(providerPayload()),
+    ]);
+
+    assert.deepEqual(
+      results.map((result) => result.body.status).sort(),
+      ["duplicate", "mocked"],
+    );
+    assert.equal(persistence.records.size, 1);
+    assert.equal(persistence.calls.claims, 2);
+    assert.equal(persistence.calls.sendStarts, 1);
+    assert.equal(persistence.calls.finalizations, 1);
+    assert.equal(mockTransportCalls, 1);
+    assert.equal(
+      transport.requests.filter((request) => request.url.endsWith("/SendSMS.ashx"))
+        .length,
+      1,
+    );
+  } finally {
+    restoreEnv();
+  }
+});
+
+test("stuck processing records before or after send-start never authorize callback replay", async () => {
+  const restoreEnv = setApprovedPhase2cEnv();
+
+  try {
+    for (const sendStarted of [false, true]) {
+      const persistence = durablePersistenceHarness();
+      const identity = {
+        tenantId: "tenant-phase-2c-approved",
+        locationId: "location-phase-2c-approved",
+        ghlMessageId: "message-phase-2c-approved",
+      };
+      const claim = await persistence.dependencies.claimOperation(identity);
+      assert.equal(claim.claimed, true);
+
+      if (sendStarted) {
+        assert.equal(
+          await persistence.dependencies.markSendStarted({
+            ...identity,
+            operationId: claim.operationId,
+          }),
+          true,
+        );
+      }
+
+      let mockTransportCalls = 0;
+      const freshService = createGhlSmsProviderOutboundService({
+        ...persistence.dependencies,
+        logger: captureLogger().logger,
+        async getTenantIdsByLocationId() {
+          return ["tenant-phase-2c-approved"];
+        },
+        async getTenantById() {
+          return approvedTenant();
+        },
+        createMockTransport() {
+          mockTransportCalls += 1;
+          throw new Error("provider construction must remain unreachable");
+        },
+      });
+
+      const duplicate = await freshService(providerPayload());
+      assert.equal(duplicate.body.status, "duplicate");
+      assert.equal(mockTransportCalls, 0);
+      assert.equal([...persistence.records.values()][0].state, "processing");
+    }
+  } finally {
+    restoreEnv();
+  }
+});
+
+test("failed send-start CAS performs zero SmsOutboundService and provider activity", async () => {
   const restoreEnv = setApprovedPhase2cEnv();
   const originalSend = SmsOutboundService.prototype.send;
   let outboundCalls = 0;
+  let mockTransportCalls = 0;
+  SmsOutboundService.prototype.send = async () => {
+    outboundCalls += 1;
+    throw new Error("SmsOutboundService must remain unreachable");
+  };
+  const service = createGhlSmsProviderOutboundService({
+    ...persistenceDependencies({
+      async markSendStarted() {
+        return false;
+      },
+    }),
+    logger: captureLogger().logger,
+    async getTenantIdsByLocationId() {
+      return ["tenant-phase-2c-approved"];
+    },
+    async getTenantById() {
+      return approvedTenant();
+    },
+    createMockTransport() {
+      mockTransportCalls += 1;
+      throw new Error("provider construction must remain unreachable");
+    },
+  });
+
+  try {
+    const result = await service(providerPayload());
+    assert.equal(result.httpStatus, 503);
+    assert.equal(result.body.error, "sms_operation_send_start_failed");
+    assert.equal(outboundCalls, 0);
+    assert.equal(mockTransportCalls, 0);
+  } finally {
+    SmsOutboundService.prototype.send = originalSend;
+    restoreEnv();
+  }
+});
+
+test("provider success with failed finalization remains processing and cannot resend", async () => {
+  const restoreEnv = setApprovedPhase2cEnv();
+  const persistence = durablePersistenceHarness();
+  const originalFinalize = persistence.dependencies.finalizeOperation;
+  persistence.dependencies.finalizeOperation = async () => {
+    persistence.calls.finalizations += 1;
+    return false;
+  };
+  const transport = createEvery8dPhase2cMockTransport();
+  const service = createGhlSmsProviderOutboundService({
+    ...persistence.dependencies,
+    logger: captureLogger().logger,
+    async getTenantIdsByLocationId() {
+      return ["tenant-phase-2c-approved"];
+    },
+    async getTenantById() {
+      return approvedTenant();
+    },
+    createMockTransport() {
+      return transport;
+    },
+  });
+
+  try {
+    const first = await service(providerPayload());
+    const duplicate = await service(providerPayload());
+    assert.equal(first.httpStatus, 500);
+    assert.equal(first.body.error, "sms_operation_finalization_failed");
+    assert.equal(duplicate.body.status, "duplicate");
+    assert.equal([...persistence.records.values()][0].state, "processing");
+    assert.equal([...persistence.records.values()][0].providerAttempts, 1);
+    assert.equal(
+      transport.requests.filter((request) => request.url.endsWith("/SendSMS.ashx"))
+        .length,
+      1,
+    );
+  } finally {
+    persistence.dependencies.finalizeOperation = originalFinalize;
+    restoreEnv();
+  }
+});
+
+test("approved Phase 2C request invokes SmsOutboundService exactly once", async () => {
+  const restoreEnv = setApprovedPhase2cEnv();
+  const originalSend = SmsOutboundService.prototype.send;
+  const persistence = durablePersistenceHarness();
+  let outboundCalls = 0;
   SmsOutboundService.prototype.send = async function (request) {
     outboundCalls += 1;
+    const record = [...persistence.records.values()][0];
+    assert.equal(record.state, "processing");
+    assert.equal(record.sendStartedAt, "persisted-before-service");
+    assert.equal(record.providerAttempts, 1);
     assert.deepEqual(request, {
       tenantId: "tenant-phase-2c-approved",
       locationId: "location-phase-2c-approved",
@@ -588,6 +952,7 @@ test("approved Phase 2C request invokes SmsOutboundService exactly once", async 
   };
 
   const service = createGhlSmsProviderOutboundService({
+    ...persistence.dependencies,
     logger: captureLogger().logger,
     async getTenantIdsByLocationId() {
       return ["tenant-phase-2c-approved"];
@@ -603,6 +968,10 @@ test("approved Phase 2C request invokes SmsOutboundService exactly once", async 
   try {
     assert.deepEqual(await service(providerPayload()), mockedResult());
     assert.equal(outboundCalls, 1);
+    assert.equal(persistence.calls.claims, 1);
+    assert.equal(persistence.calls.sendStarts, 1);
+    assert.equal(persistence.calls.finalizations, 1);
+    assert.equal([...persistence.records.values()][0].state, "accepted");
   } finally {
     SmsOutboundService.prototype.send = originalSend;
     restoreEnv();
@@ -622,21 +991,31 @@ test("Phase 2C provider failures make one SendSMS attempt and never retry", asyn
     for (const scenario of [
       {
         expected: "provider_rejected",
+        expectedState: "definitive_failed",
         send: { status: 200, body: "-99,fixture rejection" },
       },
       {
         expected: "timeout",
+        expectedState: "ambiguous",
         send: new Every8dTransportError("timeout"),
       },
       {
         expected: "network_failure",
+        expectedState: "ambiguous",
         send: new Every8dTransportError("network_failure"),
       },
       {
         expected: "malformed_provider_response",
+        expectedState: "ambiguous",
         send: { status: 200, body: "unexpected,three,fields" },
       },
+      {
+        expected: "http_failure",
+        expectedState: "ambiguous",
+        send: { status: 500, body: "provider body must not be persisted" },
+      },
     ]) {
+      const persistence = durablePersistenceHarness();
       const requests = [];
       const queue = [
         {
@@ -657,6 +1036,7 @@ test("Phase 2C provider failures make one SendSMS attempt and never retry", asyn
       };
       const capture = captureLogger();
       const service = createGhlSmsProviderOutboundService({
+        ...persistence.dependencies,
         logger: capture.logger,
         async getTenantIdsByLocationId() {
           return ["tenant-phase-2c-approved"];
@@ -670,10 +1050,19 @@ test("Phase 2C provider failures make one SendSMS attempt and never retry", asyn
       });
 
       const result = await service(providerPayload());
+      const duplicate = await service(providerPayload());
+      const record = [...persistence.records.values()][0];
       assert.equal(result.httpStatus, 502, scenario.expected);
       assert.equal(result.body.error, scenario.expected);
       assert.equal(result.body.providerAttempts, 1);
       assert.equal(result.body.retryAttempted, false);
+      assert.equal(duplicate.body.status, "duplicate");
+      assert.equal(duplicate.body.providerAttempts, 0);
+      assert.equal(record.state, scenario.expectedState);
+      assert.equal(record.failureCode, scenario.expected);
+      assert.equal(record.providerAttempts, 1);
+      assert.equal(persistence.calls.sendStarts, 1);
+      assert.equal(persistence.calls.finalizations, 1);
       assert.equal(
         requests.filter((request) =>
           request.url.endsWith("/ConnectionHandler.ashx"),
@@ -687,6 +1076,8 @@ test("Phase 2C provider failures make one SendSMS attempt and never retry", asyn
         1,
       );
       assert.equal(queue.length, 0);
+      assert.doesNotMatch(JSON.stringify(record), /fixture rejection/);
+      assert.doesNotMatch(JSON.stringify(record), /provider body must not be persisted/);
     }
     assert.equal(fetchCalls, 0);
   } finally {
@@ -695,10 +1086,61 @@ test("Phase 2C provider failures make one SendSMS attempt and never retry", asyn
   }
 });
 
+test("unknown provider acceptance is finalized as ambiguous and cannot replay", async () => {
+  const restoreEnv = setApprovedPhase2cEnv();
+  const originalSend = SmsOutboundService.prototype.send;
+  const persistence = durablePersistenceHarness();
+  let outboundCalls = 0;
+  SmsOutboundService.prototype.send = async () => {
+    outboundCalls += 1;
+    return {
+      ok: false,
+      tenantId: "tenant-phase-2c-approved",
+      locationId: "location-phase-2c-approved",
+      provider: "every8d",
+      providerAttempts: 1,
+      failure: {
+        code: "provider_failure",
+        stage: "provider",
+        retryable: false,
+        retryAttempted: false,
+      },
+    };
+  };
+  const service = createGhlSmsProviderOutboundService({
+    ...persistence.dependencies,
+    logger: captureLogger().logger,
+    async getTenantIdsByLocationId() {
+      return ["tenant-phase-2c-approved"];
+    },
+    async getTenantById() {
+      return approvedTenant();
+    },
+    createMockTransport() {
+      return createEvery8dPhase2cMockTransport();
+    },
+  });
+
+  try {
+    const first = await service(providerPayload());
+    const duplicate = await service(providerPayload());
+    const record = [...persistence.records.values()][0];
+    assert.equal(first.body.error, "provider_failure");
+    assert.equal(duplicate.body.status, "duplicate");
+    assert.equal(record.state, "ambiguous");
+    assert.equal(record.failureCode, "provider_failure");
+    assert.equal(outboundCalls, 1);
+  } finally {
+    SmsOutboundService.prototype.send = originalSend;
+    restoreEnv();
+  }
+});
+
 test("Phase 2C rejects the Phase 2B controlled-live transport before any provider request", async () => {
   const restoreEnv = setApprovedPhase2cEnv();
   let transportRequests = 0;
   const service = createGhlSmsProviderOutboundService({
+    ...persistenceDependencies(),
     logger: captureLogger().logger,
     async getTenantIdsByLocationId() {
       return ["tenant-phase-2c-approved"];
@@ -759,6 +1201,7 @@ test("Phase 2C logs and results omit full signed identifiers, message content, p
     },
   };
   const service = createGhlSmsProviderOutboundService({
+    ...persistenceDependencies(),
     logger: capture.logger,
     async getTenantIdsByLocationId() {
       return [sensitive.tenant];
