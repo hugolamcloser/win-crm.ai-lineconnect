@@ -22,6 +22,10 @@ import {
   type TenantRecord,
 } from "./repository";
 import type { SmsFailureCode } from "../types/sms";
+import {
+  normalizeTaiwanMobile,
+  type NormalizedTaiwanMobile,
+} from "../utils/taiwanPhone";
 
 export interface GhlSmsProviderOutboundResponse {
   ok: boolean;
@@ -136,23 +140,29 @@ function sanitizedProviderStatus(value: string | undefined): string | undefined 
   return normalized;
 }
 
-function hasCompleteApprovedConfiguration(): boolean {
+function hasCompleteApprovedConfiguration(
+  approvedDestination: NormalizedTaiwanMobile | null,
+): approvedDestination is NormalizedTaiwanMobile {
   return (
     env.GHL_SMS_PHASE_2C_CONFIRMATION === GHL_SMS_PHASE_2C_CONFIRMATION &&
     Boolean(env.GHL_SMS_PHASE_2C_ALLOWED_LOCATION_ID.trim()) &&
     Boolean(env.GHL_SMS_PHASE_2C_ALLOWED_TENANT_ID.trim()) &&
     Boolean(env.GHL_SMS_PHASE_2C_ALLOWED_CONTACT_ID.trim()) &&
-    /^09\d{8}$/.test(env.GHL_SMS_PHASE_2C_ALLOWED_PHONE) &&
+    approvedDestination !== null &&
     Boolean(env.GHL_SMS_PHASE_2C_ALLOWED_MESSAGE.trim()) &&
     Array.from(env.GHL_SMS_PHASE_2C_ALLOWED_MESSAGE).length <= 333
   );
 }
 
-function requestIsApproved(payload: GhlSmsProviderPayload): boolean {
+function requestIsApproved(
+  payload: GhlSmsProviderPayload,
+  requestedDestination: NormalizedTaiwanMobile,
+  approvedDestination: NormalizedTaiwanMobile,
+): boolean {
   return (
     payload.locationId === env.GHL_SMS_PHASE_2C_ALLOWED_LOCATION_ID.trim() &&
     payload.contactId === env.GHL_SMS_PHASE_2C_ALLOWED_CONTACT_ID.trim() &&
-    payload.phone === env.GHL_SMS_PHASE_2C_ALLOWED_PHONE &&
+    requestedDestination.canonicalE164 === approvedDestination.canonicalE164 &&
     payload.message === env.GHL_SMS_PHASE_2C_ALLOWED_MESSAGE
   );
 }
@@ -167,11 +177,20 @@ export function createGhlSmsProviderOutboundService(
       return disabledResult();
     }
 
-    if (!hasCompleteApprovedConfiguration()) {
+    const approvedDestination = normalizeTaiwanMobile(
+      env.GHL_SMS_PHASE_2C_ALLOWED_PHONE,
+    );
+
+    if (!hasCompleteApprovedConfiguration(approvedDestination)) {
       return failureResult(503, "phase_2c_configuration_invalid");
     }
 
-    if (!requestIsApproved(payload)) {
+    const requestedDestination = normalizeTaiwanMobile(payload.phone);
+
+    if (
+      !requestedDestination ||
+      !requestIsApproved(payload, requestedDestination, approvedDestination)
+    ) {
       return failureResult(403, "request_not_approved");
     }
 
@@ -300,7 +319,7 @@ export function createGhlSmsProviderOutboundService(
       tenantId: derivedTenantId,
       locationId: payload.locationId,
       provider: "every8d",
-      destination: payload.phone,
+      destination: requestedDestination.every8dNational,
       message: payload.message,
       reference: "issue-83-phase-2c-mock",
     });

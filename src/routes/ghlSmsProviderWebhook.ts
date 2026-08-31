@@ -4,6 +4,7 @@ import { HttpError } from "../middleware/errors";
 import { verifyGhlWebhookSignature } from "../middleware/ghlWebhookSignature";
 import { processGhlSmsProviderOutbound } from "../services/ghlSmsProviderOutboundService";
 import type { RawBodyRequest } from "../types/http";
+import { normalizeTaiwanMobile } from "../utils/taiwanPhone";
 
 const exactGhlIdentifier = z
   .string()
@@ -12,13 +13,27 @@ const exactGhlIdentifier = z
   .max(128)
   .regex(/^[A-Za-z0-9_-]+$/);
 
+const taiwanMobileDestination = z.string().transform((value, context) => {
+  const normalized = normalizeTaiwanMobile(value);
+
+  if (!normalized) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Invalid Taiwan mobile destination",
+    });
+    return z.NEVER;
+  }
+
+  return normalized.every8dNational;
+});
+
 export const ghlSmsProviderPayloadSchema = z
   .object({
     contactId: exactGhlIdentifier,
     locationId: exactGhlIdentifier,
     messageId: exactGhlIdentifier,
     type: z.literal("SMS"),
-    phone: z.string().regex(/^09\d{8}$/),
+    phone: taiwanMobileDestination,
     message: z
       .string()
       .trim()

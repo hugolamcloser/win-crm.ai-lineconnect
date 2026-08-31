@@ -6,6 +6,7 @@ create table if not exists public.ghl_sms_outbound_operations (
   provider text not null default 'every8d' check (provider = 'every8d'),
   provider_mode text not null default 'mock' check (provider_mode = 'mock'),
   state text not null default 'processing'
+    constraint ghl_sms_outbound_operations_state_value_check
     check (state in ('processing', 'accepted', 'definitive_failed', 'ambiguous')),
   send_started_at timestamptz,
   provider_attempts smallint not null default 0 check (provider_attempts in (0, 1)),
@@ -28,7 +29,7 @@ create table if not exists public.ghl_sms_outbound_operations (
       (send_started_at is null and provider_attempts = 0)
       or (send_started_at is not null and provider_attempts = 1)
     ),
-  constraint ghl_sms_outbound_operations_state_check
+  constraint ghl_sms_outbound_operations_state_consistency_check
     check (
       (state = 'processing' and finalized_at is null and failure_code is null)
       or (
