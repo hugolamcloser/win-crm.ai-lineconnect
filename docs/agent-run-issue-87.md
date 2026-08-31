@@ -49,6 +49,7 @@ The smallest safe implementation is a separate disposable PostgreSQL service-con
 | `npm run build` | Validate production build | Passed | TypeScript production build completed. |
 | `git diff --check` | Validate patch whitespace | Passed | No whitespace errors; only expected Windows line-ending notices. |
 | Draft PR #88 CI run 33360440030 | Execute PostgreSQL 17 migration/concurrency job | Failed before the concurrency step | Earlier migrations applied, then Phase 2D failed with the exact duplicate constraint-name error; `validate` passed and the disposable container was destroyed. |
+| Draft PR #88 CI run 33379787027 | Rerun PostgreSQL 17 migration/concurrency job after correction | Passed | `validate` passed; the complete migration chain, including Phase 2D, applied; the proof reported one winner, one SQLSTATE `23505`, and one durable row; the disposable container was destroyed. |
 
 ## Approaches attempted
 
@@ -91,7 +92,7 @@ The smallest safe implementation is a separate disposable PostgreSQL service-con
 | `npm test` | Passed | 397 passed, 0 failed. |
 | `npm run build` | Passed | TypeScript production build completed. |
 | `git diff --check` | Passed | No whitespace errors; only expected Windows line-ending notices. |
-| PostgreSQL concurrency job | Correction rerun pending | Initial PostgreSQL 17 run exposed the constraint-name collision before the concurrency step. |
+| PostgreSQL concurrency job | Passed | CI run 33379787027 applied the complete chain and reported one winner, one SQLSTATE `23505`, and one durable row. |
 
 ## Budget and stop-rule status
 
@@ -103,9 +104,8 @@ The smallest safe implementation is a separate disposable PostgreSQL service-con
 
 ## Unresolved decisions
 
-- GitHub Actions must rerun the PostgreSQL job after the constraint-name correction to prove that all migrations apply, Claim B is genuinely blocked by unresolved Claim A, exactly one insert succeeds, the loser reports SQLSTATE `23505`, and exactly one durable row remains.
-- No migration was applied to local, staging, production, or remote Supabase during this implementation.
+- No migration was applied to local, staging, production, or remote Supabase during this implementation. Any later non-production or production application requires separate approval.
 
 ## Recommended next action
 
-Push the authorized correction to existing Draft PR #88 and inspect the disposable PostgreSQL 17 rerun. Do not activate controlled-live SMS or apply the Phase 2D migration to Supabase as part of Phase 2E.
+Review Draft PR #88 with its successful disposable PostgreSQL 17 evidence. Do not mark ready, merge, activate controlled-live SMS, or apply the Phase 2D migration to Supabase without separate approval.
