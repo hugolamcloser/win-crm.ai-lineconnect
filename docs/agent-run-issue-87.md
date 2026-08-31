@@ -6,7 +6,7 @@
 - Approved branch: `codex/issue-87-sms-runtime-readiness`
 - Authority level: Level 3 narrow implementation, excluding commit, push, PR creation, deployment, database mutation outside disposable CI, Railway changes, provider credentials/network access, SMS sends, controlled-live activation, or SafeSay testing
 - Started at: 2026-08-21
-- Last updated at: 2026-08-21
+- Last updated at: 2026-08-31
 
 ## Task objective
 
@@ -14,7 +14,7 @@ Add an isolated PostgreSQL 17 GitHub Actions job that applies the complete migra
 
 ## Current hypothesis
 
-The smallest safe implementation is a separate disposable PostgreSQL service-container job and a pure Taiwan-specific normalizer. The signed route can normalize only after Ed25519 verification, and the mock service can compare canonical E.164 identities while passing only national format to the existing provider abstraction.
+The smallest safe implementation is a separate disposable PostgreSQL service-container job and a pure Taiwan-specific normalizer. The signed route can normalize only after Ed25519 verification, and the mock service can compare canonical E.164 identities while passing only national format to the existing provider abstraction. PostgreSQL 17 exposed a constraint-name collision in the previously merged but unapplied Phase 2D migration, so Issue #87 authorized correcting only the two state-related constraint names in the original migration.
 
 ## Files inspected
 
@@ -35,6 +35,8 @@ The smallest safe implementation is a separate disposable PostgreSQL service-con
 | `job.services.<service_id>.id` exposes a service-container ID. | GitHub Actions job-context documentation | Workflow steps can use `docker exec` without exposing a database port or remote connection. |
 | The Phase 2D unique constraint is the actual database concurrency boundary. | Phase 2D migration | The proof uses two overlapping plain inserts and requires SQLSTATE `23505` from the loser. |
 | The route verifies `req.rawBody` before parsing `req.body`. | Signed SMS route | Normalization does not mutate or precede signature verification. |
+| PostgreSQL 17 failed the Phase 2D table creation with `ERROR: check constraint "ghl_sms_outbound_operations_state_check" already exists`. | Draft PR #88 CI run 33360440030 | The unnamed state value-domain check received the same generated name as the explicit state/finalization consistency check. |
+| The Phase 2D migration had never been applied to Supabase. | Issue #87 correction authorization | Correct the original migration rather than add a later workaround migration. |
 
 ## Commands executed and results
 
@@ -46,6 +48,7 @@ The smallest safe implementation is a separate disposable PostgreSQL service-con
 | Git for Windows `bash -n test/postgres/ghlSmsOutboundClaimConcurrency.sh` | Validate shell syntax without requiring PostgreSQL | Passed | The real transaction proof remains a CI-only check. |
 | `npm run build` | Validate production build | Passed | TypeScript production build completed. |
 | `git diff --check` | Validate patch whitespace | Passed | No whitespace errors; only expected Windows line-ending notices. |
+| Draft PR #88 CI run 33360440030 | Execute PostgreSQL 17 migration/concurrency job | Failed before the concurrency step | Earlier migrations applied, then Phase 2D failed with the exact duplicate constraint-name error; `validate` passed and the disposable container was destroyed. |
 
 ## Approaches attempted
 
@@ -54,6 +57,7 @@ The smallest safe implementation is a separate disposable PostgreSQL service-con
 | Dedicated PostgreSQL 17 service-container job | Implemented | Production Supabase and the existing validation job remain isolated from the proof. |
 | Observe Claim A sleeping and Claim B waiting on a transaction ID lock | Implemented | The script requires real overlap before accepting the one-winner result. |
 | Strict two-form Taiwan normalizer | Implemented | National and unformatted E.164 forms share one canonical identity and one national wire form. |
+| Give both Phase 2D state checks explicit unique names | Implemented | The value-domain and state/finalization consistency expressions remain byte-for-byte unchanged. |
 
 ## Rejected approaches and reasons
 
@@ -62,7 +66,7 @@ The smallest safe implementation is a separate disposable PostgreSQL service-con
 | JavaScript simulation of SQLSTATE `23505` | Does not empirically prove PostgreSQL uniqueness under overlap. |
 | Local or production Supabase migration application | Not authorized; CI must be disposable and remote-production-free. |
 | Separator stripping or generic international normalization | Would accept ambiguous or out-of-scope inputs. |
-| Modifying the Phase 2D migration or repository state machine | Neither is required for the approved Phase 2E scope. |
+| Add a later forward migration or alter the repository state machine | The original migration has never been applied and cannot create its table on clean PostgreSQL 17; Issue #87 authorizes correcting its colliding names only. |
 | Controlled-live configuration or transport changes | Explicitly excluded from Phase 2E. |
 
 ## Files changed
@@ -76,6 +80,7 @@ The smallest safe implementation is a separate disposable PostgreSQL service-con
 | `src/services/ghlSmsProviderOutboundService.ts` | Compares canonical allowlist identities and passes only national format to the provider abstraction. | Default-off mock-only SMS path only. |
 | `test/taiwanPhoneNormalization.test.cjs` | Adds focused normalizer acceptance/rejection tests. | Test only. |
 | `test/ghlSmsProviderOutbound.test.cjs` | Adds post-signature normalization, equivalence, invalid no-activity, national wire-form, and zero-fetch evidence. | Test only. |
+| `supabase/migrations/202608190001_ghl_sms_outbound_operations.sql` | Gives the state value-domain and state/finalization consistency checks explicit unique names. | Constraint-name correction only; migration remains unapplied to Supabase. |
 | `docs/agent-run-issue-87.md` | Records sanitized Phase 2E implementation evidence. | None. |
 
 ## Validation summary
@@ -86,21 +91,21 @@ The smallest safe implementation is a separate disposable PostgreSQL service-con
 | `npm test` | Passed | 397 passed, 0 failed. |
 | `npm run build` | Passed | TypeScript production build completed. |
 | `git diff --check` | Passed | No whitespace errors; only expected Windows line-ending notices. |
-| PostgreSQL concurrency job | Not run locally | Requires execution by GitHub Actions against its disposable service container. |
+| PostgreSQL concurrency job | Correction rerun pending | Initial PostgreSQL 17 run exposed the constraint-name collision before the concurrency step. |
 
 ## Budget and stop-rule status
 
 - Active coding tasks: one
-- Implementation correction loops used: zero
+- Implementation correction loops used: one
 - Reviewer correction loops used: zero
 - Repeated errors or failed approaches: none
 - Stop rule triggered: no
 
 ## Unresolved decisions
 
-- GitHub Actions must execute the new PostgreSQL job to prove that the service container starts, all migrations apply, Claim B is genuinely blocked by unresolved Claim A, exactly one insert succeeds, the loser reports SQLSTATE `23505`, and exactly one durable row remains.
+- GitHub Actions must rerun the PostgreSQL job after the constraint-name correction to prove that all migrations apply, Claim B is genuinely blocked by unresolved Claim A, exactly one insert succeeds, the loser reports SQLSTATE `23505`, and exactly one durable row remains.
 - No migration was applied to local, staging, production, or remote Supabase during this implementation.
 
 ## Recommended next action
 
-Review the uncommitted diff for Draft PR readiness, then authorize a Draft PR separately so GitHub Actions can execute the disposable PostgreSQL proof. Do not activate controlled-live SMS or apply the Phase 2D migration to production as part of Phase 2E.
+Push the authorized correction to existing Draft PR #88 and inspect the disposable PostgreSQL 17 rerun. Do not activate controlled-live SMS or apply the Phase 2D migration to Supabase as part of Phase 2E.
