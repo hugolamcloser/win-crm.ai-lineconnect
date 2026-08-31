@@ -43,3 +43,58 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  postgres-concurrency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: wincrm_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d wincrm_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Create synthetic Supabase roles
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: |
+          docker exec -i "$POSTGRES_CONTAINER_ID" \
+            psql -X -v ON_ERROR_STOP=1 -U postgres -d wincrm_test <<'SQL'
+          do $$
+          begin
+            if not exists (select 1 from pg_roles where rolname = 'anon') then
+              create role anon nologin;
+            end if;
+            if not exists (select 1 from pg_roles where rolname = 'authenticated') then
+              create role authenticated nologin;
+            end if;
+          end
+          $$;
+          SQL
+
+      - name: Apply complete migration chain
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: |
+          for migration in supabase/migrations/*.sql; do
+            echo "Applying $migration"
+            docker exec -i "$POSTGRES_CONTAINER_ID" \
+              psql -X -v ON_ERROR_STOP=1 -U postgres -d wincrm_test \
+              < "$migration"
+          done
+
+      - name: Prove durable SMS claim concurrency
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: bash test/postgres/ghlSmsOutboundClaimConcurrency.sh

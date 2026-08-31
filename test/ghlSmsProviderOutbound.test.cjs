@@ -250,6 +250,7 @@ function requestProvider(server, { headers = {}, rawBody } = {}) {
 test("SMS Delivery URL verifies exact raw bytes and rejects missing or invalid X-GHL-Signature before processing", async () => {
   const verified = [];
   let handlerCalls = 0;
+  let handledPayload;
 
   await withProviderServer(
     {
@@ -261,14 +262,15 @@ test("SMS Delivery URL verifies exact raw bytes and rejects missing or invalid X
         });
         return input.ghlSignature === "valid-signature";
       },
-      async handler() {
+      async handler(payload) {
         handlerCalls += 1;
+        handledPayload = payload;
         return mockedResult();
       },
     },
     async (server) => {
       const exactRawBody =
-        '{ "contactId":"contact-phase-2c-approved", "locationId":"location-phase-2c-approved", "messageId":"message-phase-2c-approved", "type":"SMS", "phone":"0912345678", "message":"Phase 2C mock-only SMS fixture" }';
+        '{ "contactId":"contact-phase-2c-approved", "locationId":"location-phase-2c-approved", "messageId":"message-phase-2c-approved", "type":"SMS", "phone":"+886912345678", "message":"Phase 2C mock-only SMS fixture" }';
       const missing = await requestProvider(server, { rawBody: exactRawBody });
       const invalid = await requestProvider(server, {
         headers: { "x-ghl-signature": "invalid-signature" },
@@ -287,6 +289,7 @@ test("SMS Delivery URL verifies exact raw bytes and rejects missing or invalid X
       assert.equal(verified[2].rawBody, exactRawBody);
       assert.equal(verified[2].ghlSignature, "valid-signature");
       assert.equal(verified[2].legacySignature, undefined);
+      assert.equal(handledPayload.phone, "0912345678");
     },
   );
 });
@@ -311,6 +314,13 @@ test("SMS Delivery URL accepts only the documented Phase 2C SMS payload", async 
         ),
       });
       assert.equal(accepted.status, 200);
+      const acceptedE164 = await requestProvider(server, {
+        headers,
+        rawBody: JSON.stringify(
+          providerPayload({ phone: "+886912345678" }),
+        ),
+      });
+      assert.equal(acceptedE164.status, 200);
 
       const invalidPayloads = [
         providerPayload({ type: "Custom" }),
@@ -329,6 +339,12 @@ test("SMS Delivery URL accepts only the documented Phase 2C SMS payload", async 
         providerPayload({ password: "caller-password" }),
         providerPayload({ bearerToken: "caller-token" }),
         providerPayload({ unexpectedSmsControl: true }),
+        providerPayload({ phone: "886912345678" }),
+        providerPayload({ phone: "+886-912-345-678" }),
+        providerPayload({ phone: "0912 345 678" }),
+        providerPayload({ phone: "+12025550123" }),
+        providerPayload({ phone: "0812345678" }),
+        providerPayload({ phone: "091234567" }),
       ];
 
       for (const payload of invalidPayloads) {
@@ -358,14 +374,71 @@ test("SMS Delivery URL accepts only the documented Phase 2C SMS payload", async 
         assert.equal(response.body.error, "validation_error", requiredField);
       }
 
-      assert.equal(handled.length, 1);
+      assert.equal(handled.length, 2);
       assert.deepEqual(handled[0], {
         ...providerPayload(),
         userId: "user-optional",
         attachments: [],
       });
+      assert.deepEqual(handled[1], providerPayload());
     },
   );
+});
+
+test("invalid Taiwan destinations are rejected before tenant, claim, or provider activity", async () => {
+  const restoreEnv = setApprovedPhase2cEnv();
+  const calls = { tenant: 0, claim: 0, provider: 0 };
+  const service = createGhlSmsProviderOutboundService({
+    ...persistenceDependencies({
+      async claimOperation() {
+        calls.claim += 1;
+        throw new Error("claim must not run");
+      },
+    }),
+    logger: captureLogger().logger,
+    async getTenantIdsByLocationId() {
+      calls.tenant += 1;
+      throw new Error("tenant lookup must not run");
+    },
+    async getTenantById() {
+      calls.tenant += 1;
+      throw new Error("tenant lookup must not run");
+    },
+    createMockTransport() {
+      calls.provider += 1;
+      throw new Error("provider must not run");
+    },
+  });
+
+  try {
+    await withProviderServer(
+      {
+        verifySignature: () => true,
+        handler: service,
+      },
+      async (server) => {
+        for (const phone of [
+          "886912345678",
+          "+886-912-345-678",
+          "0912 345 678",
+          "+12025550123",
+          "0812345678",
+          "091234567",
+        ]) {
+          const response = await requestProvider(server, {
+            headers: { "x-ghl-signature": "valid-signature" },
+            rawBody: JSON.stringify(providerPayload({ phone })),
+          });
+          assert.equal(response.status, 400, phone);
+          assert.equal(response.body.error, "validation_error", phone);
+        }
+      },
+    );
+
+    assert.deepEqual(calls, { tenant: 0, claim: 0, provider: 0 });
+  } finally {
+    restoreEnv();
+  }
 });
 
 test("SMS Delivery URL requires rawBody and cannot be authenticated by legacy or Workflow Action headers", async () => {
@@ -630,7 +703,7 @@ test("Phase 2C derives exactly one tenant from signed locationId and rejects eve
   }
 });
 
-test("approved Phase 2C request invokes the mock EVERY8D provider exactly once without fetch", async () => {
+test("approved E.164 request reaches only the mock EVERY8D provider in national wire form without fetch", async () => {
   const restoreEnv = setApprovedPhase2cEnv();
   const capture = captureLogger();
   const transport = createEvery8dPhase2cMockTransport();
@@ -660,7 +733,9 @@ test("approved Phase 2C request invokes the mock EVERY8D provider exactly once w
   });
 
   try {
-    const result = await service(providerPayload());
+    const result = await service(
+      providerPayload({ phone: "+886912345678" }),
+    );
 
     assert.deepEqual(result, mockedResult());
     assert.equal(mockTransportCalls, 1);
@@ -677,6 +752,13 @@ test("approved Phase 2C request invokes the mock EVERY8D provider exactly once w
         request.url.endsWith("/SendSMS.ashx"),
       ).length,
       1,
+    );
+    const sendRequest = transport.requests.find((request) =>
+      request.url.endsWith("/SendSMS.ashx"),
+    );
+    assert.equal(
+      new URLSearchParams(sendRequest.body).get("DEST"),
+      "0912345678",
     );
   } finally {
     global.fetch = originalFetch;
