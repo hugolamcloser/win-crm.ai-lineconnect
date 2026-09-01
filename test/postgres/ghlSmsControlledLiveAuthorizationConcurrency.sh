@@ -414,12 +414,12 @@ race_summary="$(psql_query -Atc "
     (select (consumed_by_operation_id in ('$operation_a_id', '$operation_b_id'))::int
       from public.ghl_sms_controlled_live_authorizations
       where id = '$authorization_id'),
-    (select count(*) from public.ghl_sms_outbound_operations operation
-      join public.ghl_sms_controlled_live_authorizations authorization
-        on authorization.consumed_by_operation_id = operation.id
-      where authorization.id = '$authorization_id'
-        and operation.send_started_at is not null
-        and operation.provider_attempts = 1);
+    (select count(*) from public.ghl_sms_outbound_operations outbound_operation
+      join public.ghl_sms_controlled_live_authorizations live_authorization
+        on live_authorization.consumed_by_operation_id = outbound_operation.id
+      where live_authorization.id = '$authorization_id'
+        and outbound_operation.send_started_at is not null
+        and outbound_operation.provider_attempts = 1);
 ")"
 
 if [[ "$race_summary" != "1|1|1|1|1" ]]; then
