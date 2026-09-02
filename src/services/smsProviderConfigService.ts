@@ -16,6 +16,7 @@ export interface Every8dSmsProviderConfiguration {
   tenantId: string;
   locationId: string;
   provider: "every8d";
+  providerMode?: "mock" | "controlled_live";
   enabled: boolean;
   credentials: Every8dSmsProviderCredentials;
 }

@@ -276,3 +276,230 @@ test("repository rejects non-normalized provider status before persistence", asy
     /must be normalized/,
   );
 });
+
+test("forward migrations define controlled-live mode and the service-only atomic authorization boundary", () => {
+  const modeMigration = fs.readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "supabase",
+      "migrations",
+      "202609010001_ghl_sms_controlled_live_mode.sql",
+    ),
+    "utf8",
+  );
+  const authorizationMigration = fs.readFileSync(
+    path.join(
+      __dirname,
+      "..",
+      "supabase",
+      "migrations",
+      "202609010002_ghl_sms_controlled_live_authorizations.sql",
+    ),
+    "utf8",
+  );
+
+  assert.match(
+    modeMigration,
+    /provider_mode in \('mock', 'controlled_live'\)/,
+  );
+  assert.doesNotMatch(
+    modeMigration,
+    /provider_mode[^;]*(?:'live'|'production'|'default')/,
+  );
+  assert.match(
+    modeMigration,
+    /state = 'definitive_failed'[\s\S]*provider_attempts = 0[\s\S]*send_started_at is null/,
+  );
+  assert.match(
+    modeMigration,
+    /state = 'definitive_failed'[\s\S]*provider_attempts = 1[\s\S]*send_started_at is not null/,
+  );
+  assert.match(
+    authorizationMigration,
+    /create table public\.ghl_sms_controlled_live_authorizations/,
+  );
+  assert.match(
+    authorizationMigration,
+    /destination_fingerprint text not null[\s\S]*message_fingerprint text not null/,
+  );
+  assert.match(
+    authorizationMigration,
+    /unique[\s\S]*consumed_by_operation_id|consumed_by_operation_id[\s\S]*unique/,
+  );
+  assert.doesNotMatch(
+    authorizationMigration,
+    /\b(destination|phone|message|sms_body)\s+text\b/i,
+  );
+  assert.match(
+    authorizationMigration,
+    /create function public\.consume_ghl_sms_controlled_live_authorization_v1/,
+  );
+  assert.match(authorizationMigration, /security definer/);
+  assert.match(
+    authorizationMigration,
+    /set search_path = pg_catalog, public/,
+  );
+  assert.match(authorizationMigration, /enable row level security/);
+  assert.match(
+    authorizationMigration,
+    /revoke all on table public\.ghl_sms_controlled_live_authorizations from public/,
+  );
+  assert.match(
+    authorizationMigration,
+    /revoke all on table public\.ghl_sms_controlled_live_authorizations from anon, authenticated/,
+  );
+  assert.match(
+    authorizationMigration,
+    /revoke all on function public\.protect_ghl_sms_controlled_live_authorization_v1\(\)[\s\S]*from public, anon, authenticated/,
+  );
+  assert.match(
+    authorizationMigration,
+    /grant execute on function public\.consume_ghl_sms_controlled_live_authorization_v1[\s\S]*to service_role/,
+  );
+});
+
+test("controlled-live claim and authorization consumption use server-fixed mode and exact RPC scope", async () => {
+  const inserts = [];
+  const rpcCalls = [];
+  supabaseConfig.getSupabase = () => ({
+    from(table) {
+      assert.equal(table, "ghl_sms_outbound_operations");
+      return {
+        insert(payload) {
+          inserts.push(payload);
+          return {
+            select(columns) {
+              assert.equal(columns, "id");
+              return {
+                single: async () => ({
+                  data: {
+                    id: "20000000-0000-4000-8000-000000000090",
+                  },
+                  error: null,
+                }),
+              };
+            },
+          };
+        },
+      };
+    },
+    async rpc(name, parameters) {
+      rpcCalls.push({ name, parameters });
+      return { data: true, error: null };
+    },
+  });
+
+  const claim = await repository.claimGhlSmsControlledLiveOutboundOperation({
+    tenantId: "00000000-0000-4000-8000-000000000090",
+    locationId: "location-phase-2f-approved",
+    ghlMessageId: "message-phase-2f-a",
+  });
+  const consumed = await repository.consumeGhlSmsControlledLiveAuthorization({
+    authorizationId: "10000000-0000-4000-8000-000000000090",
+    operationId: claim.operationId,
+    tenantId: "00000000-0000-4000-8000-000000000090",
+    locationId: "location-phase-2f-approved",
+    contactId: "contact-phase-2f-approved",
+    destinationFingerprint: "a".repeat(64),
+    messageFingerprint: "b".repeat(64),
+  });
+
+  assert.equal(claim.claimed, true);
+  assert.equal(consumed, true);
+  assert.deepEqual(inserts, [
+    {
+      tenant_id: "00000000-0000-4000-8000-000000000090",
+      location_id: "location-phase-2f-approved",
+      ghl_message_id: "message-phase-2f-a",
+      provider: "every8d",
+      provider_mode: "controlled_live",
+      state: "processing",
+      provider_attempts: 0,
+    },
+  ]);
+  assert.deepEqual(rpcCalls, [
+    {
+      name: "consume_ghl_sms_controlled_live_authorization_v1",
+      parameters: {
+        p_authorization_id: "10000000-0000-4000-8000-000000000090",
+        p_operation_id: "20000000-0000-4000-8000-000000000090",
+        p_tenant_id: "00000000-0000-4000-8000-000000000090",
+        p_location_id: "location-phase-2f-approved",
+        p_contact_id: "contact-phase-2f-approved",
+        p_provider: "every8d",
+        p_provider_mode: "controlled_live",
+        p_destination_fingerprint: "a".repeat(64),
+        p_message_fingerprint: "b".repeat(64),
+      },
+    },
+  ]);
+  assert.doesNotMatch(
+    JSON.stringify(rpcCalls),
+    /0912345678|\+886912345678|Phase 2F controlled-live synthetic fixture/,
+  );
+});
+
+test("controlled-live finalization distinguishes pre-provider and post-send compare-and-set states", async () => {
+  const operations = [];
+  supabaseConfig.getSupabase = () => ({
+    from(table) {
+      assert.equal(table, "ghl_sms_outbound_operations");
+      const operation = { update: null, filters: [] };
+      operations.push(operation);
+      const chain = {
+        update(payload) {
+          operation.update = payload;
+          return chain;
+        },
+        eq(column, value) {
+          operation.filters.push(["eq", column, value]);
+          return chain;
+        },
+        is(column, value) {
+          operation.filters.push(["is", column, value]);
+          return chain;
+        },
+        not(column, operator, value) {
+          operation.filters.push(["not", column, operator, value]);
+          return chain;
+        },
+        select() {
+          return chain;
+        },
+        maybeSingle: async () => ({ data: { id: "operation-exact" }, error: null }),
+      };
+      return chain;
+    },
+  });
+
+  assert.equal(
+    await repository.finalizeGhlSmsControlledLiveOutboundOperationBeforeSend({
+      ...operationIdentity(),
+      state: "definitive_failed",
+      failureCode: "authorization_unavailable",
+    }),
+    true,
+  );
+  assert.equal(
+    await repository.finalizeGhlSmsControlledLiveOutboundOperation({
+      ...operationIdentity(),
+      state: "ambiguous",
+      failureCode: "network_failure",
+    }),
+    true,
+  );
+
+  assert.deepEqual(operations[0].filters.slice(-4), [
+    ["eq", "provider_mode", "controlled_live"],
+    ["eq", "state", "processing"],
+    ["is", "send_started_at", null],
+    ["eq", "provider_attempts", 0],
+  ]);
+  assert.deepEqual(operations[1].filters.slice(-4), [
+    ["eq", "provider_mode", "controlled_live"],
+    ["eq", "state", "processing"],
+    ["not", "send_started_at", "is", null],
+    ["eq", "provider_attempts", 1],
+  ]);
+});

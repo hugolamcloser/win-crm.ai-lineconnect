@@ -168,6 +168,22 @@ export type FinalizeGhlSmsOutboundOperationInput =
     providerBidSource?: "provider" | "batch_id";
   };
 
+export type ConsumeGhlSmsControlledLiveAuthorizationInput = {
+  authorizationId: string;
+  operationId: string;
+  tenantId: string;
+  locationId: string;
+  contactId: string;
+  destinationFingerprint: string;
+  messageFingerprint: string;
+};
+
+export type FinalizeGhlSmsControlledLiveOperationBeforeSendInput =
+  GhlSmsOutboundOperationIdentity & {
+    state: "definitive_failed";
+    failureCode: string;
+  };
+
 export type GhlOAuthTokenRecord = {
   id: string;
   tenant_id: string | null;
@@ -1420,6 +1436,98 @@ export async function claimGhlSmsOutboundOperation(
   return { claimed: true, operationId };
 }
 
+export async function claimGhlSmsControlledLiveOutboundOperation(
+  input: ClaimGhlSmsOutboundOperationInput,
+): Promise<GhlSmsOutboundOperationClaimResult> {
+  const identity = normalizeGhlSmsOutboundOperationIdentity(input);
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("ghl_sms_outbound_operations")
+    .insert({
+      tenant_id: identity.tenantId,
+      location_id: identity.locationId,
+      ghl_message_id: identity.ghlMessageId,
+      provider: "every8d",
+      provider_mode: "controlled_live",
+      state: "processing",
+      provider_attempts: 0,
+    })
+    .select("id")
+    .single();
+
+  if (error?.code === "23505") {
+    return { claimed: false };
+  }
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  const operationId =
+    isRecord(data) && typeof data.id === "string" ? data.id : undefined;
+
+  if (!operationId) {
+    throw new Error(
+      "Controlled-live outbound SMS operation claim did not return an operation ID",
+    );
+  }
+
+  return { claimed: true, operationId };
+}
+
+export async function consumeGhlSmsControlledLiveAuthorization(
+  input: ConsumeGhlSmsControlledLiveAuthorizationInput,
+): Promise<boolean> {
+  const operationId = input.operationId.trim();
+  const tenantId = input.tenantId.trim();
+  const locationId = input.locationId.trim();
+  const authorizationId = input.authorizationId.trim();
+  const contactId = input.contactId.trim();
+  const destinationFingerprint = input.destinationFingerprint.trim();
+  const messageFingerprint = input.messageFingerprint.trim();
+
+  if (
+    !authorizationId ||
+    !operationId ||
+    !tenantId ||
+    !locationId ||
+    !contactId
+  ) {
+    throw new Error(
+      "Exact authorization, operation, tenant, location, and contact IDs are required",
+    );
+  }
+
+  if (
+    !/^[0-9a-f]{64}$/.test(destinationFingerprint) ||
+    !/^[0-9a-f]{64}$/.test(messageFingerprint)
+  ) {
+    throw new Error("Controlled-live authorization fingerprints are invalid");
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase.rpc(
+    "consume_ghl_sms_controlled_live_authorization_v1",
+    {
+      p_authorization_id: authorizationId,
+      p_operation_id: operationId,
+      p_tenant_id: tenantId,
+      p_location_id: locationId,
+      p_contact_id: contactId,
+      p_provider: "every8d",
+      p_provider_mode: "controlled_live",
+      p_destination_fingerprint: destinationFingerprint,
+      p_message_fingerprint: messageFingerprint,
+    },
+  );
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return data === true;
+}
+
 export async function markGhlSmsOutboundOperationSendStarted(
   input: GhlSmsOutboundOperationIdentity,
 ): Promise<boolean> {
@@ -1486,6 +1594,93 @@ export async function finalizeGhlSmsOutboundOperation(
     .eq("provider_mode", "mock")
     .eq("state", "processing")
     .not("send_started_at", "is", null)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return Boolean(data);
+}
+
+export async function finalizeGhlSmsControlledLiveOutboundOperationBeforeSend(
+  input: FinalizeGhlSmsControlledLiveOperationBeforeSendInput,
+): Promise<boolean> {
+  const identity = normalizeGhlSmsOutboundOperationIdentity(input);
+  const failureCode = optionalNormalizedCode(input.failureCode);
+
+  if (!failureCode) {
+    throw new Error(
+      "Controlled-live pre-send finalization requires a failure code",
+    );
+  }
+
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("ghl_sms_outbound_operations")
+    .update({
+      state: "definitive_failed",
+      failure_code: failureCode,
+      finalized_at: new Date().toISOString(),
+    })
+    .eq("id", identity.operationId)
+    .eq("tenant_id", identity.tenantId)
+    .eq("location_id", identity.locationId)
+    .eq("ghl_message_id", identity.ghlMessageId)
+    .eq("provider", "every8d")
+    .eq("provider_mode", "controlled_live")
+    .eq("state", "processing")
+    .is("send_started_at", null)
+    .eq("provider_attempts", 0)
+    .select("id")
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(error.message);
+  }
+
+  return Boolean(data);
+}
+
+export async function finalizeGhlSmsControlledLiveOutboundOperation(
+  input: FinalizeGhlSmsOutboundOperationInput,
+): Promise<boolean> {
+  const identity = normalizeGhlSmsOutboundOperationIdentity(input);
+
+  if (input.state === "accepted" && input.failureCode) {
+    throw new Error("Accepted outbound SMS operations cannot have a failure code");
+  }
+
+  if (input.state !== "accepted" && !input.failureCode?.trim()) {
+    throw new Error("Failed outbound SMS operations require a normalized failure code");
+  }
+
+  const updatePayload = {
+    state: input.state,
+    provider_http_status: input.providerHttpStatus ?? null,
+    provider_status: optionalNormalizedCode(input.providerStatus),
+    provider_sent_count: input.providerSentCount ?? null,
+    provider_unsent_count: input.providerUnsentCount ?? null,
+    failure_code: optionalNormalizedCode(input.failureCode),
+    provider_batch_id: optionalTrimmedValue(input.providerBatchId),
+    provider_bid: optionalTrimmedValue(input.providerBid),
+    provider_bid_source: input.providerBidSource ?? null,
+    finalized_at: new Date().toISOString(),
+  };
+  const supabase = getSupabase();
+  const { data, error } = await supabase
+    .from("ghl_sms_outbound_operations")
+    .update(updatePayload)
+    .eq("id", identity.operationId)
+    .eq("tenant_id", identity.tenantId)
+    .eq("location_id", identity.locationId)
+    .eq("ghl_message_id", identity.ghlMessageId)
+    .eq("provider", "every8d")
+    .eq("provider_mode", "controlled_live")
+    .eq("state", "processing")
+    .not("send_started_at", "is", null)
+    .eq("provider_attempts", 1)
     .select("id")
     .maybeSingle();
 

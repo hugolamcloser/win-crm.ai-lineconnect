@@ -8,6 +8,7 @@ import {
 import type { SmsProviderFactory } from "../services/smsOutboundService";
 import type {
   Every8dSmsProviderConfiguration,
+  Every8dSmsProviderCredentials,
   SmsProviderConfiguration,
 } from "../services/smsProviderConfigService";
 import {
@@ -200,4 +201,69 @@ export class Every8dPhase2bControlledLiveSmsProviderFactory
 
     return new Every8dSmsProvider(configuration, this.transport, this.logger);
   }
+}
+
+export interface Every8dPhase2fControlledLiveSmsProviderFactoryOptions {
+  transport: Every8dPhase2bControlledLiveTransport;
+  logger: Every8dLogger;
+  tenantId: string;
+  locationId: string;
+  credentials: Every8dSmsProviderCredentials;
+}
+
+export class Every8dPhase2fControlledLiveSmsProviderFactory
+  implements SmsProviderFactory
+{
+  private readonly delegate: Every8dPhase2bControlledLiveSmsProviderFactory;
+  private readonly tenantId: string;
+  private readonly locationId: string;
+  private readonly credentials: Every8dSmsProviderCredentials;
+
+  constructor(options: Every8dPhase2fControlledLiveSmsProviderFactoryOptions) {
+    this.tenantId = options.tenantId.trim();
+    this.locationId = options.locationId.trim();
+
+    if (!this.tenantId || !this.locationId) {
+      throw new Error(
+        "Phase 2F EVERY8D adapter requires exact tenant and location bindings",
+      );
+    }
+
+    this.credentials = { ...options.credentials };
+    this.delegate = new Every8dPhase2bControlledLiveSmsProviderFactory({
+      transport: options.transport,
+      logger: options.logger,
+    });
+  }
+
+  create(configuration: SmsProviderConfiguration): SmsProvider {
+    if (
+      configuration.configurationId !== "phase-2f-controlled-live" ||
+      configuration.provider !== "every8d" ||
+      configuration.providerMode !== "controlled_live" ||
+      configuration.tenantId !== this.tenantId ||
+      configuration.locationId !== this.locationId
+    ) {
+      throw new Error(
+        "Phase 2F EVERY8D adapter rejected a non-exact controlled-live binding",
+      );
+    }
+
+    return this.delegate.create({
+      ...configuration,
+      credentials: { ...this.credentials },
+    });
+  }
+}
+
+export function createEvery8dPhase2fControlledLiveSmsProviderFactory(
+  options: Omit<
+    Every8dPhase2fControlledLiveSmsProviderFactoryOptions,
+    "transport"
+  >,
+): Every8dPhase2fControlledLiveSmsProviderFactory {
+  return new Every8dPhase2fControlledLiveSmsProviderFactory({
+    ...options,
+    transport: createEvery8dPhase2bControlledLiveTransport(),
+  });
 }
