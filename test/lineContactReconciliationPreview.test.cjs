@@ -881,10 +881,12 @@ test("unclassified non-empty standard data is counted and fails closed without e
   assert.doesNotMatch(JSON.stringify(result), new RegExp(`${unknownFieldName}|${unknownValue}`));
 });
 
-test("master-only protected standard data is safe because the intended master retains it", async () => {
+test("master-only inbound DND settings are safe because the intended master retains them", async () => {
   const harness = createHarness({
     master: contact(currentContactId, {
-      protectedOrUnsupportedStandardFields: { source: "LINE Official Account" }
+      protectedOrUnsupportedStandardFields: {
+        inboundDndSettings: { all: { status: "active" } }
+      }
     })
   });
   const result = await harness.service(baseRequest);
@@ -892,6 +894,47 @@ test("master-only protected standard data is safe because the intended master re
   assert.equal(result.decision, "AUTO_SIMPLE");
   assert.deepEqual(result.transferInventory.protectedOrUnsupportedStandardFields, {
     masterOnly: 1, candidateOnly: 0, equal: 0, conflicting: 0
+  });
+});
+
+test("candidate-only inbound DND settings remain a protected blocker", async () => {
+  const harness = createHarness({
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      protectedOrUnsupportedStandardFields: {
+        inboundDndSettings: { all: { status: "active" } }
+      }
+    })
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(result.reasonCodes, ["CANDIDATE_ONLY_PROTECTED_STANDARD_FIELD"]);
+  assert.deepEqual(result.transferInventory.protectedOrUnsupportedStandardFields, {
+    masterOnly: 0, candidateOnly: 1, equal: 0, conflicting: 0
+  });
+});
+
+test("conflicting inbound DND settings remain a protected blocker", async () => {
+  const harness = createHarness({
+    master: contact(currentContactId, {
+      protectedOrUnsupportedStandardFields: {
+        inboundDndSettings: { all: { status: "active" } }
+      }
+    }),
+    candidate: contact(candidateContactId, {
+      email: "person@example.com",
+      protectedOrUnsupportedStandardFields: {
+        inboundDndSettings: { all: { status: "inactive" } }
+      }
+    })
+  });
+  const result = await harness.service(baseRequest);
+
+  assert.equal(result.decision, "MANUAL_COMPLEX");
+  assert.deepEqual(result.reasonCodes, ["CONFLICTING_PROTECTED_STANDARD_FIELD"]);
+  assert.deepEqual(result.transferInventory.protectedOrUnsupportedStandardFields, {
+    masterOnly: 0, candidateOnly: 0, equal: 0, conflicting: 1
   });
 });
 

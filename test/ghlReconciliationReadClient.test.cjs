@@ -488,6 +488,7 @@ test("standard contact fields are explicitly classified without treating metadat
         email: "person@example.com",
         updatedAt: "2026-01-01T00:00:00.000Z",
         attributionSource: { source: "metadata" },
+        inboundDndSettings: { all: { status: "active" } },
         links: [{ rel: "self" }],
         source: "protected-source",
         futureBusinessValue: "unclassified-value",
@@ -503,7 +504,11 @@ test("standard contact fields are explicitly classified without treating metadat
     firstName: "Transferable",
     email: "person@example.com"
   });
-  assert.deepEqual(Object.keys(contact.protectedOrUnsupportedStandardFields).sort(), ["attributionSource", "source"]);
+  assert.deepEqual(Object.keys(contact.protectedOrUnsupportedStandardFields).sort(), [
+    "attributionSource",
+    "inboundDndSettings",
+    "source"
+  ]);
   assert.equal(contact.unclassifiedStandardFieldCount, 1);
   assert.equal(JSON.stringify(contact.standardFields).includes("updatedAt"), false);
   assert.equal(JSON.stringify(contact.standardFields).includes("attributionSource"), false);
@@ -517,6 +522,7 @@ test("valuable relationship and attribution fields are protected while true syst
     "followersIds",
     "attributions",
     "attributionSource",
+    "inboundDndSettings",
     "lastAttributionSource",
     "businessId"
   ]) {

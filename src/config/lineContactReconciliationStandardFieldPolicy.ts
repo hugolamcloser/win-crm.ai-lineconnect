@@ -45,6 +45,7 @@ const protectedOrUnsupportedBusinessFields = new Set([
   "source",
   "dnd",
   "dndsettings",
+  "inbounddndsettings",
   "additionalemails",
   "additionalphones",
   "timezone",
