@@ -40,6 +40,24 @@ type PreviewDependencies = {
   now: () => number;
   overallDeadlineMs: number;
   getPreviewKeySecret: () => string;
+  captureAutoSimpleContext?: (context: LineContactReconciliationAutoSimpleContext) => void;
+};
+
+export type LineContactReconciliationAutoSimpleContext = {
+  tenantId: string;
+  locationId: string;
+  currentContactId: string;
+  lineUserId: string;
+  mappedProfile: ExactLineProfileCountResult["rows"][number];
+  master: GhlReconciliationContact;
+  candidate: GhlReconciliationContact;
+  fieldDefinitions: CustomFieldDefinitions;
+  configuredLineUserFieldId?: string;
+  identity: {
+    email?: string;
+    phone?: string;
+  };
+  response: LineContactReconciliationPreviewResponse;
 };
 
 type TransferInventory = LineContactReconciliationPreviewResponse["transferInventory"];
@@ -1253,7 +1271,7 @@ export function createLineContactReconciliationPreviewService(
           }));
         }
 
-        return auditResult(createResponse({
+        const autoSimpleResponse = createResponse({
           ...responseBase,
           decision: "AUTO_SIMPLE",
           reasonCodes: ["READ_ONLY_PREVIEW_CLEAR"],
@@ -1266,7 +1284,23 @@ export function createLineContactReconciliationPreviewService(
           masterLineIdentityTagState,
           candidateLineIdentityTagState,
           transferInventory
-        }));
+        });
+
+        dependencies.captureAutoSimpleContext?.({
+          tenantId,
+          locationId,
+          currentContactId,
+          lineUserId,
+          mappedProfile,
+          master,
+          candidate,
+          fieldDefinitions,
+          configuredLineUserFieldId: env.GHL_LINE_USER_ID_FIELD_ID || undefined,
+          identity: { email, phone },
+          response: autoSimpleResponse
+        });
+
+        return auditResult(autoSimpleResponse);
       } catch {
         return auditResult(createResponse({
           ...responseBase,

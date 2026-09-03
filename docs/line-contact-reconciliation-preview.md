@@ -1,4 +1,4 @@
-# LINE contact reconciliation preview (PR1)
+# LINE contact reconciliation Preview and Apply dry-run foundation
 
 This endpoint classifies a possible LINE/contact reconciliation. It is read-only for business, contact, mapping, conversation, provider, workflow, and LINE data. It does not merge, create, update, or delete contacts; alter Supabase mappings; create conversation messages; invoke workflow actions or provider callbacks; or send LINE messages. Normal OAuth lifecycle maintenance may update only the exact location's `ghl_oauth_tokens` row when its access token must be refreshed.
 
@@ -101,8 +101,49 @@ Preview acquires OAuth only after exact tenant and location resolution. A valid 
 
 Transfer inventory is classification-only. It returns counts for master-only, candidate-only, equal, and conflicting transferable standard fields, protected or unsupported standard fields, and custom fields, plus candidate-only non-identity tags and an unclassified-standard-field count. It never returns or proposes field names, values, IDs, tags, Email, Phone, LINE IDs, or contact IDs and performs no mutation.
 
+## Apply dry-run foundation
+
+Phase 4A adds a business-nonmutating dry-run foundation. It does not add an Apply writer, identity handoff, tag mutation, contact update, contact delete, merge, provider/workflow invocation, or LINE send.
+
+A trusted server-side caller first invokes `prepareLineContactReconciliationDryRunAuthorization`. Preparation runs the complete Preview, requires `AUTO_SIMPLE`, captures the backend-derived candidate, builds canonical semantic fingerprints, and inserts one `PLANNED` operation. No public authorization-issuing route is exposed. The returned random authorization token is available only to that trusted caller; the database stores only its domain-separated HMAC.
+
+The five-minute authorization is bound to the exact tenant, location, mapped master, derived candidate, supplied identity fingerprint, Preview-key fingerprint, immutable LINE-identity fingerprint, and initial semantic fingerprint. Raw Email, Phone, LINE user IDs, OAuth tokens, and HighLevel payloads are not stored. The existing Preview key remains unchanged and is not treated as sufficient authorization by itself.
+
+`POST /internal/line-contact-reconcile/apply/dry-run` uses the existing shared-secret middleware and accepts:
+
+```json
+{
+  "authorizationId": "server-planned UUID",
+  "authorizationToken": "one-time opaque token",
+  "previewKey": "Preview key",
+  "request": {
+    "locationId": "required",
+    "currentContactId": "required mapped master",
+    "source": "line",
+    "identity": {
+      "email": "optional",
+      "phone": "optional E.164"
+    }
+  }
+}
+```
+
+The route rejects caller-supplied tenant, LINE-user, or candidate IDs. A partial unique index prevents a second active authorization for the same unordered pair. An atomic PostgreSQL claim consumes the authorization once and inserts two per-contact lock rows in sorted contact-ID order. The unique tenant/location/contact lock key prevents same-pair, overlapping-pair, and reversed-pair operations from proceeding concurrently. Expired authorization and abandoned locks are never stolen automatically.
+
+While both locks are held, the service reruns the complete existing Preview in-process. It requires the same tenant/location/master/candidate, `AUTO_SIMPLE`, one distinct candidate, exact master mapping, zero candidate LINE mappings, all eight risk reads `CLEAR`, and no protected or unclassified blocker. A different candidate or changed decision fails safely.
+
+Semantic fingerprints are HMACs over canonical, policy-aware state: the exact mapping relationship; normalized transferable and protected fields; custom fields sorted by stable ID; normalized ordinary tags; LINE-identity evidence; candidate identity ownership; and relevant custom-field definitions. Full raw HighLevel JSON, transport metadata, generated metadata, payload ordering, and timestamps are not hashed as authoritative state.
+
+The dry-run transfer plan returns counts and actions only. Candidate-only values may be planned only for an empty master field. Equal and master-only values are no-ops. Different non-empty Email/Phone, conflicting transferable values, candidate-only/conflicting protected values, and unclassified data block the plan. LINE identity fields and `line:<user>` tags are excluded; temporary AI fields are ignored; `attributionSource` and `inboundDndSettings` remain protected.
+
+The only Phase 4A persistence is the isolated `contact_reconciliation_operations` audit row and transient `contact_reconciliation_locks` rows. Terminal dry-run finalization releases the locks but retains immutable sanitized operation evidence. States are limited to `PLANNED`, `LOCKED`, `REVALIDATED`, `DRY_RUN_READY`, `FAILED_SAFE`, and `EXPIRED`.
+
 ## Transport boundary and rollback
 
 The dedicated client permits only its declared GET endpoints and `POST /contacts/search`. It rejects every other POST and all PUT, PATCH, and DELETE requests before dispatch.
 
-Rollback of OAuth refresh support is a code revert restoring fail-closed behavior for expired tokens. There is no migration or stored Preview state to reverse. Previously refreshed OAuth credentials remain valid; no contact, mapping, conversation, provider, workflow, or LINE data requires rollback.
+Phase 4A does not introduce a reconciliation write transport. The dry-run depends only on the existing read-only Preview evaluator and its GET/`POST /contacts/search` allowlist.
+
+Rollback of OAuth refresh support is a code revert restoring fail-closed behavior for expired tokens. Previously refreshed OAuth credentials remain valid; no contact, mapping, conversation, provider, workflow, or LINE data requires rollback.
+
+Phase 4A rollback disables the dry-run route and trusted authorization helper first. The forward-only reconciliation tables and immutable audit rows remain in place until a separately reviewed cleanup migration is safe; they do not alter `line_profiles` or any business record. The Phase 4A migration is not applied to production as part of this PR.

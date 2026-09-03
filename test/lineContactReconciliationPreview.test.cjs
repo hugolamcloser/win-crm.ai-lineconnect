@@ -121,7 +121,8 @@ function createHarness(options = {}) {
         return session;
       }
     },
-    getPreviewKeySecret: () => options.previewKeySecret ?? "preview-test-shared-secret"
+    getPreviewKeySecret: () => options.previewKeySecret ?? "preview-test-shared-secret",
+    captureAutoSimpleContext: options.captureAutoSimpleContext
   });
 
   return { service, calls };
@@ -137,6 +138,20 @@ test("AUTO_SIMPLE requires a unique mapped master, one distinct candidate, clear
   assert.equal(result.readOnly, true);
   assert.deepEqual(Object.values(result.associatedRecords), Array(8).fill("CLEAR"));
   assert.equal(calls.risks.length, 8);
+});
+
+test("AUTO_SIMPLE can expose server-internal dry-run context without changing the public Preview response", async () => {
+  let captured;
+  const { service } = createHarness({ captureAutoSimpleContext: (context) => { captured = context; } });
+  const result = await service(baseRequest);
+
+  assert.equal(result.decision, "AUTO_SIMPLE");
+  assert.equal(captured.tenantId, tenantId);
+  assert.equal(captured.currentContactId, currentContactId);
+  assert.equal(captured.candidate.id, candidateContactId);
+  assert.equal(captured.lineUserId, lineUserId);
+  assert.equal(JSON.stringify(result).includes(candidateContactId), false);
+  assert.equal(JSON.stringify(result).includes(lineUserId), false);
 });
 
 test("NO_IDENTIFIER makes zero tenant, HighLevel search, and risk requests", async () => {
