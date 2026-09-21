@@ -23,6 +23,26 @@ function decodeSignature(signature: string): Buffer {
   return Buffer.from(signature.replace(/^sha256=/i, "").trim(), "base64");
 }
 
+export function verifyGhlEd25519Signature(input: {
+  rawBody: Buffer;
+  ghlSignature?: string;
+}): boolean {
+  try {
+    if (!input.ghlSignature || input.ghlSignature === "N/A") {
+      return false;
+    }
+
+    return crypto.verify(
+      null,
+      input.rawBody,
+      ghlEd25519PublicKey,
+      decodeSignature(input.ghlSignature)
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function verifyGhlWebhookSignature(input: {
   rawBody: Buffer;
   ghlSignature?: string;
@@ -30,12 +50,7 @@ export function verifyGhlWebhookSignature(input: {
 }): boolean {
   try {
     if (input.ghlSignature && input.ghlSignature !== "N/A") {
-      return crypto.verify(
-        null,
-        input.rawBody,
-        ghlEd25519PublicKey,
-        decodeSignature(input.ghlSignature)
-      );
+      return verifyGhlEd25519Signature(input);
     }
 
     if (input.legacySignature && input.legacySignature !== "N/A") {
