@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   assertEvery8dGhlOAuthConfig,
+  every8dGhlOAuthTokenUrl,
   Every8dGhlOAuthConfigurationError,
   readEvery8dGhlOAuthConfig,
   type Every8dGhlOAuthConfig
@@ -160,6 +161,13 @@ function normalizeScopes(value: unknown): string[] | null {
 
 function sameStrings(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function sameTimestampInstant(left: string | null, right: string): boolean {
+  if (!left) return false;
+  const leftEpochMs = new Date(left).getTime();
+  const rightEpochMs = new Date(right).getTime();
+  return Number.isFinite(leftEpochMs) && Number.isFinite(rightEpochMs) && leftEpochMs === rightEpochMs;
 }
 
 function getRecord(value: unknown): Record<string, unknown> | null {
@@ -444,7 +452,7 @@ export function createEvery8dGhlOAuthRuntime(
       !persisted.access_token_ciphertext ||
       !persisted.refresh_token_ciphertext ||
       persisted.encryption_key_version !== encryptedAccess.keyVersion ||
-      persisted.token_expires_at !== expiresAt ||
+      !sameTimestampInstant(persisted.token_expires_at, expiresAt) ||
       !sameStrings([...(persisted.granted_scopes ?? [])].sort(), token.scopes)) {
         throw oauthError("credential_persistence_failed", "HighLevel OAuth credential persistence failed");
       }
@@ -480,6 +488,10 @@ export async function exchangeEvery8dGhlAuthorizationCode(input: {
   config: Every8dGhlOAuthConfig;
   fetchImpl?: typeof fetch;
 }): Promise<unknown> {
+  if (input.config.tokenUrl !== every8dGhlOAuthTokenUrl) {
+    throw oauthError("token_exchange_failed", "HighLevel OAuth token exchange failed");
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), tokenExchangeTimeoutMs);
   const body = new URLSearchParams({
@@ -499,7 +511,8 @@ export async function exchangeEvery8dGhlAuthorizationCode(input: {
         "Content-Type": "application/x-www-form-urlencoded"
       },
       body,
-      signal: controller.signal
+      signal: controller.signal,
+      redirect: "error"
     });
     const responseText = await readBoundedResponse(response);
 

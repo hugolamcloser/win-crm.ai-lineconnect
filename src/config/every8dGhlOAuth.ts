@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { parseEvery8dGhlOAuthEncryptionKeys, type Every8dGhlOAuthEncryptionKeys } from "../services/every8dGhlTokenEncryption";
 
-const defaultTokenUrl = "https://services.leadconnectorhq.com/oauth/token";
+export const every8dGhlOAuthTokenUrl = "https://services.leadconnectorhq.com/oauth/token";
 const defaultStateTtlSeconds = 600;
 const exactIdentifierPattern = /^[A-Za-z0-9_.-]{1,256}$/;
 
@@ -11,6 +12,7 @@ export type Every8dGhlOAuthConfig = {
   oauthClientSecret: string;
   redirectUri: string;
   installationUrl: string;
+  installationUrlSha256: string;
   tokenUrl: string;
   conversationProviderId: string;
   requiredScopes: string[];
@@ -48,6 +50,20 @@ function isExactHttpsUrl(value: string): boolean {
   }
 }
 
+function isApprovedInstallationUrl(value: string, approvedSha256: string): boolean {
+  if (!/^[a-f0-9]{64}$/.test(approvedSha256)) return false;
+
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash) return false;
+    if (parsed.searchParams.has("state")) return false;
+  } catch {
+    return false;
+  }
+
+  return createHash("sha256").update(value, "utf8").digest("hex") === approvedSha256;
+}
+
 export function readEvery8dGhlOAuthConfig(
   source: NodeJS.ProcessEnv = process.env
 ): Every8dGhlOAuthConfig {
@@ -70,7 +86,8 @@ export function readEvery8dGhlOAuthConfig(
     oauthClientSecret: source.EVERY8D_GHL_OAUTH_CLIENT_SECRET ?? "",
     redirectUri: trimmed(source.EVERY8D_GHL_OAUTH_REDIRECT_URI),
     installationUrl: trimmed(source.EVERY8D_GHL_OAUTH_INSTALLATION_URL),
-    tokenUrl: trimmed(source.EVERY8D_GHL_OAUTH_TOKEN_URL) || defaultTokenUrl,
+    installationUrlSha256: trimmed(source.EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256),
+    tokenUrl: trimmed(source.EVERY8D_GHL_OAUTH_TOKEN_URL) || every8dGhlOAuthTokenUrl,
     conversationProviderId: trimmed(source.EVERY8D_GHL_CONVERSATION_PROVIDER_ID),
     requiredScopes: parseScopes(source.EVERY8D_GHL_OAUTH_REQUIRED_SCOPES),
     stateTtlSeconds: defaultStateTtlSeconds,
@@ -87,11 +104,11 @@ export function assertEvery8dGhlOAuthConfig(config: Every8dGhlOAuthConfig): void
   if (
     !exactIdentifierPattern.test(config.marketplaceAppId) ||
     !exactIdentifierPattern.test(config.oauthClientId) ||
-    !config.oauthClientSecret ||
+    !config.oauthClientSecret.trim() ||
     !exactIdentifierPattern.test(config.conversationProviderId) ||
     !isExactHttpsUrl(config.redirectUri) ||
-    !isExactHttpsUrl(config.installationUrl) ||
-    !isExactHttpsUrl(config.tokenUrl) ||
+    !isApprovedInstallationUrl(config.installationUrl, config.installationUrlSha256) ||
+    config.tokenUrl !== every8dGhlOAuthTokenUrl ||
     config.requiredScopes.length === 0 ||
     !exactIdentifierPattern.test(config.activeKeyVersion) ||
     !config.encryptionKeys.has(config.activeKeyVersion) ||

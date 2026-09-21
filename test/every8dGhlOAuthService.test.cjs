@@ -28,6 +28,7 @@ function config(overrides = {}) {
     oauthClientSecret: "synthetic-client-secret",
     redirectUri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
     installationUrl: "https://marketplace.example.invalid/install/every8d-app-98",
+    installationUrlSha256: "694c2700462b0a59a39d022f30583d32727f255e87587e6d53af7b32a6d6a430",
     tokenUrl: "https://services.leadconnectorhq.com/oauth/token",
     conversationProviderId: "every8d-provider-98",
     requiredScopes: ["locations.readonly"],
@@ -93,9 +94,11 @@ function createHarness(options = {}) {
   let persisted = null;
 
   const repository = {
-    async getEligibleInstallation() {
+    async getEligibleInstallation(input) {
       repositoryReads += 1;
-      return selectedInstallation;
+      return options.installationForRead
+        ? options.installationForRead({ input, read: repositoryReads, selectedInstallation })
+        : selectedInstallation;
     },
     async createOAuthState(input) {
       stateCreates += 1;
@@ -144,7 +147,7 @@ function createHarness(options = {}) {
         access_token_ciphertext: input.accessTokenCiphertext,
         refresh_token_ciphertext: input.refreshTokenCiphertext,
         encryption_key_version: input.encryptionKeyVersion,
-        token_expires_at: input.expiresAt,
+        token_expires_at: options.persistedExpiresAt ?? input.expiresAt,
         granted_scopes: input.grantedScopes
       } : options.persistenceResult;
     }
@@ -262,6 +265,35 @@ test("exact Location installation consumes once and persists only encrypted cred
   }), refreshToken);
 });
 
+test("equivalent PostgREST timestamptz representation is accepted after persistence", async () => {
+  const harness = createHarness({ persistedExpiresAt: "2026-09-21T13:00:00+00:00" });
+  const initiation = await harness.initiate();
+
+  await assert.doesNotReject(() => harness.callback(initiation));
+  assert.equal(harness.persistCalls, 1);
+});
+
+test("genuinely different persisted expiry instant fails closed", async () => {
+  const harness = createHarness({ persistedExpiresAt: "2026-09-21T13:00:00.001+00:00" });
+  const initiation = await harness.initiate();
+
+  await assert.rejects(
+    () => harness.callback(initiation),
+    (error) => error instanceof Every8dGhlOAuthError && error.code === "credential_persistence_failed"
+  );
+  assert.equal(harness.persistCalls, 1);
+});
+
+test("malformed persisted expiry fails closed", async () => {
+  const harness = createHarness({ persistedExpiresAt: "not-a-timestamp" });
+  const initiation = await harness.initiate();
+
+  await assert.rejects(
+    () => harness.callback(initiation),
+    (error) => error instanceof Every8dGhlOAuthError && error.code === "credential_persistence_failed"
+  );
+});
+
 for (const [name, changed] of [
   ["wrong installation", { id: "10000000-0000-4000-8000-000000000099" }],
   ["wrong app", { marketplace_app_id: "foreign-app" }],
@@ -363,6 +395,25 @@ test("two concurrent callbacks produce one state winner and one token exchange",
   assert.equal(harness.stateConsumes, 1);
   assert.equal(harness.exchangeCalls, 1);
   assert.equal(harness.persistCalls, 1);
+});
+
+test("generation change after exchange prevents stale credential persistence", async () => {
+  const harness = createHarness({
+    installationForRead: ({ read, selectedInstallation }) => (
+      read === 3
+        ? installation({ ...selectedInstallation, installation_generation: 4 })
+        : selectedInstallation
+    )
+  });
+  const initiation = await harness.initiate();
+
+  await assert.rejects(
+    () => harness.callback(initiation),
+    (error) => error instanceof Every8dGhlOAuthError && error.code === "credential_persistence_failed"
+  );
+  assert.equal(harness.stateConsumes, 1);
+  assert.equal(harness.exchangeCalls, 1);
+  assert.equal(harness.persistCalls, 0);
 });
 
 test("exchange failures expose no authorization code, state, binding, token, or provider body", async () => {

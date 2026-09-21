@@ -90,7 +90,8 @@ export function createEvery8dGhlMarketplaceLifecycleService(
         !dependencies.config.oauthClientId ||
         !dependencies.config.conversationProviderId ||
         payload.appId !== dependencies.config.marketplaceAppId ||
-        (payload.appNamespace !== undefined && payload.appNamespace !== "every8d_connect") ||
+        payload.appNamespace !== "every8d_connect" ||
+        payload.installType !== "Location" ||
         !payload.locationId ||
         hasForbiddenOwnershipMode(payload)
       ) {
@@ -98,7 +99,7 @@ export function createEvery8dGhlMarketplaceLifecycleService(
       }
 
       if (payload.type === "INSTALL") {
-        if (payload.installType !== "Location" || !payload.companyId) rejected();
+        if (!payload.companyId) rejected();
 
         const tenant = await dependencies.getExactTenant(payload.locationId);
         if (
@@ -122,8 +123,6 @@ export function createEvery8dGhlMarketplaceLifecycleService(
       }
 
       if (payload.type === "UNINSTALL") {
-        if (payload.installType !== undefined && payload.installType !== "Location") rejected();
-
         const installation = await dependencies.uninstallInstallation({
           marketplaceAppId: dependencies.config.marketplaceAppId,
           oauthClientId: dependencies.config.oauthClientId,

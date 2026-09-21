@@ -87,99 +87,109 @@ function encodeBytea(value: string): string {
   return `\\x${Buffer.from(value, "utf8").toString("hex")}`;
 }
 
-export const every8dGhlOAuthRepository: Every8dGhlOAuthRepository = {
-  async getEligibleInstallation(input) {
-    let query = getSupabase()
-      .from("ghl_marketplace_installations")
-      .select("*")
-      .eq("id", input.installationId)
-      .eq("app_namespace", "every8d_connect")
-      .eq("marketplace_app_id", input.marketplaceAppId)
-      .eq("oauth_client_id", input.oauthClientId)
-      .eq("conversation_provider_id", input.conversationProviderId)
-      .eq("channel", "sms")
-      .eq("provider", "every8d")
-      .in("status", ["pending", "active"]);
+type Every8dGhlSupabaseGetter = () => ReturnType<typeof getSupabase>;
 
-    if (input.tenantId) query = query.eq("tenant_id", input.tenantId);
-    if (input.locationId) query = query.eq("location_id", input.locationId);
-    if (input.installationGeneration) query = query.eq("installation_generation", input.installationGeneration);
+export function createEvery8dGhlOAuthRepository(
+  getClient: Every8dGhlSupabaseGetter = getSupabase
+): Every8dGhlOAuthRepository {
+  return {
+    async getEligibleInstallation(input) {
+      let query = getClient()
+        .from("ghl_marketplace_installations")
+        .select("*")
+        .eq("id", input.installationId)
+        .eq("app_namespace", "every8d_connect")
+        .eq("marketplace_app_id", input.marketplaceAppId)
+        .eq("oauth_client_id", input.oauthClientId)
+        .eq("conversation_provider_id", input.conversationProviderId)
+        .eq("channel", "sms")
+        .eq("provider", "every8d")
+        .in("status", ["pending", "active"]);
 
-    const { data, error } = await query.maybeSingle();
-    if (error) throwDatabaseError(error);
-    return data as Every8dGhlMarketplaceInstallation | null;
-  },
+      if (input.tenantId) query = query.eq("tenant_id", input.tenantId);
+      if (input.locationId) query = query.eq("location_id", input.locationId);
+      if (input.installationGeneration) {
+        query = query.eq("installation_generation", input.installationGeneration);
+      }
 
-  async createOAuthState(input) {
-    const { data, error } = await getSupabase()
-      .from("ghl_marketplace_oauth_states")
-      .insert({
-        installation_id: input.installationId,
-        installation_generation: input.installationGeneration,
-        state_hash: input.stateHash,
-        browser_binding_hash: input.browserBindingHash,
-        redirect_uri: input.redirectUri,
-        expires_at: input.expiresAt
-      })
-      .select("*")
-      .single();
-    if (error) throwDatabaseError(error);
-    return data as Every8dGhlOAuthState;
-  },
+      const { data, error } = await query.maybeSingle();
+      if (error) throwDatabaseError(error);
+      return data as Every8dGhlMarketplaceInstallation | null;
+    },
 
-  async getOAuthStateByHash(stateHash) {
-    const { data, error } = await getSupabase()
-      .from("ghl_marketplace_oauth_states")
-      .select("*")
-      .eq("state_hash", stateHash)
-      .maybeSingle();
-    if (error) throwDatabaseError(error);
-    return data as Every8dGhlOAuthState | null;
-  },
+    async createOAuthState(input) {
+      const { data, error } = await getClient()
+        .from("ghl_marketplace_oauth_states")
+        .insert({
+          installation_id: input.installationId,
+          installation_generation: input.installationGeneration,
+          state_hash: input.stateHash,
+          browser_binding_hash: input.browserBindingHash,
+          redirect_uri: input.redirectUri,
+          expires_at: input.expiresAt
+        })
+        .select("*")
+        .single();
+      if (error) throwDatabaseError(error);
+      return data as Every8dGhlOAuthState;
+    },
 
-  async consumeOAuthState(input) {
-    const { data, error } = await getSupabase()
-      .from("ghl_marketplace_oauth_states")
-      .update({ consumed_at: new Date().toISOString() })
-      .eq("id", input.stateId)
-      .eq("state_hash", input.stateHash)
-      .eq("installation_id", input.installationId)
-      .eq("installation_generation", input.installationGeneration)
-      .eq("browser_binding_hash", input.browserBindingHash)
-      .eq("redirect_uri", input.redirectUri)
-      .is("consumed_at", null)
-      .is("revoked_at", null)
-      .select("*")
-      .maybeSingle();
-    if (error) throwDatabaseError(error);
-    return data as Every8dGhlOAuthState | null;
-  },
+    async getOAuthStateByHash(stateHash) {
+      const { data, error } = await getClient()
+        .from("ghl_marketplace_oauth_states")
+        .select("*")
+        .eq("state_hash", stateHash)
+        .maybeSingle();
+      if (error) throwDatabaseError(error);
+      return data as Every8dGhlOAuthState | null;
+    },
 
-  async persistCredentials(input) {
-    const { data, error } = await getSupabase()
-      .from("ghl_marketplace_installations")
-      .update({
-        access_token_ciphertext: encodeBytea(input.accessTokenCiphertext),
-        refresh_token_ciphertext: encodeBytea(input.refreshTokenCiphertext),
-        encryption_key_version: input.encryptionKeyVersion,
-        token_expires_at: input.expiresAt,
-        granted_scopes: input.grantedScopes
-      })
-      .eq("id", input.installationId)
-      .eq("app_namespace", "every8d_connect")
-      .eq("marketplace_app_id", input.marketplaceAppId)
-      .eq("oauth_client_id", input.oauthClientId)
-      .eq("tenant_id", input.tenantId)
-      .eq("location_id", input.locationId)
-      .eq("conversation_provider_id", input.conversationProviderId)
-      .eq("installation_generation", input.installationGeneration)
-      .in("status", ["pending", "active"])
-      .select("*")
-      .maybeSingle();
-    if (error) throwDatabaseError(error);
-    return data as Every8dGhlMarketplaceInstallation | null;
-  }
-};
+    async consumeOAuthState(input) {
+      const { data, error } = await getClient()
+        .from("ghl_marketplace_oauth_states")
+        .update({ consumed_at: new Date().toISOString() })
+        .eq("id", input.stateId)
+        .eq("state_hash", input.stateHash)
+        .eq("installation_id", input.installationId)
+        .eq("installation_generation", input.installationGeneration)
+        .eq("browser_binding_hash", input.browserBindingHash)
+        .eq("redirect_uri", input.redirectUri)
+        .is("consumed_at", null)
+        .is("revoked_at", null)
+        .select("*")
+        .maybeSingle();
+      if (error) throwDatabaseError(error);
+      return data as Every8dGhlOAuthState | null;
+    },
+
+    async persistCredentials(input) {
+      const { data, error } = await getClient()
+        .from("ghl_marketplace_installations")
+        .update({
+          access_token_ciphertext: encodeBytea(input.accessTokenCiphertext),
+          refresh_token_ciphertext: encodeBytea(input.refreshTokenCiphertext),
+          encryption_key_version: input.encryptionKeyVersion,
+          token_expires_at: input.expiresAt,
+          granted_scopes: input.grantedScopes
+        })
+        .eq("id", input.installationId)
+        .eq("app_namespace", "every8d_connect")
+        .eq("marketplace_app_id", input.marketplaceAppId)
+        .eq("oauth_client_id", input.oauthClientId)
+        .eq("tenant_id", input.tenantId)
+        .eq("location_id", input.locationId)
+        .eq("conversation_provider_id", input.conversationProviderId)
+        .eq("installation_generation", input.installationGeneration)
+        .in("status", ["pending", "active"])
+        .select("*")
+        .maybeSingle();
+      if (error) throwDatabaseError(error);
+      return data as Every8dGhlMarketplaceInstallation | null;
+    }
+  };
+}
+
+export const every8dGhlOAuthRepository = createEvery8dGhlOAuthRepository();
 
 export type Every8dGhlExactTenant = {
   id: string;

@@ -25,6 +25,7 @@ The existing `/oauth/callback`, legacy AppInstall route, LINE custom page, LINE 
 - `EVERY8D_GHL_OAUTH_CLIENT_SECRET`
 - `EVERY8D_GHL_OAUTH_REDIRECT_URI`
 - `EVERY8D_GHL_OAUTH_INSTALLATION_URL`
+- `EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256`
 - `EVERY8D_GHL_OAUTH_TOKEN_URL` (defaults to the official token endpoint)
 - `EVERY8D_GHL_CONVERSATION_PROVIDER_ID`
 - `EVERY8D_GHL_OAUTH_REQUIRED_SCOPES`
@@ -34,6 +35,8 @@ The existing `/oauth/callback`, legacy AppInstall route, LINE custom page, LINE 
 No existing `GHL_OAUTH_*`, `GHL_MARKETPLACE_APP_ID`, or `GHL_CUSTOM_PROVIDER_ID` value is read or reinterpreted. The scope list has no built-in product scope: an operator must provide the exact separately reviewed Marketplace scope set, and the callback requires exact set equality rather than adding a speculative scope.
 
 No production values or keys are included in the repository. `EVERY8D_GHL_OAUTH_ENCRYPTION_KEYS` is a JSON object from explicit key version to a base64-encoded 32-byte key. The active version must exist in that collection.
+
+HighLevel publishes the Marketplace installation link as an opaque dashboard-generated value; its current official documentation does not define a machine-verifiable URL schema that exposes the OAuth client, redirect, and scope identities. The runtime therefore requires a lowercase SHA-256 approval pin for the entire manually reviewed installation URL and rejects drift, malformed pins, fragments, credentials, non-HTTPS URLs, and preconfigured `state`. This removes unrestricted installation destinations without inventing an undocumented host/path/parameter contract. Production activation remains blocked until the actual EVERY8D Connect link is reviewed against the app dashboard and its digest is explicitly approved.
 
 ## State and browser binding
 
@@ -47,7 +50,7 @@ No migration was required.
 
 ## Token exchange and persistence
 
-The exchange uses only the dedicated EVERY8D Connect HighLevel OAuth client, `user_type=Location`, the exact configured HTTPS redirect, a 15-second timeout, and a 64 KiB streamed response limit. Provider error bodies, authorization codes, secrets, states, cookies, and token values are never returned or logged.
+The exchange uses only the dedicated EVERY8D Connect HighLevel OAuth client, `user_type=Location`, the exact configured HTTPS redirect, the pinned `https://services.leadconnectorhq.com/oauth/token` endpoint, disabled HTTP redirect following, a 15-second timeout, and a 64 KiB streamed response limit. Provider error bodies, authorization codes, secrets, states, cookies, and token values are never returned or logged.
 
 Access and refresh tokens are separately encrypted with AES-256-GCM using independent random 96-bit IVs and 128-bit authentication tags. The versioned envelope contains the format version, key version, IV, ciphertext, and tag. Authenticated additional data binds each ciphertext to:
 
@@ -59,11 +62,13 @@ Access and refresh tokens are separately encrypted with AES-256-GCM using indepe
 - location ID; and
 - token purpose (`access_token` or `refresh_token`).
 
-Wrong key, version, AAD, tag, ciphertext, or installation generation fails closed. Only encrypted envelope bytes, key version, expiry, and normalized scopes are written to the exact `ghl_marketplace_installations` row after a second ownership/generation/status check. The implementation never reads or writes `ghl_oauth_tokens` and never performs a location-only credential lookup.
+Wrong key, version, AAD, tag, ciphertext, or installation generation fails closed. Only encrypted envelope bytes, key version, expiry, and normalized scopes are written to the exact `ghl_marketplace_installations` row after a second ownership/generation/status check. Returned `timestamptz` values are parsed as instants and compared by exact epoch milliseconds, so equivalent PostgreSQL `Z`/`+00:00` forms succeed while malformed or different instants fail closed. The implementation never reads or writes `ghl_oauth_tokens` and never performs a location-only credential lookup.
 
 ## Signed lifecycle evidence and provisioning blocker
 
 The namespaced lifecycle route validates exact raw-body Ed25519 signature, app ID, event type, Location mode, location, namespace, and rejection flags before any mutation. It resolves exactly one already-existing tenant and never calls `ensureTenantForLocation()` or creates a tenant.
+
+The first slice requires explicit `appNamespace=every8d_connect` and `installType=Location` for both supported lifecycle events; missing or different values fail closed. Current public HighLevel INSTALL/UNINSTALL examples are inconsistent about including those fields, so lifecycle activation also remains blocked until signed sandbox payloads from the actual EVERY8D Connect app confirm the exact contract. The code does not infer a default or accept a looser variant.
 
 Automatic INSTALL provisioning intentionally stops after validation. Current signed Location INSTALL evidence includes `companyId`, but `ghl_marketplace_installations` has no immutable company ownership column. Discarding that evidence would prevent the callback from comparing an available token-response company to the signed installation owner. Reusing `ghl_pending_app_installs` or other LINE onboarding storage is forbidden. The route therefore returns a sanitized `provisioning_blocked` result and creates no installation.
 
@@ -86,6 +91,8 @@ OAuth success only stores encrypted HighLevel credentials. It has no path to pro
 ## Remaining activation and dispatch blockers
 
 - Confirm in a HighLevel sandbox that the generated Marketplace installation URL preserves and returns the appended OAuth `state`; current Marketplace documentation describes the installation URL and code callback but does not explicitly document state pass-through.
+- Review the actual EVERY8D Connect installation link against the dedicated app identity, redirect, and approved scopes, then configure its exact lowercase SHA-256 pin. HighLevel does not publish a machine-verifiable install-link schema, so the runtime intentionally does not infer these identities from undocumented URL examples.
+- Confirm that signed EVERY8D Connect INSTALL and UNINSTALL payloads include the required exact `appNamespace` and Location `installType`; public examples are inconsistent, and missing evidence remains rejected.
 - Add and approve immutable signed `companyId` ownership before automatic INSTALL provisioning.
 - Resolve the GET-message minimum scope and reliable `conversationProviderId`/message attribution contract before any provider dispatch work.
 - Add database-authoritative refresh compare-and-swap before refresh runtime.

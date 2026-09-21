@@ -14,6 +14,7 @@ function config(overrides = {}) {
     oauthClientSecret: "synthetic-client-secret",
     redirectUri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
     installationUrl: "https://marketplace.example.invalid/install/every8d-app-98",
+    installationUrlSha256: "694c2700462b0a59a39d022f30583d32727f255e87587e6d53af7b32a6d6a430",
     tokenUrl: "https://services.leadconnectorhq.com/oauth/token",
     conversationProviderId: "every8d-provider-98",
     requiredScopes: ["locations.readonly"],
@@ -77,9 +78,21 @@ test("signed Location INSTALL validates an exact existing tenant then stops on m
   assert.equal(harness.uninstalls, 0);
 });
 
+test("disabled lifecycle runtime performs zero ownership lookup or mutation", async () => {
+  const harness = createHarness({ config: { enabled: false } });
+  await assert.rejects(
+    () => harness.service.handle(installPayload()),
+    (error) => error.code === "lifecycle_disabled"
+  );
+  assert.equal(harness.tenantReads, 0);
+  assert.equal(harness.uninstalls, 0);
+});
+
 for (const [name, payload] of [
   ["wrong app", installPayload({ appId: "foreign-app" })],
+  ["missing namespace", installPayload({ appNamespace: undefined })],
   ["wrong namespace", installPayload({ appNamespace: "line_connect" })],
+  ["missing install type", installPayload({ installType: undefined })],
   ["agency install", installPayload({ installType: "Agency", locationId: undefined })],
   ["Company ownership", installPayload({ installType: "Company" })],
   ["bulk install", installPayload({ isBulkInstallation: true })],
@@ -107,6 +120,7 @@ test("Location UNINSTALL invalidates only the exact configured installation", as
     type: "UNINSTALL",
     appId: "every8d-app-98",
     appNamespace: "every8d_connect",
+    installType: "Location",
     locationId: "location-98"
   });
 
@@ -114,6 +128,29 @@ test("Location UNINSTALL invalidates only the exact configured installation", as
   assert.equal(harness.tenantReads, 0);
   assert.equal(harness.uninstalls, 1);
 });
+
+for (const [name, override] of [
+  ["missing namespace", { appNamespace: undefined }],
+  ["wrong namespace", { appNamespace: "line_connect" }],
+  ["missing install type", { installType: undefined }],
+  ["wrong install type", { installType: "Agency" }]
+]) {
+  test(`Location UNINSTALL rejects ${name} before mutation`, async () => {
+    const harness = createHarness();
+    await assert.rejects(
+      () => harness.service.handle({
+        type: "UNINSTALL",
+        appId: "every8d-app-98",
+        appNamespace: "every8d_connect",
+        installType: "Location",
+        locationId: "location-98",
+        ...override
+      }),
+      /lifecycle evidence was rejected/
+    );
+    assert.equal(harness.uninstalls, 0);
+  });
+}
 
 async function startRouter(dependencies) {
   const app = express();
