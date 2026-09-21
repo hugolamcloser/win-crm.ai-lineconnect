@@ -13,7 +13,8 @@ const {
 } = require("../dist/services/every8dGhlOAuthService");
 
 const syntheticKey = Buffer.alloc(32, 0x61).toString("base64");
-const syntheticInstallationUrl = "https://marketplace.example.invalid/install/every8d-app-98";
+const syntheticInstallationUrl = "https://app.gohighlevel.com/v2/location/location-test-98/integration/integration-test-98/versions/version-test-98";
+const syntheticInstallationUrlSha256 = "f16af35b0cf17cea441f86b7c665c8999e36c37bc1216a8041049212b753f539";
 
 function sha256(value) {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -27,7 +28,7 @@ function completeEnvironment(overrides = {}) {
     EVERY8D_GHL_OAUTH_CLIENT_SECRET: "synthetic-client-secret",
     EVERY8D_GHL_OAUTH_REDIRECT_URI: "https://oauth.example.invalid/oauth/every8d-connect/callback",
     EVERY8D_GHL_OAUTH_INSTALLATION_URL: syntheticInstallationUrl,
-    EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256: sha256(syntheticInstallationUrl),
+    EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256: syntheticInstallationUrlSha256,
     EVERY8D_GHL_CONVERSATION_PROVIDER_ID: "every8d-provider-98",
     EVERY8D_GHL_OAUTH_REQUIRED_SCOPES: "locations.readonly",
     EVERY8D_GHL_OAUTH_ACTIVE_KEY_VERSION: "test-v1",
@@ -68,20 +69,38 @@ test("enabled configuration requires dedicated complete exact values", () => {
   }
 });
 
-test("enabled configuration requires the exact approved installation URL digest", () => {
+test("enabled configuration accepts the exact approved synthetic HighLevel Location install link", () => {
   const exact = readEvery8dGhlOAuthConfig(completeEnvironment());
   assert.doesNotThrow(() => assertEvery8dGhlOAuthConfig(exact));
+});
 
-  for (const overrides of [
-    { EVERY8D_GHL_OAUTH_INSTALLATION_URL: `${syntheticInstallationUrl}?alternate=true` },
-    { EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256: "A".repeat(64) },
-    { EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256: "not-a-sha256-digest" },
-    {
-      EVERY8D_GHL_OAUTH_INSTALLATION_URL: `${syntheticInstallationUrl}?state=preconfigured`,
-      EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256: sha256(`${syntheticInstallationUrl}?state=preconfigured`)
-    }
-  ]) {
-    const invalid = readEvery8dGhlOAuthConfig(completeEnvironment(overrides));
+for (const [name, installationUrl, approvedDigest] of [
+  ["one-character URL change", syntheticInstallationUrl.replace("location-test-98", "location-test-99"), syntheticInstallationUrlSha256],
+  ["alternate host", syntheticInstallationUrl.replace("app.gohighlevel.com", "app.gohighlevel.example"), sha256(syntheticInstallationUrl.replace("app.gohighlevel.com", "app.gohighlevel.example"))],
+  ["Company installation path", syntheticInstallationUrl.replace("/v2/location/location-test-98/", "/v2/company/company-test-98/"), sha256(syntheticInstallationUrl.replace("/v2/location/location-test-98/", "/v2/company/company-test-98/"))],
+  ["location change", syntheticInstallationUrl.replace("location-test-98", "other-location-98"), syntheticInstallationUrlSha256],
+  ["integration identity change", syntheticInstallationUrl.replace("integration-test-98", "other-integration-98"), syntheticInstallationUrlSha256],
+  ["version identity change", syntheticInstallationUrl.replace("version-test-98", "other-version-98"), syntheticInstallationUrlSha256],
+  ["query addition", `${syntheticInstallationUrl}?unexpected=true`, sha256(`${syntheticInstallationUrl}?unexpected=true`)],
+  ["fragment addition", `${syntheticInstallationUrl}#unexpected`, sha256(`${syntheticInstallationUrl}#unexpected`)]
+]) {
+  test(`enabled configuration rejects ${name}`, () => {
+    const invalid = readEvery8dGhlOAuthConfig(completeEnvironment({
+      EVERY8D_GHL_OAUTH_INSTALLATION_URL: installationUrl,
+      EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256: approvedDigest
+    }));
+    assert.throws(
+      () => assertEvery8dGhlOAuthConfig(invalid),
+      (error) => error instanceof Every8dGhlOAuthConfigurationError
+    );
+  });
+}
+
+test("enabled configuration rejects malformed or missing installation URL approval digests", () => {
+  for (const digest of ["", "A".repeat(64), "not-a-sha256-digest"]) {
+    const invalid = readEvery8dGhlOAuthConfig(completeEnvironment({
+      EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256: digest
+    }));
     assert.throws(
       () => assertEvery8dGhlOAuthConfig(invalid),
       (error) => error instanceof Every8dGhlOAuthConfigurationError

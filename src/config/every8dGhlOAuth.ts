@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import { parseEvery8dGhlOAuthEncryptionKeys, type Every8dGhlOAuthEncryptionKeys } from "../services/every8dGhlTokenEncryption";
 
 export const every8dGhlOAuthTokenUrl = "https://services.leadconnectorhq.com/oauth/token";
+const every8dGhlInstallationOrigin = "https://app.gohighlevel.com";
 const defaultStateTtlSeconds = 600;
 const exactIdentifierPattern = /^[A-Za-z0-9_.-]{1,256}$/;
+const locationInstallationPathPattern = /^\/v2\/location\/([^/]+)\/integration\/([^/]+)\/versions\/([^/]+)$/;
 
 export type Every8dGhlOAuthConfig = {
   enabled: boolean;
@@ -55,8 +57,18 @@ function isApprovedInstallationUrl(value: string, approvedSha256: string): boole
 
   try {
     const parsed = new URL(value);
-    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.hash) return false;
-    if (parsed.searchParams.has("state")) return false;
+    const pathMatch = locationInstallationPathPattern.exec(parsed.pathname);
+    if (
+      parsed.origin !== every8dGhlInstallationOrigin ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash ||
+      !pathMatch ||
+      !pathMatch.slice(1).every((identifier) => exactIdentifierPattern.test(identifier))
+    ) {
+      return false;
+    }
   } catch {
     return false;
   }

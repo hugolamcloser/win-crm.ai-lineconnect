@@ -36,7 +36,7 @@ No existing `GHL_OAUTH_*`, `GHL_MARKETPLACE_APP_ID`, or `GHL_CUSTOM_PROVIDER_ID`
 
 No production values or keys are included in the repository. `EVERY8D_GHL_OAUTH_ENCRYPTION_KEYS` is a JSON object from explicit key version to a base64-encoded 32-byte key. The active version must exist in that collection.
 
-HighLevel publishes the Marketplace installation link as an opaque dashboard-generated value; its current official documentation does not define a machine-verifiable URL schema that exposes the OAuth client, redirect, and scope identities. The runtime therefore requires a lowercase SHA-256 approval pin for the entire manually reviewed installation URL and rejects drift, malformed pins, fragments, credentials, non-HTTPS URLs, and preconfigured `state`. This removes unrestricted installation destinations without inventing an undocumented host/path/parameter contract. Production activation remains blocked until the actual EVERY8D Connect link is reviewed against the app dashboard and its digest is explicitly approved.
+The reviewed HighLevel-generated Location install link establishes the exact structural boundary `https://app.gohighlevel.com/v2/location/{locationId}/integration/{integrationId}/versions/{versionId}` with no query or fragment. The runtime requires that exact origin and path shape plus a lowercase SHA-256 approval pin for the entire manually reviewed URL. It rejects host, location, integration, version, path, query, fragment, credentials, port, or digest drift. The link does not expose OAuth client, redirect, or scope identities, so the runtime does not invent those fields or infer them from the URL. The actual EVERY8D Connect link and digest remain runtime-only configuration and are not committed.
 
 ## State and browser binding
 
@@ -91,7 +91,6 @@ OAuth success only stores encrypted HighLevel credentials. It has no path to pro
 ## Remaining activation and dispatch blockers
 
 - Confirm in a HighLevel sandbox that the generated Marketplace installation URL preserves and returns the appended OAuth `state`; current Marketplace documentation describes the installation URL and code callback but does not explicitly document state pass-through.
-- Review the actual EVERY8D Connect installation link against the dedicated app identity, redirect, and approved scopes, then configure its exact lowercase SHA-256 pin. HighLevel does not publish a machine-verifiable install-link schema, so the runtime intentionally does not infer these identities from undocumented URL examples.
 - Confirm that signed EVERY8D Connect INSTALL and UNINSTALL payloads include the required exact `appNamespace` and Location `installType`; public examples are inconsistent, and missing evidence remains rejected.
 - Add and approve immutable signed `companyId` ownership before automatic INSTALL provisioning.
 - Resolve the GET-message minimum scope and reliable `conversationProviderId`/message attribution contract before any provider dispatch work.

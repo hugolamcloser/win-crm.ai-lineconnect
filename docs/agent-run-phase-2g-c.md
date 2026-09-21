@@ -34,7 +34,7 @@ Focused proofs cover:
 - Ed25519 raw-body lifecycle verification with no legacy-signature authority;
 - LINE, SMS, armed-authorization, and EVERY8D transport isolation.
 
-The audit repair pass added exact instant comparison for realistic PostgREST `timestamptz` forms, a pinned no-redirect HighLevel token endpoint, strict canonical Ed25519 Base64 decoding, required lifecycle namespace/install type, whitespace-secret rejection, full install-link digest pinning, a post-exchange generation race, and a realistic PostgREST persistence shape. The official HighLevel documentation does not publish a machine-verifiable installation-link schema and its lifecycle examples are inconsistent about namespace/install-type fields, so those production contracts remain explicit activation blockers rather than being guessed.
+The audit repair pass added exact instant comparison for realistic PostgREST `timestamptz` forms, a pinned no-redirect HighLevel token endpoint, strict canonical Ed25519 Base64 decoding, required lifecycle namespace/install type, whitespace-secret rejection, full install-link digest pinning, a post-exchange generation race, and a realistic PostgREST persistence shape. A later out-of-band review of the actual HighLevel-generated link established the generic Location path boundary `https://app.gohighlevel.com/v2/location/{locationId}/integration/{integrationId}/versions/{versionId}` with no query or fragment. The runtime now enforces that structure and the full-link digest without committing the actual link or digest. HighLevel lifecycle examples remain inconsistent about namespace/install-type fields, so that signed-payload contract remains an activation blocker rather than being guessed.
 
 The existing `test/postgres/ghlMarketplaceOwnership.sh` remains the real PostgreSQL 17 proof for the exact conditional state update used by the repository. It proves one winner across two connections and serializes state consumption against generation changes. CI runs it after the complete migration chain.
 
@@ -43,15 +43,15 @@ The existing `test/postgres/ghlMarketplaceOwnership.sh` remains the real Postgre
 1. **No schema change in this PR.** The existing tables support state and encrypted credential persistence.
 2. **Automatic INSTALL provisioning stopped.** Signed `companyId` cannot be retained immutably in the current installation table, and legacy pending/onboarding storage is forbidden. The validated webhook returns `provisioning_blocked` without mutation. A later additive company-binding design is required.
 3. **Refresh deferred.** Current schema has no monotonic credential revision or refresh lease for cross-process stale-result CAS. A later additive database primitive and race proof are required.
-4. **Activation blocked.** The actual EVERY8D Connect install link must be manually matched to the dedicated app/client/redirect/scopes and explicitly digest-pinned; Marketplace state pass-through needs sandbox confirmation; signed lifecycle payloads must confirm the required namespace/install type; provider-message attribution and GET-message minimum scope remain unresolved and separate from OAuth readiness.
+4. **Activation blocked.** The install-link structure and approval-pin boundary are resolved, but its actual runtime values remain unset until a separate activation task. Marketplace state pass-through needs sandbox confirmation; signed lifecycle payloads must confirm the required namespace/install type; provider-message attribution and GET-message minimum scope remain unresolved and separate from OAuth readiness.
 
 ## Validation record
 
 - `npm run typecheck`: passed.
-- `npm test`: passed, 484 tests, 0 failed, 0 skipped after the audit repair pass.
+- `npm test`: passed, 494 tests, 0 failed, 0 skipped after install-link hardening.
 - `npm run build`: passed.
 - `git diff --check`: passed; only line-ending notices were emitted.
-- Focused Phase 2G-C and shared-boundary regression tests: 115 passed across configuration/exchange, repository, routes, service/concurrency, lifecycle, encryption, shared signature, SMS isolation, and existing LINE/GHL compatibility suites.
+- Focused Phase 2G-C and shared-boundary regression tests: 125 passed across configuration/exchange, repository, routes, service/concurrency, lifecycle, encryption, shared signature, SMS isolation, and existing LINE/GHL compatibility suites.
 - Local PostgreSQL runner: not run because Docker is unavailable and the installed PostgreSQL package lacks `share/postgres.bki`; hosted CI runs the existing PostgreSQL 17 proof.
 
 No production connection, Supabase mutation, Railway change, HighLevel change, LINE change, EVERY8D request, SMS operation, authorization access/consumption, or SMS send occurred.

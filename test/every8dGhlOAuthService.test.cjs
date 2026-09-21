@@ -27,8 +27,8 @@ function config(overrides = {}) {
     oauthClientId: "every8d-client-98",
     oauthClientSecret: "synthetic-client-secret",
     redirectUri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
-    installationUrl: "https://marketplace.example.invalid/install/every8d-app-98",
-    installationUrlSha256: "694c2700462b0a59a39d022f30583d32727f255e87587e6d53af7b32a6d6a430",
+    installationUrl: "https://app.gohighlevel.com/v2/location/location-test-98/integration/integration-test-98/versions/version-test-98",
+    installationUrlSha256: "f16af35b0cf17cea441f86b7c665c8999e36c37bc1216a8041049212b753f539",
     tokenUrl: "https://services.leadconnectorhq.com/oauth/token",
     conversationProviderId: "every8d-provider-98",
     requiredScopes: ["locations.readonly"],
@@ -208,6 +208,19 @@ test("default-off OAuth performs zero repository, network, or persistence activi
       locationId: installation().location_id
     }),
     (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_disabled"
+  );
+  assert.equal(harness.repositoryReads, 0);
+  assert.equal(harness.stateCreates, 0);
+  assert.equal(harness.exchangeCalls, 0);
+  assert.equal(harness.persistCalls, 0);
+});
+
+test("missing installation URL approval digest blocks initiation before side effects", async () => {
+  const harness = createHarness({ config: { installationUrlSha256: "" } });
+
+  await assert.rejects(
+    () => harness.initiate(),
+    (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_configuration_invalid"
   );
   assert.equal(harness.repositoryReads, 0);
   assert.equal(harness.stateCreates, 0);
