@@ -5,6 +5,7 @@ const envelopeVersion = 1;
 const ivLength = 12;
 const tagLength = 16;
 const keyVersionPattern = /^[A-Za-z0-9_.-]{1,128}$/;
+const unpaddedBase64UrlPattern = /^[A-Za-z0-9_-]+$/;
 
 export type Every8dGhlOAuthEncryptionKeys = ReadonlyMap<string, Buffer>;
 
@@ -107,9 +108,28 @@ function encodeEnvelope(envelope: EncryptionEnvelope): string {
   return Buffer.from(JSON.stringify(envelope), "utf8").toString("base64url");
 }
 
+function decodeStrictBase64Url(value: string): Buffer {
+  if (
+    typeof value !== "string" ||
+    !value ||
+    !unpaddedBase64UrlPattern.test(value) ||
+    value.length % 4 === 1
+  ) {
+    throw decryptionError();
+  }
+
+  const decoded = Buffer.from(value, "base64url");
+
+  if (decoded.length === 0 || decoded.toString("base64url") !== value) {
+    throw decryptionError();
+  }
+
+  return decoded;
+}
+
 function parseEnvelope(value: string): EncryptionEnvelope {
   try {
-    const decoded = Buffer.from(value, "base64url").toString("utf8");
+    const decoded = decodeStrictBase64Url(value).toString("utf8");
     const parsed = JSON.parse(decoded) as Partial<EncryptionEnvelope>;
 
     if (
@@ -124,8 +144,9 @@ function parseEnvelope(value: string): EncryptionEnvelope {
       throw decryptionError();
     }
 
-    const iv = Buffer.from(parsed.iv, "base64url");
-    const tag = Buffer.from(parsed.tag, "base64url");
+    const iv = decodeStrictBase64Url(parsed.iv);
+    const tag = decodeStrictBase64Url(parsed.tag);
+    decodeStrictBase64Url(parsed.ciphertext);
 
     if (iv.length !== ivLength || tag.length !== tagLength) {
       throw decryptionError();
