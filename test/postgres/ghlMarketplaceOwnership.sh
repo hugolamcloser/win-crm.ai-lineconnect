@@ -86,6 +86,10 @@ assert_query "select company_id is null and status = 'disabled' and installation
   and access_token_ciphertext is null and refresh_token_ciphertext is null
   and encryption_key_version is null and token_expires_at is null and cardinality(granted_scopes) = 0
   from public.ghl_marketplace_installations where id = '10000000-0000-4000-8000-000000000094'" 'D1 forward migration preserves legacy row as safely ineligible'
+assert_query "select convalidated from pg_constraint
+  where conrelid = 'public.ghl_marketplace_installations'::regclass
+    and conname = 'ghl_marketplace_installations_null_company_safety_check'
+    and contype = 'c'" 'D1 NULL-company safety constraint is present and validated'
 if psql_query -q -c "set role service_role; update public.ghl_marketplace_installations
   set status = 'active', installation_generation = 5
   where id = '10000000-0000-4000-8000-000000000094';" > "$proof_log" 2>&1; then
@@ -95,6 +99,41 @@ grep -Fq 'requires company ownership before activation or credentials' "$proof_l
 psql_query -q -c "delete from public.ghl_marketplace_installations where id = '10000000-0000-4000-8000-000000000094';
   delete from public.tenants where id = '00000000-0000-4000-8000-000000000094';"
 echo 'D1 forward migration over a pre-existing row passed'
+
+# Rebuild the real pre-D1 schema and prove unsafe legacy ownership aborts D1 atomically.
+psql_query < "$company_rollback" > "$proof_log"
+psql_query -q -c "insert into public.tenants(id, location_id, ghl_provider_id, line_channel_id)
+  values ('00000000-0000-4000-8000-000000000093', 'issue100-unsafe-location', 'issue100-unsafe-line', 'issue100-unsafe-channel');
+  insert into public.ghl_marketplace_installations(
+    id, marketplace_app_id, oauth_client_id, tenant_id, location_id, conversation_provider_id,
+    status, installation_generation
+  ) values (
+    '10000000-0000-4000-8000-000000000093', 'issue100-unsafe-app', 'issue100-unsafe-client',
+    '00000000-0000-4000-8000-000000000093', 'issue100-unsafe-location', 'issue100-unsafe-provider',
+    'active', 6
+  );"
+if psql_query < "$company_migration" > "$proof_log" 2>&1; then
+  echo 'FAIL: D1 migration accepted an unsafe pre-D1 row' >&2; exit 1
+fi
+grep -Fq 'ghl_marketplace_installations_null_company_safety_check' "$proof_log"
+assert_query "select status = 'active' and installation_generation = 6
+    from public.ghl_marketplace_installations
+    where id = '10000000-0000-4000-8000-000000000093'
+  and not exists(select 1 from information_schema.columns where table_schema = 'public'
+    and table_name = 'ghl_marketplace_installations' and column_name = 'company_id')
+  and to_regprocedure('public.provision_every8d_ghl_marketplace_installation_v1(text,text,uuid,text,text,text)') is null
+  and to_regprocedure('public.protect_ghl_marketplace_installation_v2()') is null
+  and exists(select 1 from pg_trigger t join pg_proc p on p.oid = t.tgfoid
+    where t.tgrelid = 'public.ghl_marketplace_installations'::regclass
+      and t.tgname = 'protect_ghl_marketplace_installation'
+      and p.proname = 'protect_ghl_marketplace_installation_v1'
+      and not t.tgisinternal)
+  and has_table_privilege('service_role', 'public.ghl_marketplace_installations', 'INSERT')
+  and has_table_privilege('service_role', 'public.ghl_marketplace_installations', 'UPDATE')" 'unsafe D1 migration failure rolls back every schema, function, trigger and grant change'
+psql_query -q -c "delete from public.ghl_marketplace_installations where id = '10000000-0000-4000-8000-000000000093';
+  delete from public.tenants where id = '00000000-0000-4000-8000-000000000093';"
+psql_query < "$company_migration" > "$proof_log"
+echo 'Unsafe pre-D1 migration transactional-failure proof passed'
 
 before=$(protected_fingerprint)
 readonly before

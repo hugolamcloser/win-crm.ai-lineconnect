@@ -25,5 +25,7 @@ revoke update (
   encryption_key_version, token_expires_at, granted_scopes
 ) on public.ghl_marketplace_installations from service_role;
 grant insert, update on public.ghl_marketplace_installations to service_role;
+alter table public.ghl_marketplace_installations
+  drop constraint ghl_marketplace_installations_null_company_safety_check;
 alter table public.ghl_marketplace_installations drop column company_id;
 commit;

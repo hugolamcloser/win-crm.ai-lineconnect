@@ -7,6 +7,23 @@ alter table public.ghl_marketplace_installations
   add column company_id text
   check (company_id is null or company_id ~ '^[A-Za-z0-9_-]{1,128}$');
 
+alter table public.ghl_marketplace_installations
+  add constraint ghl_marketplace_installations_null_company_safety_check
+  check (
+    company_id is not null
+    or (
+      status <> 'active'
+      and access_token_ciphertext is null
+      and refresh_token_ciphertext is null
+      and encryption_key_version is null
+      and token_expires_at is null
+      and cardinality(granted_scopes) = 0
+    )
+  ) not valid;
+
+alter table public.ghl_marketplace_installations
+  validate constraint ghl_marketplace_installations_null_company_safety_check;
+
 create function public.protect_ghl_marketplace_installation_v2()
 returns trigger language plpgsql security definer
 set search_path = pg_catalog, public
