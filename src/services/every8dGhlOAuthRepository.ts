@@ -237,41 +237,69 @@ export async function getExactExistingTenantForEvery8d(
   return data[0] as Every8dGhlExactTenant;
 }
 
-export async function uninstallEvery8dGhlMarketplaceInstallation(input: {
+type Every8dGhlUninstallIdentity = {
   marketplaceAppId: string;
   oauthClientId: string;
   locationId: string;
   companyId: string;
   conversationProviderId: string;
-}): Promise<Every8dGhlMarketplaceInstallation | null> {
-  const supabase = getSupabase();
-  const { data, error } = await supabase
-    .from("ghl_marketplace_installations")
-    .select("*")
-    .eq("app_namespace", "every8d_connect")
-    .eq("marketplace_app_id", input.marketplaceAppId)
-    .eq("oauth_client_id", input.oauthClientId)
-    .eq("location_id", input.locationId)
-    .eq("company_id", input.companyId)
-    .eq("conversation_provider_id", input.conversationProviderId)
-    .maybeSingle();
-  if (error) throwDatabaseError(error);
+};
 
-  const existing = data as Every8dGhlMarketplaceInstallation | null;
-  if (!existing) return null;
-  if (existing.status === "uninstalled") return existing;
+export function createUninstallEvery8dGhlMarketplaceInstallation(
+  getClient: Every8dGhlSupabaseGetter = getSupabase
+): (input: Every8dGhlUninstallIdentity) => Promise<Every8dGhlMarketplaceInstallation | null> {
+  return async (input) => {
+    const supabase = getClient();
+    const readExactInstallation = async (): Promise<Every8dGhlMarketplaceInstallation | null> => {
+      const { data, error } = await supabase
+        .from("ghl_marketplace_installations")
+        .select("*")
+        .eq("app_namespace", "every8d_connect")
+        .eq("marketplace_app_id", input.marketplaceAppId)
+        .eq("oauth_client_id", input.oauthClientId)
+        .eq("location_id", input.locationId)
+        .eq("company_id", input.companyId)
+        .eq("conversation_provider_id", input.conversationProviderId)
+        .maybeSingle();
+      if (error) throwDatabaseError(error);
+      return data as Every8dGhlMarketplaceInstallation | null;
+    };
 
-  const { data: uninstalledData, error: uninstallError } = await supabase
-    .from("ghl_marketplace_installations")
-    .update({
-      status: "uninstalled",
-      installation_generation: existing.installation_generation + 1
-    })
-    .eq("id", existing.id)
-    .eq("installation_generation", existing.installation_generation)
-    .eq("status", existing.status)
-    .select("*")
-    .maybeSingle();
-  if (uninstallError) throwDatabaseError(uninstallError);
-  return uninstalledData as Every8dGhlMarketplaceInstallation | null;
+    const existing = await readExactInstallation();
+    if (!existing) return null;
+    if (existing.status === "uninstalled") return existing;
+
+    const terminalGeneration = existing.installation_generation + 1;
+    const { data: uninstalledData, error: uninstallError } = await supabase
+      .from("ghl_marketplace_installations")
+      .update({
+        status: "uninstalled",
+        installation_generation: terminalGeneration
+      })
+      .eq("id", existing.id)
+      .eq("app_namespace", "every8d_connect")
+      .eq("marketplace_app_id", input.marketplaceAppId)
+      .eq("oauth_client_id", input.oauthClientId)
+      .eq("location_id", input.locationId)
+      .eq("company_id", input.companyId)
+      .eq("conversation_provider_id", input.conversationProviderId)
+      .eq("installation_generation", existing.installation_generation)
+      .eq("status", existing.status)
+      .select("*")
+      .maybeSingle();
+    if (uninstallError) throwDatabaseError(uninstallError);
+    if (uninstalledData) return uninstalledData as Every8dGhlMarketplaceInstallation;
+
+    const concurrentTerminal = await readExactInstallation();
+    if (
+      concurrentTerminal?.status === "uninstalled" &&
+      concurrentTerminal.installation_generation === terminalGeneration
+    ) {
+      return concurrentTerminal;
+    }
+    return null;
+  };
 }
+
+export const uninstallEvery8dGhlMarketplaceInstallation =
+  createUninstallEvery8dGhlMarketplaceInstallation();

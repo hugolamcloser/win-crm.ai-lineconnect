@@ -178,22 +178,65 @@ function getRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function getRequiredString(record: Record<string, unknown>, ...keys: string[]): string | null {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+function getAliasedValue<T>(input: {
+  record: Record<string, unknown>;
+  keys: string[];
+  parse(value: unknown): T | null;
+  equals?(left: T, right: T): boolean;
+}): T | null | undefined {
+  let result: T | undefined;
+  let supplied = false;
+
+  for (const key of input.keys) {
+    if (!Object.prototype.hasOwnProperty.call(input.record, key)) continue;
+    const parsed = input.parse(input.record[key]);
+    if (parsed === null) return null;
+    if (supplied && !(input.equals ?? Object.is)(result as T, parsed)) return null;
+    supplied = true;
+    result = parsed;
   }
-  return null;
+
+  return supplied ? result : undefined;
 }
 
-function getOptionalString(record: Record<string, unknown>, ...keys: string[]): string | null | undefined {
-  for (const key of keys) {
-    if (Object.prototype.hasOwnProperty.call(record, key)) {
-      const value = record[key];
-      return typeof value === "string" && value.trim() ? value.trim() : null;
-    }
-  }
-  return undefined;
+function parseNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function parseExpirySeconds(value: unknown): number | null {
+  const parsed = typeof value === "number"
+    ? value
+    : typeof value === "string" && value.trim()
+      ? Number(value)
+      : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function parseStringArray(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+    ? [...value]
+    : null;
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function tokenAlias<T>(
+  record: Record<string, unknown>,
+  keys: string[],
+  parse: (value: unknown) => T | null,
+  equals?: (left: T, right: T) => boolean
+): T | null | undefined {
+  return getAliasedValue({ record, keys, parse, equals });
+}
+
+function ownershipModeAlias(record: Record<string, unknown>, camel: string, snake: string): boolean | null | undefined {
+  return tokenAlias(record, [camel, snake], parseBoolean);
 }
 
 function validateLocationTokenResponse(
@@ -204,33 +247,28 @@ function validateLocationTokenResponse(
   const record = getRecord(value);
   if (!record) throw oauthError("token_response_rejected", "HighLevel OAuth token response was rejected");
 
-  const accessToken = getRequiredString(record, "access_token", "accessToken");
-  const refreshToken = getRequiredString(record, "refresh_token", "refreshToken");
-  const userType = getRequiredString(record, "userType", "user_type");
-  const locationId = getRequiredString(record, "locationId", "location_id");
-  const companyId = getRequiredString(record, "companyId", "company_id");
-  const appId = getOptionalString(record, "appId", "app_id");
-  const expiresInValue = record.expires_in ?? record.expiresIn;
-  const expiresIn = typeof expiresInValue === "number"
-    ? expiresInValue
-    : typeof expiresInValue === "string" && expiresInValue.trim()
-      ? Number(expiresInValue)
-      : Number.NaN;
-  const scopes = normalizeScopes(record.scopes ?? record.scope);
+  const accessToken = tokenAlias(record, ["access_token", "accessToken"], parseNonEmptyString);
+  const refreshToken = tokenAlias(record, ["refresh_token", "refreshToken"], parseNonEmptyString);
+  const userType = tokenAlias(record, ["userType", "user_type"], parseNonEmptyString);
+  const locationId = tokenAlias(record, ["locationId", "location_id"], parseNonEmptyString);
+  const companyId = tokenAlias(record, ["companyId", "company_id"], parseNonEmptyString);
+  const appId = tokenAlias(record, ["appId", "app_id"], parseNonEmptyString);
+  const expiresIn = tokenAlias(record, ["expires_in", "expiresIn"], parseExpirySeconds) ?? Number.NaN;
+  const scopes = tokenAlias(record, ["scopes", "scope"], normalizeScopes, sameStrings);
   const expectedScopes = [...config.requiredScopes].sort();
-  const approvedLocations = record.approvedLocations ?? record.approved_locations;
-
-  const ownershipModeFields = [
-    record.isBulkInstallation,
-    record.is_bulk_installation,
-    record.installToFutureLocations,
-    record.install_to_future_locations,
-    record.approveAllLocations,
-    record.approve_all_locations
-  ];
-  const ownershipModeRejected = ownershipModeFields.some(
-    (flag) => flag !== undefined && flag !== false
+  const approvedLocations = tokenAlias(
+    record,
+    ["approvedLocations", "approved_locations"],
+    parseStringArray,
+    sameStringArray
   );
+
+  const ownershipModes = [
+    ownershipModeAlias(record, "isBulkInstallation", "is_bulk_installation"),
+    ownershipModeAlias(record, "installToFutureLocations", "install_to_future_locations"),
+    ownershipModeAlias(record, "approveAllLocations", "approve_all_locations")
+  ];
+  const ownershipModeRejected = ownershipModes.some((flag) => flag === null || flag === true);
   const approvedLocationsValid = approvedLocations === undefined || (
     Array.isArray(approvedLocations) &&
     approvedLocations.length === 1 &&

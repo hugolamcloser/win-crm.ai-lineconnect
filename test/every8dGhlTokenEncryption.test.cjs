@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const test = require("node:test");
 
 const {
@@ -81,6 +82,41 @@ test("AES-256-GCM token encryption round trips with installation-bound AAD", () 
     decrypt(encrypted.ciphertext),
     "synthetic-access-token"
   );
+});
+
+test("a valid synthetic Phase 2G-C version-1 envelope fails closed", () => {
+  const key = Buffer.from(keyV1, "base64");
+  const iv = Buffer.alloc(12, 0x33);
+  const phase2gCAad = Buffer.from(JSON.stringify({
+    version: 1,
+    installationId: context.installationId,
+    installationGeneration: context.installationGeneration,
+    marketplaceAppId: context.marketplaceAppId,
+    oauthClientId: context.oauthClientId,
+    tenantId: context.tenantId,
+    locationId: context.locationId,
+    purpose: context.purpose
+  }), "utf8");
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
+  cipher.setAAD(phase2gCAad);
+  const ciphertext = Buffer.concat([
+    cipher.update("synthetic-phase-2g-c-token", "utf8"),
+    cipher.final()
+  ]);
+  const envelope = encodeEnvelope({
+    version: 1,
+    keyVersion: "v1",
+    iv: iv.toString("base64url"),
+    ciphertext: ciphertext.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url")
+  });
+
+  assert.throws(() => decryptEvery8dGhlOAuthToken({
+    ciphertext: envelope,
+    expectedKeyVersion: "v1",
+    keys: keys(),
+    context
+  }), /OAuth token decryption failed/);
 });
 
 test("token decryption rejects malformed outer Base64URL encodings", () => {

@@ -281,6 +281,60 @@ test("exact Location installation consumes once and persists only encrypted cred
   }), refreshToken);
 });
 
+test("matching token response aliases are accepted as one semantic value", async () => {
+  const harness = createHarness({
+    tokenResponse: locationToken({
+      accessToken,
+      refreshToken,
+      expiresIn: "3600",
+      scopes: ["locations.readonly"],
+      user_type: "Location",
+      location_id: "location-98",
+      company_id: "company-98",
+      app_id: "every8d-app-98",
+      is_bulk_installation: false,
+      install_to_future_locations: false,
+      approve_all_locations: false,
+      approved_locations: ["location-98"]
+    })
+  });
+  const initiation = await harness.initiate();
+
+  assert.deepEqual(await harness.callback(initiation), { status: "connected" });
+  assert.equal(harness.persistCalls, 1);
+});
+
+for (const [name, conflictingAlias] of [
+  ["company", { company_id: "foreign-company" }],
+  ["location", { location_id: "foreign-location" }],
+  ["app", { app_id: "foreign-app" }],
+  ["user type", { user_type: "Company" }],
+  ["access token", { accessToken: "conflicting-access-token" }],
+  ["refresh token", { refreshToken: "conflicting-refresh-token" }],
+  ["expiry", { expiresIn: 7200 }],
+  ["bulk ownership mode", { is_bulk_installation: true }],
+  ["future-location ownership mode", { install_to_future_locations: true }],
+  ["all-location ownership mode", { approve_all_locations: true }],
+  ["approved locations", { approved_locations: ["foreign-location"] }],
+  ["scopes", { scopes: ["locations.readonly", "contacts.write"] }]
+]) {
+  test(`conflicting ${name} aliases are rejected before credential persistence`, async () => {
+    const harness = createHarness({ tokenResponse: locationToken(conflictingAlias) });
+    const initiation = await harness.initiate();
+
+    await assert.rejects(
+      () => harness.callback(initiation),
+      (error) => error instanceof Every8dGhlOAuthError &&
+        error.code === "token_response_rejected" &&
+        !error.message.includes("conflicting") &&
+        !JSON.stringify(error).includes("foreign-") &&
+        !JSON.stringify(error).includes("conflicting-access-token") &&
+        !JSON.stringify(error).includes("conflicting-refresh-token")
+    );
+    assert.equal(harness.persistCalls, 0);
+  });
+}
+
 test("equivalent PostgREST timestamptz representation is accepted after persistence", async () => {
   const harness = createHarness({ persistedExpiresAt: "2026-09-21T13:00:00+00:00" });
   const initiation = await harness.initiate();

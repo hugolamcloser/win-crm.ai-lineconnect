@@ -52,9 +52,38 @@ select pg_temp.assert_true(
     where id = '10000000-0000-4000-8000-000000000100'),
   'legacy row remains nullable without false backfill'
 );
+select pg_temp.reject($q$insert into public.ghl_marketplace_installations
+  (marketplace_app_id, oauth_client_id, tenant_id, location_id, conversation_provider_id, status)
+  values ('issue100-null-active', 'issue100-client', '00000000-0000-4000-8000-000000000100',
+    'issue100-location-a', 'issue100-provider', 'active')$q$, '23514', 'NULL-company active insert');
+select pg_temp.reject($q$insert into public.ghl_marketplace_installations
+  (marketplace_app_id, oauth_client_id, tenant_id, location_id, conversation_provider_id,
+    access_token_ciphertext, refresh_token_ciphertext, encryption_key_version, token_expires_at, granted_scopes)
+  values ('issue100-null-credentials', 'issue100-client', '00000000-0000-4000-8000-000000000100',
+    'issue100-location-a', 'issue100-provider', decode('aa', 'hex'), decode('bb', 'hex'),
+    'synthetic-v2', now() + interval '1 hour', array['locations.readonly'])$q$, '23514', 'NULL-company credential insert');
+
+-- NULL-company history remains representable but can never become active or credential-bearing.
+set local role service_role;
+select pg_temp.reject($q$update public.ghl_marketplace_installations set status = 'active'
+  where id = '10000000-0000-4000-8000-000000000100'$q$, '23514', 'NULL-company active status');
+select pg_temp.reject($q$update public.ghl_marketplace_installations set access_token_ciphertext = decode('aa', 'hex')
+  where id = '10000000-0000-4000-8000-000000000100'$q$, '23514', 'NULL-company access ciphertext');
+select pg_temp.reject($q$update public.ghl_marketplace_installations set refresh_token_ciphertext = decode('bb', 'hex')
+  where id = '10000000-0000-4000-8000-000000000100'$q$, '23514', 'NULL-company refresh ciphertext');
+select pg_temp.reject($q$update public.ghl_marketplace_installations set encryption_key_version = 'synthetic-v2'
+  where id = '10000000-0000-4000-8000-000000000100'$q$, '23514', 'NULL-company key version');
+select pg_temp.reject($q$update public.ghl_marketplace_installations set token_expires_at = now() + interval '1 hour'
+  where id = '10000000-0000-4000-8000-000000000100'$q$, '23514', 'NULL-company token expiry');
+select pg_temp.reject($q$update public.ghl_marketplace_installations set granted_scopes = array['locations.readonly']
+  where id = '10000000-0000-4000-8000-000000000100'$q$, '23514', 'NULL-company scopes');
+select pg_temp.reject($q$update public.ghl_marketplace_installations
+  set access_token_ciphertext = decode('aa', 'hex'), refresh_token_ciphertext = decode('bb', 'hex'),
+    encryption_key_version = 'synthetic-v2', token_expires_at = now() + interval '1 hour',
+    granted_scopes = array['locations.readonly']
+  where id = '10000000-0000-4000-8000-000000000100'$q$, '23514', 'NULL-company complete credential set');
 
 -- Service role cannot invent ownership through direct INSERT or company UPDATE.
-set local role service_role;
 select pg_temp.reject($q$insert into public.ghl_marketplace_installations
   (marketplace_app_id, oauth_client_id, tenant_id, location_id, company_id, conversation_provider_id)
   values ('issue100-direct', 'issue100-direct', '00000000-0000-4000-8000-000000000101',
@@ -72,6 +101,22 @@ select pg_temp.assert_true(
     from public.ghl_marketplace_installations where id = '10000000-0000-4000-8000-000000000100'),
   'authoritative company binds without changing generation'
 );
+update public.ghl_marketplace_installations
+  set access_token_ciphertext = decode('aa', 'hex'), refresh_token_ciphertext = decode('bb', 'hex'),
+    encryption_key_version = 'synthetic-v2', token_expires_at = now() + interval '1 hour',
+    granted_scopes = array['locations.readonly']
+  where id = '10000000-0000-4000-8000-000000000100' and company_id = 'issue100-company';
+select pg_temp.assert_true(
+  (select access_token_ciphertext is not null and refresh_token_ciphertext is not null
+    and encryption_key_version = 'synthetic-v2' and token_expires_at is not null
+    and granted_scopes = array['locations.readonly']
+    from public.ghl_marketplace_installations where id = '10000000-0000-4000-8000-000000000100'),
+  'company-bound credential persistence succeeds'
+);
+update public.ghl_marketplace_installations
+  set access_token_ciphertext = null, refresh_token_ciphertext = null, encryption_key_version = null,
+    token_expires_at = null, granted_scopes = '{}'
+  where id = '10000000-0000-4000-8000-000000000100' and company_id = 'issue100-company';
 
 -- Duplicate same evidence is idempotent; conflicting evidence fails.
 select * from public.provision_every8d_ghl_marketplace_installation_v1(
@@ -90,6 +135,9 @@ select pg_temp.reject($q$select * from public.provision_every8d_ghl_marketplace_
 select pg_temp.reject($q$select * from public.provision_every8d_ghl_marketplace_installation_v1(
   'issue100-app', 'foreign-client', '00000000-0000-4000-8000-000000000100',
   'issue100-location-a', 'issue100-company', 'issue100-provider')$q$, '23514', 'different client');
+select pg_temp.reject($q$select * from public.provision_every8d_ghl_marketplace_installation_v1(
+  'issue100-app', 'issue100-client', '00000000-0000-4000-8000-000000000100',
+  'issue100-location-a', 'issue100-company', 'foreign-provider')$q$, '23514', 'different provider');
 select pg_temp.reject($q$select * from public.provision_every8d_ghl_marketplace_installation_v1(
   'issue100-app', 'issue100-client', '00000000-0000-4000-8000-000000000100',
   'issue100-location-b', 'issue100-company', 'issue100-provider')$q$, '23503', 'cross-bound tenant/location');
@@ -142,6 +190,8 @@ reset role;
 -- Even the database owner cannot rewrite a bound company through ordinary row mutation.
 select pg_temp.reject($q$update public.ghl_marketplace_installations set company_id = 'foreign-company'
   where id = '10000000-0000-4000-8000-000000000100'$q$, '23514', 'immutable company owner');
+select pg_temp.reject($q$update public.ghl_marketplace_installations set company_id = null
+  where id = '10000000-0000-4000-8000-000000000100'$q$, '23514', 'company ownership cannot be cleared');
 
 select pg_temp.assert_true(
   not has_table_privilege('service_role', 'public.ghl_marketplace_installations', 'INSERT')

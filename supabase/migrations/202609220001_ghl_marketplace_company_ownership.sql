@@ -30,6 +30,17 @@ begin
       raise exception 'marketplace reactivation requires a new generation' using errcode = '23514';
     end if;
   end if;
+  if new.company_id is null and (
+    new.status = 'active'
+    or new.access_token_ciphertext is not null
+    or new.refresh_token_ciphertext is not null
+    or new.encryption_key_version is not null
+    or new.token_expires_at is not null
+    or cardinality(new.granted_scopes) > 0
+  ) then
+    raise exception 'marketplace installation requires company ownership before activation or credentials'
+      using errcode = '23514';
+  end if;
   if exists (select 1 from public.tenants t where t.id = new.tenant_id
     and t.ghl_provider_id = new.conversation_provider_id) then
     raise exception 'marketplace provider must differ from the bound tenant LINE provider' using errcode = '23514';

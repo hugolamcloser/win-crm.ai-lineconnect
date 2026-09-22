@@ -51,6 +51,50 @@ wait_for_sleep() {
 assert_query "select current_database() = 'wincrm_test' and
   not exists(select 1 from public.ghl_marketplace_installations) and
   not exists(select 1 from public.ghl_marketplace_oauth_states)" 'requires empty new schema'
+
+# Prove the D1 migration against an actual row created under the pre-D1 schema.
+psql_query < "$company_rollback" > "$proof_log"
+psql_query -q -c "insert into public.tenants(id, location_id, ghl_provider_id, line_channel_id)
+  values ('00000000-0000-4000-8000-000000000094', 'issue100-forward-location', 'issue100-forward-line', 'issue100-forward-channel');
+  insert into public.ghl_marketplace_installations(
+    id, marketplace_app_id, oauth_client_id, tenant_id, location_id, conversation_provider_id,
+    status, installation_generation
+  ) values (
+    '10000000-0000-4000-8000-000000000094', 'issue100-forward-app', 'issue100-forward-client',
+    '00000000-0000-4000-8000-000000000094', 'issue100-forward-location', 'issue100-forward-provider',
+    'disabled', 4
+  );"
+forward_before=$(psql_query -Atqc "select md5(row(
+  id, app_namespace, marketplace_app_id, oauth_client_id, tenant_id, location_id,
+  conversation_provider_id, channel, provider, status, installation_generation,
+  access_token_ciphertext, refresh_token_ciphertext, encryption_key_version,
+  token_expires_at, granted_scopes, created_at, updated_at
+)::text) from public.ghl_marketplace_installations
+where id = '10000000-0000-4000-8000-000000000094'")
+readonly forward_before
+psql_query < "$company_migration" > "$proof_log"
+forward_after=$(psql_query -Atqc "select md5(row(
+  id, app_namespace, marketplace_app_id, oauth_client_id, tenant_id, location_id,
+  conversation_provider_id, channel, provider, status, installation_generation,
+  access_token_ciphertext, refresh_token_ciphertext, encryption_key_version,
+  token_expires_at, granted_scopes, created_at, updated_at
+)::text) from public.ghl_marketplace_installations
+where id = '10000000-0000-4000-8000-000000000094'")
+readonly forward_after
+[[ "$forward_before" == "$forward_after" ]] || { echo 'FAIL: D1 forward migration changed the legacy row' >&2; exit 1; }
+assert_query "select company_id is null and status = 'disabled' and installation_generation = 4
+  and access_token_ciphertext is null and refresh_token_ciphertext is null
+  and encryption_key_version is null and token_expires_at is null and cardinality(granted_scopes) = 0
+  from public.ghl_marketplace_installations where id = '10000000-0000-4000-8000-000000000094'" 'D1 forward migration preserves legacy row as safely ineligible'
+if psql_query -q -c "set role service_role; update public.ghl_marketplace_installations set status = 'active'
+  where id = '10000000-0000-4000-8000-000000000094';" > "$proof_log" 2>&1; then
+  echo 'FAIL: migrated NULL-company row became active' >&2; exit 1
+fi
+grep -Fq 'requires company ownership before activation or credentials' "$proof_log"
+psql_query -q -c "delete from public.ghl_marketplace_installations where id = '10000000-0000-4000-8000-000000000094';
+  delete from public.tenants where id = '00000000-0000-4000-8000-000000000094';"
+echo 'D1 forward migration over a pre-existing row passed'
+
 before=$(protected_fingerprint)
 readonly before
 psql_query < test/postgres/ghlMarketplaceOwnership.sql > "$proof_log"
@@ -101,6 +145,87 @@ assert_query "select count(*) = 1 and min(installation_generation) = 1
   from public.ghl_marketplace_installations
   where marketplace_app_id = 'issue100-race-app' and location_id = 'issue95-location'" 'atomic provisioning creates one row'
 echo 'Company provisioning concurrency proof passed'
+
+# Two real service-role connections contend to reactivate one uninstalled generation.
+psql_query -q -c "set role service_role;
+  select count(*) from public.provision_every8d_ghl_marketplace_installation_v1(
+    'issue100-reactivate-app', 'issue100-reactivate-client', '$tenant', 'issue95-location',
+    'issue95-company', 'issue100-reactivate-provider');
+  update public.ghl_marketplace_installations set status = 'uninstalled', installation_generation = 2
+    where marketplace_app_id = 'issue100-reactivate-app' and location_id = 'issue95-location';"
+psql_query -Atq > "$race_a_log" <<SQL &
+set application_name = 'issue100-reactivate-a';
+set statement_timeout = '10s';
+begin;
+set local role service_role;
+select count(*) from public.provision_every8d_ghl_marketplace_installation_v1(
+  'issue100-reactivate-app', 'issue100-reactivate-client', '$tenant', 'issue95-location',
+  'issue95-company', 'issue100-reactivate-provider');
+select pg_sleep(2);
+commit;
+SQL
+race_a_pid=$!
+wait_for_sleep issue100-reactivate-a
+psql_query -Atq > "$race_b_log" <<SQL &
+set statement_timeout = '10s';
+set role service_role;
+select count(*) from public.provision_every8d_ghl_marketplace_installation_v1(
+  'issue100-reactivate-app', 'issue100-reactivate-client', '$tenant', 'issue95-location',
+  'issue95-company', 'issue100-reactivate-provider');
+SQL
+race_b_pid=$!
+wait "$race_a_pid"; race_a_pid=""
+wait "$race_b_pid"; race_b_pid=""
+[[ "$(tr -d '[:space:]' < "$race_a_log")" == 1 && "$(tr -d '[:space:]' < "$race_b_log")" == 1 ]] || { echo 'FAIL: reactivation contenders did not converge' >&2; exit 1; }
+assert_query "select status = 'pending' and installation_generation = 3 and company_id = 'issue95-company'
+  and tenant_id = '$tenant' and conversation_provider_id = 'issue100-reactivate-provider'
+  from public.ghl_marketplace_installations
+  where marketplace_app_id = 'issue100-reactivate-app' and location_id = 'issue95-location'" 'concurrent reactivation advances exactly once'
+echo 'Company reactivation concurrency proof passed'
+
+# Two real service-role connections contend to bind different companies to one NULL row.
+psql_query -q -c "insert into public.ghl_marketplace_installations(
+    marketplace_app_id, oauth_client_id, tenant_id, location_id, conversation_provider_id
+  ) values ('issue100-company-race-app', 'issue100-company-race-client', '$tenant',
+    'issue95-location', 'issue100-company-race-provider');"
+psql_query -Atq > "$race_a_log" <<SQL &
+set application_name = 'issue100-company-bind-a';
+set statement_timeout = '10s';
+begin;
+set local role service_role;
+select count(*) from public.provision_every8d_ghl_marketplace_installation_v1(
+  'issue100-company-race-app', 'issue100-company-race-client', '$tenant', 'issue95-location',
+  'issue100-company-a', 'issue100-company-race-provider');
+select pg_sleep(2);
+commit;
+SQL
+race_a_pid=$!
+wait_for_sleep issue100-company-bind-a
+psql_query -Atq > "$race_b_log" 2>&1 <<SQL &
+set statement_timeout = '10s';
+set role service_role;
+select count(*) from public.provision_every8d_ghl_marketplace_installation_v1(
+  'issue100-company-race-app', 'issue100-company-race-client', '$tenant', 'issue95-location',
+  'issue100-company-b', 'issue100-company-race-provider');
+SQL
+race_b_pid=$!
+wait "$race_a_pid"; race_a_pid=""
+if wait "$race_b_pid"; then
+  echo 'FAIL: conflicting company contender unexpectedly succeeded' >&2; exit 1
+fi
+race_b_pid=""
+[[ "$(tr -d '[:space:]' < "$race_a_log")" == 1 ]] || { echo 'FAIL: authoritative company contender failed' >&2; exit 1; }
+grep -Fq 'marketplace provisioning ownership conflicted' "$race_b_log"
+assert_query "select company_id = 'issue100-company-a' and installation_generation = 1
+  and tenant_id = '$tenant' and conversation_provider_id = 'issue100-company-race-provider'
+  from public.ghl_marketplace_installations
+  where marketplace_app_id = 'issue100-company-race-app' and location_id = 'issue95-location'" 'one concurrent company binding wins exactly'
+if psql_query -q -c "update public.ghl_marketplace_installations set company_id = 'issue100-company-b'
+  where marketplace_app_id = 'issue100-company-race-app' and location_id = 'issue95-location';" > "$proof_log" 2>&1; then
+  echo 'FAIL: authoritative company changed after concurrent binding' >&2; exit 1
+fi
+grep -Fq 'company ownership is immutable' "$proof_log"
+echo 'Conflicting company-binding concurrency proof passed'
 
 psql_query -q -c "insert into public.ghl_marketplace_oauth_states
   (installation_id, installation_generation, state_hash, browser_binding_hash, redirect_uri, expires_at)
@@ -162,7 +287,9 @@ echo 'Single-use and reinstall concurrency proofs passed'
 # Owner-only cleanup of these exact synthetic rows, never service-role deletion.
 psql_query -q -c "delete from public.ghl_marketplace_oauth_states where installation_id = '$installation';
   delete from public.ghl_marketplace_installations
-    where id = '$installation' or marketplace_app_id = 'issue100-race-app';"
+    where id = '$installation' or marketplace_app_id in (
+      'issue100-race-app', 'issue100-reactivate-app', 'issue100-company-race-app'
+    );"
 
 # D1 rollback preserves nullable legacy rows and refuses unexpected dependencies atomically.
 psql_query -q -c "insert into public.ghl_marketplace_installations
