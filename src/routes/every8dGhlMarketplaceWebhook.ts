@@ -15,14 +15,21 @@ const identifier = z.string().trim().min(1).max(256);
 const lifecycleSchema = z.object({
   type: identifier,
   appId: identifier.optional(),
-  appNamespace: identifier.optional(),
+  versionId: identifier.optional(),
   installType: identifier.optional(),
   locationId: identifier.optional(),
   companyId: identifier.optional(),
+  webhookId: identifier.optional(),
   isBulkInstallation: z.boolean().optional(),
   installToFutureLocations: z.boolean().optional(),
   approveAllLocations: z.boolean().optional()
 }).passthrough();
+
+export function parseEvery8dGhlMarketplaceLifecyclePayload(
+  value: unknown
+): Every8dGhlMarketplaceLifecyclePayload {
+  return lifecycleSchema.parse(value);
+}
 
 type WebhookDependencies = {
   verifySignature(input: { rawBody: Buffer; ghlSignature?: string }): boolean;
@@ -49,7 +56,7 @@ export function createEvery8dGhlMarketplaceWebhookRouter(dependencies: WebhookDe
         throw new HttpError(401, "Invalid HighLevel lifecycle webhook signature");
       }
 
-      const payload = lifecycleSchema.parse(req.body);
+      const payload = parseEvery8dGhlMarketplaceLifecyclePayload(req.body);
       const result = await dependencies.handler(payload);
       logger.info(
         { eventType: payload.type, lifecycleStatus: result.status },

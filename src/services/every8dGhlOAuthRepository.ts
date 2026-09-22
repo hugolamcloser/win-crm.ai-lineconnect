@@ -241,7 +241,6 @@ type Every8dGhlUninstallIdentity = {
   marketplaceAppId: string;
   oauthClientId: string;
   locationId: string;
-  companyId: string;
   conversationProviderId: string;
 };
 
@@ -258,9 +257,12 @@ export function createUninstallEvery8dGhlMarketplaceInstallation(
         .eq("marketplace_app_id", input.marketplaceAppId)
         .eq("oauth_client_id", input.oauthClientId)
         .eq("location_id", input.locationId)
-        .eq("company_id", input.companyId)
         .eq("conversation_provider_id", input.conversationProviderId)
+        .eq("channel", "sms")
+        .eq("provider", "every8d")
+        .not("company_id", "is", null)
         .maybeSingle();
+      if (error?.code === "PGRST116") return null;
       if (error) throwDatabaseError(error);
       return data as Every8dGhlMarketplaceInstallation | null;
     };
@@ -281,8 +283,10 @@ export function createUninstallEvery8dGhlMarketplaceInstallation(
       .eq("marketplace_app_id", input.marketplaceAppId)
       .eq("oauth_client_id", input.oauthClientId)
       .eq("location_id", input.locationId)
-      .eq("company_id", input.companyId)
+      .eq("company_id", existing.company_id)
       .eq("conversation_provider_id", input.conversationProviderId)
+      .eq("channel", "sms")
+      .eq("provider", "every8d")
       .eq("installation_generation", existing.installation_generation)
       .eq("status", existing.status)
       .select("*")

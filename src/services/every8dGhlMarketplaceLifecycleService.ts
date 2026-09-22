@@ -4,34 +4,37 @@ import {
   type Every8dGhlOAuthConfig
 } from "../config/every8dGhlOAuth";
 import {
+  every8dGhlOAuthRepository,
   getExactExistingTenantForEvery8d,
   uninstallEvery8dGhlMarketplaceInstallation,
-  type Every8dGhlExactTenant
+  type Every8dGhlExactTenant,
+  type Every8dGhlMarketplaceInstallation
 } from "./every8dGhlOAuthRepository";
 
 export type Every8dGhlMarketplaceLifecyclePayload = {
   type: string;
   appId?: string;
-  appNamespace?: string;
+  versionId?: string;
   installType?: string;
   locationId?: string;
   companyId?: string;
+  webhookId?: string;
   isBulkInstallation?: boolean;
   installToFutureLocations?: boolean;
   approveAllLocations?: boolean;
 };
 
 export type Every8dGhlMarketplaceLifecycleResult = {
-  status: "pending" | "uninstalled";
+  status: "pending" | "active" | "uninstalled";
   installationId: string;
   installationGeneration: number;
 };
 
 export class Every8dGhlMarketplaceLifecycleError extends Error {
-  readonly code: "lifecycle_disabled" | "lifecycle_rejected" | "tenant_not_exact" | "provisioning_blocked" | "ownership_conflict";
+  readonly code: "lifecycle_disabled" | "lifecycle_rejected" | "tenant_not_exact" | "ownership_conflict";
 
   constructor(
-    code: "lifecycle_disabled" | "lifecycle_rejected" | "tenant_not_exact" | "provisioning_blocked" | "ownership_conflict",
+    code: "lifecycle_disabled" | "lifecycle_rejected" | "tenant_not_exact" | "ownership_conflict",
     message: string
   ) {
     super(message);
@@ -43,14 +46,23 @@ export class Every8dGhlMarketplaceLifecycleError extends Error {
 type LifecycleDependencies = {
   config: Every8dGhlOAuthConfig;
   getExactTenant(locationId: string): Promise<Every8dGhlExactTenant | null>;
+  provisionInstallation(input: {
+    marketplaceAppId: string;
+    oauthClientId: string;
+    tenantId: string;
+    locationId: string;
+    companyId: string;
+    conversationProviderId: string;
+  }): Promise<Every8dGhlMarketplaceInstallation>;
   uninstallInstallation(input: {
     marketplaceAppId: string;
     oauthClientId: string;
     locationId: string;
-    companyId: string;
     conversationProviderId: string;
   }): Promise<{ id: string; status: string; installation_generation: number } | null>;
 };
+
+const exactOwnershipIdentifier = /^[A-Za-z0-9_-]{1,128}$/;
 
 function rejected(): never {
   throw new Every8dGhlMarketplaceLifecycleError(
@@ -63,6 +75,31 @@ function hasForbiddenOwnershipMode(payload: Every8dGhlMarketplaceLifecyclePayloa
   return payload.isBulkInstallation === true ||
     payload.installToFutureLocations === true ||
     payload.approveAllLocations === true;
+}
+
+function configuredMarketplaceVersionId(config: Every8dGhlOAuthConfig): string {
+  return new URL(config.installationUrl).pathname.split("/").at(-1) ?? "";
+}
+
+function isExactProvisionedInstallation(
+  installation: Every8dGhlMarketplaceInstallation,
+  input: {
+    config: Every8dGhlOAuthConfig;
+    tenant: Every8dGhlExactTenant;
+    locationId: string;
+    companyId: string;
+  }
+): boolean {
+  return installation.app_namespace === "every8d_connect" &&
+    installation.marketplace_app_id === input.config.marketplaceAppId &&
+    installation.oauth_client_id === input.config.oauthClientId &&
+    installation.tenant_id === input.tenant.id &&
+    installation.location_id === input.locationId &&
+    installation.company_id === input.companyId &&
+    installation.conversation_provider_id === input.config.conversationProviderId &&
+    installation.channel === "sms" &&
+    installation.provider === "every8d" &&
+    (installation.status === "pending" || installation.status === "active");
 }
 
 export function createEvery8dGhlMarketplaceLifecycleService(
@@ -91,16 +128,23 @@ export function createEvery8dGhlMarketplaceLifecycleService(
         !dependencies.config.oauthClientId ||
         !dependencies.config.conversationProviderId ||
         payload.appId !== dependencies.config.marketplaceAppId ||
-        payload.appNamespace !== "every8d_connect" ||
-        payload.installType !== "Location" ||
+        payload.versionId !== configuredMarketplaceVersionId(dependencies.config) ||
         !payload.locationId ||
-        !payload.companyId ||
+        !exactOwnershipIdentifier.test(payload.locationId) ||
         hasForbiddenOwnershipMode(payload)
       ) {
         rejected();
       }
 
       if (payload.type === "INSTALL") {
+        if (
+          payload.installType !== "Location" ||
+          !payload.companyId ||
+          !exactOwnershipIdentifier.test(payload.companyId)
+        ) {
+          rejected();
+        }
+
         const tenant = await dependencies.getExactTenant(payload.locationId);
         if (
           !tenant ||
@@ -113,13 +157,32 @@ export function createEvery8dGhlMarketplaceLifecycleService(
           );
         }
 
-        // Company-aware atomic provisioning now exists, but the public HighLevel lifecycle
-        // examples do not consistently establish appNamespace/installType/version/webhook fields.
-        // Keep automatic INSERT blocked until the signed sandbox payload contract is reviewed.
-        throw new Every8dGhlMarketplaceLifecycleError(
-          "provisioning_blocked",
-          "EVERY8D Connect installation provisioning requires a confirmed sandbox lifecycle contract"
-        );
+        const installation = await dependencies.provisionInstallation({
+          marketplaceAppId: dependencies.config.marketplaceAppId,
+          oauthClientId: dependencies.config.oauthClientId,
+          tenantId: tenant.id,
+          locationId: payload.locationId,
+          companyId: payload.companyId,
+          conversationProviderId: dependencies.config.conversationProviderId
+        });
+
+        if (!isExactProvisionedInstallation(installation, {
+          config: dependencies.config,
+          tenant,
+          locationId: payload.locationId,
+          companyId: payload.companyId
+        })) {
+          throw new Every8dGhlMarketplaceLifecycleError(
+            "ownership_conflict",
+            "EVERY8D Connect installation ownership conflicted"
+          );
+        }
+
+        return {
+          status: installation.status === "active" ? "active" : "pending",
+          installationId: installation.id,
+          installationGeneration: installation.installation_generation
+        };
       }
 
       if (payload.type === "UNINSTALL") {
@@ -127,7 +190,6 @@ export function createEvery8dGhlMarketplaceLifecycleService(
           marketplaceAppId: dependencies.config.marketplaceAppId,
           oauthClientId: dependencies.config.oauthClientId,
           locationId: payload.locationId,
-          companyId: payload.companyId,
           conversationProviderId: dependencies.config.conversationProviderId
         });
 
@@ -153,5 +215,6 @@ export function createEvery8dGhlMarketplaceLifecycleService(
 export const every8dGhlMarketplaceLifecycleService = createEvery8dGhlMarketplaceLifecycleService({
   config: readEvery8dGhlOAuthConfig(),
   getExactTenant: getExactExistingTenantForEvery8d,
+  provisionInstallation: (input) => every8dGhlOAuthRepository.provisionInstallation(input),
   uninstallInstallation: uninstallEvery8dGhlMarketplaceInstallation
 });

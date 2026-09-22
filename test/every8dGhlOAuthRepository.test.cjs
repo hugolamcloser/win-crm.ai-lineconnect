@@ -7,7 +7,7 @@ const {
 } = require("../dist/services/every8dGhlOAuthRepository");
 
 function createPostgrestHarness(returnedRow) {
-  const calls = { table: null, update: null, eq: [], in: [], rpc: null };
+  const calls = { table: null, update: null, eq: [], in: [], not: [], rpc: null };
   const query = {
     update(value) {
       calls.update = value;
@@ -19,6 +19,10 @@ function createPostgrestHarness(returnedRow) {
     },
     in(column, value) {
       calls.in.push([column, value]);
+      return query;
+    },
+    not(column, operator, value) {
+      calls.not.push([column, operator, value]);
       return query;
     },
     select() {
@@ -179,14 +183,26 @@ function createUninstallHarness(overrides = {}) {
 
   function query() {
     const filters = [];
+    const notNullColumns = [];
     let updateValue = null;
     return {
       select() { return this; },
       update(value) { updateValue = value; return this; },
       eq(column, value) { filters.push([column, value]); return this; },
+      not(column, operator, value) {
+        assert.equal(operator, "is");
+        assert.equal(value, null);
+        notNullColumns.push(column);
+        return this;
+      },
       async maybeSingle() {
+        if (overrides.ambiguous && !updateValue) {
+          return { data: null, error: { code: "PGRST116", message: "multiple rows" } };
+        }
         if (!updateValue) {
-          const snapshot = row && matches(filters) ? { ...row } : null;
+          const snapshot = row && matches(filters) && notNullColumns.every((column) => row[column] !== null)
+            ? { ...row }
+            : null;
           if (overrides.concurrentReads && initialReads < 2) {
             initialReads += 1;
             if (initialReads === 2) releaseInitialReads();
@@ -212,7 +228,6 @@ function createUninstallHarness(overrides = {}) {
     marketplaceAppId: "every8d-app-100",
     oauthClientId: "every8d-client-100",
     locationId: "location-100",
-    companyId: "company-100",
     conversationProviderId: "every8d-provider-100"
   };
 
@@ -249,11 +264,24 @@ test("concurrent duplicate uninstall callers converge on one exact terminal gene
   assert.equal(harness.updates, 1);
 });
 
+test("uninstall requires one non-null stored immutable company owner", async () => {
+  const harness = createUninstallHarness({ company_id: null });
+  assert.equal(await harness.uninstall(harness.exactInput), null);
+  assert.equal(harness.row.status, "active");
+  assert.equal(harness.updates, 0);
+});
+
+test("uninstall ambiguity fails closed without mutation", async () => {
+  const harness = createUninstallHarness({ ambiguous: true });
+  assert.equal(await harness.uninstall(harness.exactInput), null);
+  assert.equal(harness.row.status, "active");
+  assert.equal(harness.updates, 0);
+});
+
 for (const [name, changed] of [
   ["app", { marketplaceAppId: "foreign-app" }],
   ["client", { oauthClientId: "foreign-client" }],
   ["location", { locationId: "foreign-location" }],
-  ["company", { companyId: "foreign-company" }],
   ["provider", { conversationProviderId: "foreign-provider" }]
 ]) {
   test(`uninstall rejects a wrong ${name} without mutation`, async () => {
