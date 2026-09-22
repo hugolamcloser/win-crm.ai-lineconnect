@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
 const test = require("node:test");
 
 const {
@@ -14,6 +15,7 @@ const context = {
   oauthClientId: "every8d-client",
   tenantId: "00000000-0000-4000-8000-000000000098",
   locationId: "location-98",
+  companyId: "company-98",
   purpose: "access_token"
 };
 const keyV1 = Buffer.alloc(32, 0x11).toString("base64");
@@ -69,6 +71,7 @@ test("AES-256-GCM token encryption round trips with installation-bound AAD", () 
   assert.notEqual(encrypted.ciphertext.length % 4, 1);
 
   const envelope = JSON.parse(Buffer.from(encrypted.ciphertext, "base64url").toString("utf8"));
+  assert.equal(envelope.version, 2);
   for (const field of ["iv", "tag", "ciphertext"]) {
     assert.match(envelope[field], /^[A-Za-z0-9_-]+$/);
     assert.notEqual(envelope[field].length % 4, 1);
@@ -79,6 +82,41 @@ test("AES-256-GCM token encryption round trips with installation-bound AAD", () 
     decrypt(encrypted.ciphertext),
     "synthetic-access-token"
   );
+});
+
+test("a valid synthetic Phase 2G-C version-1 envelope fails closed", () => {
+  const key = Buffer.from(keyV1, "base64");
+  const iv = Buffer.alloc(12, 0x33);
+  const phase2gCAad = Buffer.from(JSON.stringify({
+    version: 1,
+    installationId: context.installationId,
+    installationGeneration: context.installationGeneration,
+    marketplaceAppId: context.marketplaceAppId,
+    oauthClientId: context.oauthClientId,
+    tenantId: context.tenantId,
+    locationId: context.locationId,
+    purpose: context.purpose
+  }), "utf8");
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv, { authTagLength: 16 });
+  cipher.setAAD(phase2gCAad);
+  const ciphertext = Buffer.concat([
+    cipher.update("synthetic-phase-2g-c-token", "utf8"),
+    cipher.final()
+  ]);
+  const envelope = encodeEnvelope({
+    version: 1,
+    keyVersion: "v1",
+    iv: iv.toString("base64url"),
+    ciphertext: ciphertext.toString("base64url"),
+    tag: cipher.getAuthTag().toString("base64url")
+  });
+
+  assert.throws(() => decryptEvery8dGhlOAuthToken({
+    ciphertext: envelope,
+    expectedKeyVersion: "v1",
+    keys: keys(),
+    context
+  }), /OAuth token decryption failed/);
 });
 
 test("token decryption rejects malformed outer Base64URL encodings", () => {
@@ -171,6 +209,13 @@ test("token decryption rejects wrong key version, key, AAD, tag, and ciphertext"
     expectedKeyVersion: "v1",
     keys: keys(),
     context: { ...context, tenantId: "00000000-0000-4000-8000-000000000099", purpose: "refresh_token" }
+  }), /OAuth token decryption failed/);
+
+  assert.throws(() => decryptEvery8dGhlOAuthToken({
+    ciphertext: encrypted.ciphertext,
+    expectedKeyVersion: "v1",
+    keys: keys(),
+    context: { ...context, companyId: "company-foreign", purpose: "refresh_token" }
   }), /OAuth token decryption failed/);
 
   const envelope = JSON.parse(Buffer.from(encrypted.ciphertext, "base64url").toString("utf8"));

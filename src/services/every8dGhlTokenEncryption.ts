@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 
 const encryptionAlgorithm = "aes-256-gcm";
-const envelopeVersion = 1;
+const envelopeVersion = 2;
 const ivLength = 12;
 const tagLength = 16;
 const keyVersionPattern = /^[A-Za-z0-9_.-]{1,128}$/;
@@ -16,11 +16,12 @@ export type Every8dGhlOAuthTokenContext = {
   oauthClientId: string;
   tenantId: string;
   locationId: string;
+  companyId: string;
   purpose: "access_token" | "refresh_token";
 };
 
 type EncryptionEnvelope = {
-  version: 1;
+  version: 2;
   keyVersion: string;
   iv: string;
   ciphertext: string;
@@ -100,6 +101,7 @@ function buildAad(context: Every8dGhlOAuthTokenContext): Buffer {
     oauthClientId: context.oauthClientId,
     tenantId: context.tenantId,
     locationId: context.locationId,
+    companyId: context.companyId,
     purpose: context.purpose
   }), "utf8");
 }

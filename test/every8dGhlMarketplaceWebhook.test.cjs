@@ -45,6 +45,7 @@ function installPayload(overrides = {}) {
 function createHarness(options = {}) {
   let tenantReads = 0;
   let uninstalls = 0;
+  let uninstallInput = null;
   const service = createEvery8dGhlMarketplaceLifecycleService({
     config: config(options.config),
     getExactTenant: async () => {
@@ -53,8 +54,9 @@ function createHarness(options = {}) {
         ? { id: "00000000-0000-4000-8000-000000000098", location_id: "location-98", ghl_provider_id: "line-provider" }
         : options.tenant;
     },
-    uninstallInstallation: async () => {
+    uninstallInstallation: async (input) => {
       uninstalls += 1;
+      uninstallInput = input;
       return options.uninstallResult === undefined
         ? { id: "installation-98", status: "uninstalled", installation_generation: 2 }
         : options.uninstallResult;
@@ -65,14 +67,15 @@ function createHarness(options = {}) {
     service,
     get tenantReads() { return tenantReads; },
     get uninstalls() { return uninstalls; },
+    get uninstallInput() { return uninstallInput; },
   };
 }
 
-test("signed Location INSTALL validates an exact existing tenant then stops on missing immutable company binding", async () => {
+test("signed Location INSTALL validates exact ownership then stops pending sandbox lifecycle field proof", async () => {
   const harness = createHarness();
   await assert.rejects(
     () => harness.service.handle(installPayload()),
-    (error) => error.code === "provisioning_blocked" && /company binding/.test(error.message)
+    (error) => error.code === "provisioning_blocked" && /sandbox lifecycle contract/.test(error.message)
   );
   assert.equal(harness.tenantReads, 1);
   assert.equal(harness.uninstalls, 0);
@@ -121,19 +124,47 @@ test("Location UNINSTALL invalidates only the exact configured installation", as
     appId: "every8d-app-98",
     appNamespace: "every8d_connect",
     installType: "Location",
-    locationId: "location-98"
+    locationId: "location-98",
+    companyId: "company-98"
   });
 
   assert.deepEqual(result, { status: "uninstalled", installationId: "installation-98", installationGeneration: 2 });
   assert.equal(harness.tenantReads, 0);
   assert.equal(harness.uninstalls, 1);
+  assert.deepEqual(harness.uninstallInput, {
+    marketplaceAppId: "every8d-app-98",
+    oauthClientId: "every8d-client-98",
+    locationId: "location-98",
+    companyId: "company-98",
+    conversationProviderId: "every8d-provider-98"
+  });
+});
+
+test("Location UNINSTALL company mismatch fails closed without invalidation", async () => {
+  const harness = createHarness({ uninstallResult: null });
+
+  await assert.rejects(
+    () => harness.service.handle({
+      type: "UNINSTALL",
+      appId: "every8d-app-98",
+      appNamespace: "every8d_connect",
+      installType: "Location",
+      locationId: "location-98",
+      companyId: "foreign-company"
+    }),
+    (error) => error.code === "ownership_conflict"
+  );
+
+  assert.equal(harness.uninstalls, 1);
+  assert.equal(harness.uninstallInput.companyId, "foreign-company");
 });
 
 for (const [name, override] of [
   ["missing namespace", { appNamespace: undefined }],
   ["wrong namespace", { appNamespace: "line_connect" }],
   ["missing install type", { installType: undefined }],
-  ["wrong install type", { installType: "Agency" }]
+  ["wrong install type", { installType: "Agency" }],
+  ["missing company", { companyId: undefined }]
 ]) {
   test(`Location UNINSTALL rejects ${name} before mutation`, async () => {
     const harness = createHarness();
@@ -144,6 +175,7 @@ for (const [name, override] of [
         appNamespace: "every8d_connect",
         installType: "Location",
         locationId: "location-98",
+        companyId: "company-98",
         ...override
       }),
       /lifecycle evidence was rejected/

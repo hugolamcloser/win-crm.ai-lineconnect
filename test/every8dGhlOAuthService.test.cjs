@@ -47,6 +47,7 @@ function installation(overrides = {}) {
     oauth_client_id: "every8d-client-98",
     tenant_id: "00000000-0000-4000-8000-000000000098",
     location_id: "location-98",
+    company_id: "company-98",
     conversation_provider_id: "every8d-provider-98",
     channel: "sms",
     provider: "every8d",
@@ -255,6 +256,7 @@ test("exact Location installation consumes once and persists only encrypted cred
   assert.equal(JSON.stringify(harness.persisted).includes(refreshToken), false);
   assert.deepEqual(harness.persisted.grantedScopes, ["locations.readonly"]);
   assert.equal(harness.persisted.encryptionKeyVersion, "test-v1");
+  assert.equal(harness.persisted.companyId, "company-98");
 
   const aadBase = {
     installationId: installation().id,
@@ -262,7 +264,8 @@ test("exact Location installation consumes once and persists only encrypted cred
     marketplaceAppId: "every8d-app-98",
     oauthClientId: "every8d-client-98",
     tenantId: "00000000-0000-4000-8000-000000000098",
-    locationId: "location-98"
+    locationId: "location-98",
+    companyId: "company-98"
   };
   assert.equal(decryptEvery8dGhlOAuthToken({
     ciphertext: harness.persisted.accessTokenCiphertext,
@@ -277,6 +280,60 @@ test("exact Location installation consumes once and persists only encrypted cred
     context: { ...aadBase, purpose: "refresh_token" }
   }), refreshToken);
 });
+
+test("matching token response aliases are accepted as one semantic value", async () => {
+  const harness = createHarness({
+    tokenResponse: locationToken({
+      accessToken,
+      refreshToken,
+      expiresIn: "3600",
+      scopes: ["locations.readonly"],
+      user_type: "Location",
+      location_id: "location-98",
+      company_id: "company-98",
+      app_id: "every8d-app-98",
+      is_bulk_installation: false,
+      install_to_future_locations: false,
+      approve_all_locations: false,
+      approved_locations: ["location-98"]
+    })
+  });
+  const initiation = await harness.initiate();
+
+  assert.deepEqual(await harness.callback(initiation), { status: "connected" });
+  assert.equal(harness.persistCalls, 1);
+});
+
+for (const [name, conflictingAlias] of [
+  ["company", { company_id: "foreign-company" }],
+  ["location", { location_id: "foreign-location" }],
+  ["app", { app_id: "foreign-app" }],
+  ["user type", { user_type: "Company" }],
+  ["access token", { accessToken: "conflicting-access-token" }],
+  ["refresh token", { refreshToken: "conflicting-refresh-token" }],
+  ["expiry", { expiresIn: 7200 }],
+  ["bulk ownership mode", { is_bulk_installation: true }],
+  ["future-location ownership mode", { install_to_future_locations: true }],
+  ["all-location ownership mode", { approve_all_locations: true }],
+  ["approved locations", { approved_locations: ["foreign-location"] }],
+  ["scopes", { scopes: ["locations.readonly", "contacts.write"] }]
+]) {
+  test(`conflicting ${name} aliases are rejected before credential persistence`, async () => {
+    const harness = createHarness({ tokenResponse: locationToken(conflictingAlias) });
+    const initiation = await harness.initiate();
+
+    await assert.rejects(
+      () => harness.callback(initiation),
+      (error) => error instanceof Every8dGhlOAuthError &&
+        error.code === "token_response_rejected" &&
+        !error.message.includes("conflicting") &&
+        !JSON.stringify(error).includes("foreign-") &&
+        !JSON.stringify(error).includes("conflicting-access-token") &&
+        !JSON.stringify(error).includes("conflicting-refresh-token")
+    );
+    assert.equal(harness.persistCalls, 0);
+  });
+}
 
 test("equivalent PostgREST timestamptz representation is accepted after persistence", async () => {
   const harness = createHarness({ persistedExpiresAt: "2026-09-21T13:00:00+00:00" });
@@ -312,7 +369,8 @@ for (const [name, changed] of [
   ["wrong app", { marketplace_app_id: "foreign-app" }],
   ["wrong client", { oauth_client_id: "foreign-client" }],
   ["wrong tenant", { tenant_id: "00000000-0000-4000-8000-000000000099" }],
-  ["wrong location", { location_id: "foreign-location" }]
+  ["wrong location", { location_id: "foreign-location" }],
+  ["missing company", { company_id: null }]
 ]) {
   test(`${name} installation context fails before state persistence or exchange`, async () => {
     const expectedId = installation().id;
@@ -339,6 +397,8 @@ for (const [name, tokenResponse] of [
   ["foreign approved location", locationToken({ approvedLocations: ["foreign-location"] })],
   ["wrong app response", locationToken({ appId: "foreign-app" })],
   ["wrong location response", locationToken({ locationId: "foreign-location" })],
+  ["missing company response", locationToken({ companyId: undefined })],
+  ["wrong company response", locationToken({ companyId: "foreign-company" })],
   ["unexpected scope", locationToken({ scope: "locations.readonly contacts.write" })]
 ]) {
   test(`${name} is rejected after permanent state consumption and before persistence`, async () => {
@@ -450,7 +510,8 @@ test("exchange failures expose no authorization code, state, binding, token, or 
 test("EVERY8D OAuth source has no legacy LINE OAuth, tenant creation, SMS, or EVERY8D transport dependency", () => {
   const source = [
     "src/services/every8dGhlOAuthService.ts",
-    "src/services/every8dGhlOAuthRepository.ts"
+    "src/services/every8dGhlOAuthRepository.ts",
+    "src/services/every8dGhlMarketplaceLifecycleService.ts"
   ].map((file) => fs.readFileSync(path.join(process.cwd(), file), "utf8")).join("\n");
 
   for (const forbidden of [
@@ -461,7 +522,10 @@ test("EVERY8D OAuth source has no legacy LINE OAuth, tenant creation, SMS, or EV
     "GHL_CUSTOM_PROVIDER_ID",
     "ghlSmsProviderOutboundService",
     "consumeGhlSmsControlledLiveAuthorization",
-    "every8dClient"
+    "every8dClient",
+    "SmsOutboundService",
+    "Every8dSmsProvider",
+    "Every8dClient"
   ]) {
     assert.equal(source.includes(forbidden), false, forbidden);
   }
