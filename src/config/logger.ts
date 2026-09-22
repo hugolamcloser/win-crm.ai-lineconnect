@@ -85,7 +85,9 @@ export const logRedactionPaths = [
   "config.LINE_CHANNEL_SECRET",
   "config.LINE_CHANNEL_ACCESS_TOKEN",
   "config.GHL_PRIVATE_INTEGRATION_TOKEN",
-  "config.GHL_OAUTH_CLIENT_SECRET"
+  "config.GHL_OAUTH_CLIENT_SECRET",
+  "config.EVERY8D_GHL_OAUTH_CLIENT_SECRET",
+  "config.EVERY8D_GHL_OAUTH_ENCRYPTION_KEYS"
 ] as const;
 
 export const logger = pino({

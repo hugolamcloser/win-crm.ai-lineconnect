@@ -9,6 +9,8 @@ import { errorHandler, notFoundHandler } from "./middleware/errors";
 import { adminRouter } from "./routes/admin";
 import { appLineRouter } from "./routes/appLine";
 import { debugRouter } from "./routes/debug";
+import { every8dGhlMarketplaceWebhookRouter } from "./routes/every8dGhlMarketplaceWebhook";
+import { every8dGhlOAuthRouter } from "./routes/every8dGhlOAuth";
 import { ghlAppInstallWebhookRouter } from "./routes/ghlAppInstallWebhook";
 import { ghlSmsProviderWebhookRouter } from "./routes/ghlSmsProviderWebhook";
 import { ghlWebhookRouter } from "./routes/ghlWebhook";
@@ -209,6 +211,8 @@ export function createApp() {
 
   app.use(healthRouter);
   app.use(debugRouter);
+  app.use(every8dGhlOAuthRouter);
+  app.use(every8dGhlMarketplaceWebhookRouter);
   app.use(oauthRouter);
   app.use(ghlAppInstallWebhookRouter);
   app.use(ghlSmsProviderWebhookRouter);

@@ -23,6 +23,60 @@ function decodeSignature(signature: string): Buffer {
   return Buffer.from(signature.replace(/^sha256=/i, "").trim(), "base64");
 }
 
+function decodeCanonicalEd25519Signature(signature: string): Buffer {
+  if (signature !== signature.trim()) {
+    throw new Error("Invalid Ed25519 signature encoding");
+  }
+
+  const encoded = signature.replace(/^sha256=/i, "");
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error("Invalid Ed25519 signature encoding");
+  }
+
+  const decoded = Buffer.from(encoded, "base64");
+  if (decoded.length !== 64 || decoded.toString("base64") !== encoded) {
+    throw new Error("Invalid Ed25519 signature encoding");
+  }
+
+  return decoded;
+}
+
+export function verifyEd25519Signature(input: {
+  rawBody: Buffer;
+  signature: string;
+  publicKey: crypto.KeyLike;
+}): boolean {
+  try {
+    return crypto.verify(
+      null,
+      input.rawBody,
+      input.publicKey,
+      decodeCanonicalEd25519Signature(input.signature)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function verifyGhlEd25519Signature(input: {
+  rawBody: Buffer;
+  ghlSignature?: string;
+}): boolean {
+  try {
+    if (!input.ghlSignature || input.ghlSignature === "N/A") {
+      return false;
+    }
+
+    return verifyEd25519Signature({
+      rawBody: input.rawBody,
+      signature: input.ghlSignature,
+      publicKey: ghlEd25519PublicKey
+    });
+  } catch {
+    return false;
+  }
+}
+
 export function verifyGhlWebhookSignature(input: {
   rawBody: Buffer;
   ghlSignature?: string;
@@ -30,12 +84,7 @@ export function verifyGhlWebhookSignature(input: {
 }): boolean {
   try {
     if (input.ghlSignature && input.ghlSignature !== "N/A") {
-      return crypto.verify(
-        null,
-        input.rawBody,
-        ghlEd25519PublicKey,
-        decodeSignature(input.ghlSignature)
-      );
+      return verifyGhlEd25519Signature(input);
     }
 
     if (input.legacySignature && input.legacySignature !== "N/A") {
