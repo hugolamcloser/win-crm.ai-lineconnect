@@ -86,7 +86,8 @@ assert_query "select company_id is null and status = 'disabled' and installation
   and access_token_ciphertext is null and refresh_token_ciphertext is null
   and encryption_key_version is null and token_expires_at is null and cardinality(granted_scopes) = 0
   from public.ghl_marketplace_installations where id = '10000000-0000-4000-8000-000000000094'" 'D1 forward migration preserves legacy row as safely ineligible'
-if psql_query -q -c "set role service_role; update public.ghl_marketplace_installations set status = 'active'
+if psql_query -q -c "set role service_role; update public.ghl_marketplace_installations
+  set status = 'active', installation_generation = 5
   where id = '10000000-0000-4000-8000-000000000094';" > "$proof_log" 2>&1; then
   echo 'FAIL: migrated NULL-company row became active' >&2; exit 1
 fi
