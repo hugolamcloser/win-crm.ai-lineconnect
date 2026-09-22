@@ -6,7 +6,7 @@ const {
 } = require("../dist/services/every8dGhlOAuthRepository");
 
 function createPostgrestHarness(returnedRow) {
-  const calls = { table: null, update: null, eq: [], in: [] };
+  const calls = { table: null, update: null, eq: [], in: [], rpc: null };
   const query = {
     update(value) {
       calls.update = value;
@@ -31,6 +31,14 @@ function createPostgrestHarness(returnedRow) {
     from(table) {
       calls.table = table;
       return query;
+    },
+    rpc(name, input) {
+      calls.rpc = { name, input };
+      return {
+        async single() {
+          return { data: returnedRow, error: null };
+        }
+      };
     }
   };
   return { calls, client };
@@ -44,6 +52,7 @@ test("repository persists encrypted credentials with exact ownership filters and
     oauth_client_id: "every8d-client-98",
     tenant_id: "00000000-0000-4000-8000-000000000098",
     location_id: "location-98",
+    company_id: "company-98",
     conversation_provider_id: "every8d-provider-98",
     channel: "sms",
     provider: "every8d",
@@ -66,6 +75,7 @@ test("repository persists encrypted credentials with exact ownership filters and
     oauthClientId: returned.oauth_client_id,
     tenantId: returned.tenant_id,
     locationId: returned.location_id,
+    companyId: returned.company_id,
     conversationProviderId: returned.conversation_provider_id,
     installationGeneration: returned.installation_generation,
     accessTokenCiphertext: "encrypted-access",
@@ -91,10 +101,52 @@ test("repository persists encrypted credentials with exact ownership filters and
     ["oauth_client_id", returned.oauth_client_id],
     ["tenant_id", returned.tenant_id],
     ["location_id", returned.location_id],
+    ["company_id", returned.company_id],
     ["conversation_provider_id", returned.conversation_provider_id],
     ["installation_generation", returned.installation_generation]
   ]);
   assert.deepEqual(harness.calls.in, [["status", ["pending", "active"]]]);
   assert.equal(JSON.stringify(harness.calls.update).includes("synthetic-access-secret"), false);
   assert.equal(JSON.stringify(harness.calls.update).includes("synthetic-refresh-secret"), false);
+});
+
+test("repository provisions company ownership only through the atomic database primitive", async () => {
+  const returned = {
+    id: "10000000-0000-4000-8000-000000000100",
+    app_namespace: "every8d_connect",
+    marketplace_app_id: "every8d-app-100",
+    oauth_client_id: "every8d-client-100",
+    tenant_id: "00000000-0000-4000-8000-000000000100",
+    location_id: "location-100",
+    company_id: "company-100",
+    conversation_provider_id: "every8d-provider-100",
+    channel: "sms",
+    provider: "every8d",
+    status: "pending",
+    installation_generation: 1
+  };
+  const harness = createPostgrestHarness(returned);
+  const repository = createEvery8dGhlOAuthRepository(() => harness.client);
+
+  const result = await repository.provisionInstallation({
+    marketplaceAppId: returned.marketplace_app_id,
+    oauthClientId: returned.oauth_client_id,
+    tenantId: returned.tenant_id,
+    locationId: returned.location_id,
+    companyId: returned.company_id,
+    conversationProviderId: returned.conversation_provider_id
+  });
+
+  assert.equal(result, returned);
+  assert.deepEqual(harness.calls.rpc, {
+    name: "provision_every8d_ghl_marketplace_installation_v1",
+    input: {
+      input_marketplace_app_id: returned.marketplace_app_id,
+      input_oauth_client_id: returned.oauth_client_id,
+      input_tenant_id: returned.tenant_id,
+      input_location_id: returned.location_id,
+      input_company_id: returned.company_id,
+      input_conversation_provider_id: returned.conversation_provider_id
+    }
+  });
 });

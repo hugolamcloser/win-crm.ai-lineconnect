@@ -133,3 +133,27 @@ test("initiation guard rejects before OAuth runtime activity", async (t) => {
   assert.equal(response.status, 401);
   assert.equal(runtimeCalls, 0);
 });
+
+test("browser-supplied company ownership is rejected before OAuth runtime activity", async (t) => {
+  let runtimeCalls = 0;
+  const runtime = {
+    initiate: async () => { runtimeCalls += 1; },
+    completeCallback: async () => { runtimeCalls += 1; }
+  };
+  const { server, baseUrl } = await startRouter({ runtime });
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}/oauth/every8d-connect/initiate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      installationId: "10000000-0000-4000-8000-000000000098",
+      tenantId: "00000000-0000-4000-8000-000000000098",
+      locationId: "location-98",
+      companyId: "browser-company"
+    })
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(runtimeCalls, 0);
+});

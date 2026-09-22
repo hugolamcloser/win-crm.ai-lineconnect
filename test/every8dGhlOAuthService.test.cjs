@@ -47,6 +47,7 @@ function installation(overrides = {}) {
     oauth_client_id: "every8d-client-98",
     tenant_id: "00000000-0000-4000-8000-000000000098",
     location_id: "location-98",
+    company_id: "company-98",
     conversation_provider_id: "every8d-provider-98",
     channel: "sms",
     provider: "every8d",
@@ -255,6 +256,7 @@ test("exact Location installation consumes once and persists only encrypted cred
   assert.equal(JSON.stringify(harness.persisted).includes(refreshToken), false);
   assert.deepEqual(harness.persisted.grantedScopes, ["locations.readonly"]);
   assert.equal(harness.persisted.encryptionKeyVersion, "test-v1");
+  assert.equal(harness.persisted.companyId, "company-98");
 
   const aadBase = {
     installationId: installation().id,
@@ -262,7 +264,8 @@ test("exact Location installation consumes once and persists only encrypted cred
     marketplaceAppId: "every8d-app-98",
     oauthClientId: "every8d-client-98",
     tenantId: "00000000-0000-4000-8000-000000000098",
-    locationId: "location-98"
+    locationId: "location-98",
+    companyId: "company-98"
   };
   assert.equal(decryptEvery8dGhlOAuthToken({
     ciphertext: harness.persisted.accessTokenCiphertext,
@@ -312,7 +315,8 @@ for (const [name, changed] of [
   ["wrong app", { marketplace_app_id: "foreign-app" }],
   ["wrong client", { oauth_client_id: "foreign-client" }],
   ["wrong tenant", { tenant_id: "00000000-0000-4000-8000-000000000099" }],
-  ["wrong location", { location_id: "foreign-location" }]
+  ["wrong location", { location_id: "foreign-location" }],
+  ["missing company", { company_id: null }]
 ]) {
   test(`${name} installation context fails before state persistence or exchange`, async () => {
     const expectedId = installation().id;
@@ -339,6 +343,8 @@ for (const [name, tokenResponse] of [
   ["foreign approved location", locationToken({ approvedLocations: ["foreign-location"] })],
   ["wrong app response", locationToken({ appId: "foreign-app" })],
   ["wrong location response", locationToken({ locationId: "foreign-location" })],
+  ["missing company response", locationToken({ companyId: undefined })],
+  ["wrong company response", locationToken({ companyId: "foreign-company" })],
   ["unexpected scope", locationToken({ scope: "locations.readonly contacts.write" })]
 ]) {
   test(`${name} is rejected after permanent state consumption and before persistence`, async () => {
@@ -450,7 +456,8 @@ test("exchange failures expose no authorization code, state, binding, token, or 
 test("EVERY8D OAuth source has no legacy LINE OAuth, tenant creation, SMS, or EVERY8D transport dependency", () => {
   const source = [
     "src/services/every8dGhlOAuthService.ts",
-    "src/services/every8dGhlOAuthRepository.ts"
+    "src/services/every8dGhlOAuthRepository.ts",
+    "src/services/every8dGhlMarketplaceLifecycleService.ts"
   ].map((file) => fs.readFileSync(path.join(process.cwd(), file), "utf8")).join("\n");
 
   for (const forbidden of [
@@ -461,7 +468,10 @@ test("EVERY8D OAuth source has no legacy LINE OAuth, tenant creation, SMS, or EV
     "GHL_CUSTOM_PROVIDER_ID",
     "ghlSmsProviderOutboundService",
     "consumeGhlSmsControlledLiveAuthorization",
-    "every8dClient"
+    "every8dClient",
+    "SmsOutboundService",
+    "Every8dSmsProvider",
+    "Every8dClient"
   ]) {
     assert.equal(source.includes(forbidden), false, forbidden);
   }

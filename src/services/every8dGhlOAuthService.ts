@@ -46,6 +46,7 @@ type Every8dGhlLocationTokenResponse = {
   scopes: string[];
   userType: "Location";
   locationId: string;
+  companyId: string;
 };
 
 type Every8dGhlOAuthRuntimeDependencies = {
@@ -107,6 +108,7 @@ function installationMatches(input: {
     installation.oauth_client_id === config.oauthClientId &&
     Boolean(installation.tenant_id) &&
     Boolean(installation.location_id) &&
+    Boolean(installation.company_id) &&
     (input.tenantId === undefined || installation.tenant_id === input.tenantId) &&
     (input.locationId === undefined || installation.location_id === input.locationId) &&
     installation.conversation_provider_id === config.conversationProviderId &&
@@ -206,8 +208,8 @@ function validateLocationTokenResponse(
   const refreshToken = getRequiredString(record, "refresh_token", "refreshToken");
   const userType = getRequiredString(record, "userType", "user_type");
   const locationId = getRequiredString(record, "locationId", "location_id");
+  const companyId = getRequiredString(record, "companyId", "company_id");
   const appId = getOptionalString(record, "appId", "app_id");
-  const companyId = getOptionalString(record, "companyId", "company_id");
   const expiresInValue = record.expires_in ?? record.expiresIn;
   const expiresIn = typeof expiresInValue === "number"
     ? expiresInValue
@@ -240,9 +242,10 @@ function validateLocationTokenResponse(
     !refreshToken ||
     userType !== "Location" ||
     locationId !== installation.location_id ||
+    !companyId ||
+    companyId !== installation.company_id ||
     appId === null ||
     (appId !== undefined && appId !== config.marketplaceAppId) ||
-    companyId === null ||
     ownershipModeRejected ||
     !approvedLocationsValid ||
     !Number.isSafeInteger(expiresIn) ||
@@ -254,7 +257,7 @@ function validateLocationTokenResponse(
     throw oauthError("token_response_rejected", "HighLevel OAuth token response was rejected");
   }
 
-  return { accessToken, refreshToken, expiresIn, scopes, userType: "Location", locationId };
+  return { accessToken, refreshToken, expiresIn, scopes, userType: "Location", locationId, companyId };
 }
 
 function stateIsEligible(input: {
@@ -410,7 +413,8 @@ export function createEvery8dGhlOAuthRuntime(
         marketplaceAppId: installation.marketplace_app_id,
         oauthClientId: installation.oauth_client_id,
         tenantId: installation.tenant_id,
-        locationId: installation.location_id
+        locationId: installation.location_id,
+        companyId: installation.company_id!
       };
       const encryptedAccess = encryptEvery8dGhlOAuthToken({
         plaintext: token.accessToken,
@@ -432,6 +436,7 @@ export function createEvery8dGhlOAuthRuntime(
         oauthClientId: installation.oauth_client_id,
         tenantId: installation.tenant_id,
         locationId: installation.location_id,
+        companyId: installation.company_id!,
         conversationProviderId: installation.conversation_provider_id,
         installationGeneration: installation.installation_generation,
         accessTokenCiphertext: encryptedAccess.ciphertext,

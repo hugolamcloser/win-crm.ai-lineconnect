@@ -68,6 +68,14 @@ select pg_temp.reject($q$insert into public.ghl_marketplace_installations
   values ('issue95-other-app', 'issue95-other-client', '00000000-0000-4000-8000-000000000095', 'issue95-location', 'issue95-line-provider')$q$,
   '23514', 'LINE provider reuse');
 
+-- Bind the legacy synthetic row through the D1 server-only ownership transition.
+set local role service_role;
+select * from public.provision_every8d_ghl_marketplace_installation_v1(
+  'issue95-every8d-app', 'issue95-every8d-client', '00000000-0000-4000-8000-000000000095',
+  'issue95-location', 'issue95-company', 'issue95-every8d-provider'
+);
+reset role;
+
 -- Exercise every ownership column, including context that could redirect token use.
 do $$
 declare assignment text;
@@ -75,6 +83,7 @@ begin
   foreach assignment in array array[
     'id = gen_random_uuid()', 'app_namespace = ''line_connect''', 'marketplace_app_id = ''other-app''',
     'oauth_client_id = ''other-client''', 'tenant_id = gen_random_uuid()', 'location_id = ''other-location''',
+    'company_id = ''other-company''',
     'conversation_provider_id = ''other-provider''', 'channel = ''line''', 'provider = ''line''',
     'created_at = created_at - interval ''1 second'''
   ] loop
@@ -90,9 +99,10 @@ select pg_temp.reject($q$update public.ghl_marketplace_installations set install
 
 -- Prove actual non-BYPASSRLS service access. Trigger reads must not need grants on LINE tables.
 set local role service_role;
-insert into public.ghl_marketplace_installations (
-  marketplace_app_id, oauth_client_id, tenant_id, location_id, conversation_provider_id
-) values ('issue95-second-app', 'issue95-second-client', '00000000-0000-4000-8000-000000000095', 'issue95-location', 'issue95-second-provider');
+select * from public.provision_every8d_ghl_marketplace_installation_v1(
+  'issue95-second-app', 'issue95-second-client', '00000000-0000-4000-8000-000000000095',
+  'issue95-location', 'issue95-company', 'issue95-second-provider'
+);
 update public.ghl_marketplace_installations set access_token_ciphertext = decode('aa', 'hex'),
   refresh_token_ciphertext = decode('bb', 'hex'), encryption_key_version = 'synthetic-v1',
   token_expires_at = now() + interval '1 hour', granted_scopes = array['contacts.readonly']
@@ -105,7 +115,7 @@ insert into public.ghl_marketplace_oauth_states (
   id, installation_id, installation_generation, state_hash, browser_binding_hash, redirect_uri, expires_at
 ) values (
   '30000000-0000-4000-8000-000000000095', '10000000-0000-4000-8000-000000000095', 1,
-  repeat('c', 64), repeat('d', 64), 'https://example.invalid/oauth/every8d/callback', now() + interval '5 minutes'
+  repeat('c', 64), repeat('d', 64), 'https://example.invalid/oauth/every8d-connect/callback', now() + interval '5 minutes'
 );
 update public.ghl_marketplace_oauth_states set consumed_at = clock_timestamp()
 where id = '30000000-0000-4000-8000-000000000095' and consumed_at is null and revoked_at is null;
@@ -151,7 +161,7 @@ create function pg_temp.new_state(hash text, installation uuid default '10000000
 returns void language sql as $$
   insert into public.ghl_marketplace_oauth_states
     (installation_id, installation_generation, state_hash, browser_binding_hash, redirect_uri, expires_at)
-  values (installation, generation, hash, repeat('d', 64), 'https://example.invalid/oauth/every8d/callback', now() + interval '5 minutes');
+  values (installation, generation, hash, repeat('d', 64), 'https://example.invalid/oauth/every8d-connect/callback', now() + interval '5 minutes');
 $$;
 select pg_temp.reject($q$select pg_temp.new_state(repeat('c', 64))$q$, '23505', 'unique state hash');
 select pg_temp.reject($q$select pg_temp.new_state(repeat('e', 64), gen_random_uuid())$q$, '23503', 'invalid installation');

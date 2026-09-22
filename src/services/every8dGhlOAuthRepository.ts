@@ -7,6 +7,7 @@ export type Every8dGhlMarketplaceInstallation = {
   oauth_client_id: string;
   tenant_id: string;
   location_id: string;
+  company_id: string | null;
   conversation_provider_id: string;
   channel: "sms";
   provider: "every8d";
@@ -45,6 +46,14 @@ export type Every8dGhlInstallationIdentity = {
 };
 
 export type Every8dGhlOAuthRepository = {
+  provisionInstallation(input: {
+    marketplaceAppId: string;
+    oauthClientId: string;
+    tenantId: string;
+    locationId: string;
+    companyId: string;
+    conversationProviderId: string;
+  }): Promise<Every8dGhlMarketplaceInstallation>;
   getEligibleInstallation(input: Every8dGhlInstallationIdentity): Promise<Every8dGhlMarketplaceInstallation | null>;
   createOAuthState(input: {
     installationId: string;
@@ -69,6 +78,7 @@ export type Every8dGhlOAuthRepository = {
     oauthClientId: string;
     tenantId: string;
     locationId: string;
+    companyId: string;
     conversationProviderId: string;
     installationGeneration: number;
     accessTokenCiphertext: string;
@@ -93,6 +103,21 @@ export function createEvery8dGhlOAuthRepository(
   getClient: Every8dGhlSupabaseGetter = getSupabase
 ): Every8dGhlOAuthRepository {
   return {
+    async provisionInstallation(input) {
+      const { data, error } = await getClient()
+        .rpc("provision_every8d_ghl_marketplace_installation_v1", {
+          input_marketplace_app_id: input.marketplaceAppId,
+          input_oauth_client_id: input.oauthClientId,
+          input_tenant_id: input.tenantId,
+          input_location_id: input.locationId,
+          input_company_id: input.companyId,
+          input_conversation_provider_id: input.conversationProviderId
+        })
+        .single();
+      if (error || !data) throwDatabaseError(error);
+      return data as Every8dGhlMarketplaceInstallation;
+    },
+
     async getEligibleInstallation(input) {
       let query = getClient()
         .from("ghl_marketplace_installations")
@@ -178,6 +203,7 @@ export function createEvery8dGhlOAuthRepository(
         .eq("oauth_client_id", input.oauthClientId)
         .eq("tenant_id", input.tenantId)
         .eq("location_id", input.locationId)
+        .eq("company_id", input.companyId)
         .eq("conversation_provider_id", input.conversationProviderId)
         .eq("installation_generation", input.installationGeneration)
         .in("status", ["pending", "active"])
@@ -215,6 +241,7 @@ export async function uninstallEvery8dGhlMarketplaceInstallation(input: {
   marketplaceAppId: string;
   oauthClientId: string;
   locationId: string;
+  companyId: string;
   conversationProviderId: string;
 }): Promise<Every8dGhlMarketplaceInstallation | null> {
   const supabase = getSupabase();
@@ -225,6 +252,7 @@ export async function uninstallEvery8dGhlMarketplaceInstallation(input: {
     .eq("marketplace_app_id", input.marketplaceAppId)
     .eq("oauth_client_id", input.oauthClientId)
     .eq("location_id", input.locationId)
+    .eq("company_id", input.companyId)
     .eq("conversation_provider_id", input.conversationProviderId)
     .maybeSingle();
   if (error) throwDatabaseError(error);

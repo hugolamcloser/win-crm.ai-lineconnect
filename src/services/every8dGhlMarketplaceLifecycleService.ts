@@ -47,6 +47,7 @@ type LifecycleDependencies = {
     marketplaceAppId: string;
     oauthClientId: string;
     locationId: string;
+    companyId: string;
     conversationProviderId: string;
   }): Promise<{ id: string; status: string; installation_generation: number } | null>;
 };
@@ -93,14 +94,13 @@ export function createEvery8dGhlMarketplaceLifecycleService(
         payload.appNamespace !== "every8d_connect" ||
         payload.installType !== "Location" ||
         !payload.locationId ||
+        !payload.companyId ||
         hasForbiddenOwnershipMode(payload)
       ) {
         rejected();
       }
 
       if (payload.type === "INSTALL") {
-        if (!payload.companyId) rejected();
-
         const tenant = await dependencies.getExactTenant(payload.locationId);
         if (
           !tenant ||
@@ -113,12 +113,12 @@ export function createEvery8dGhlMarketplaceLifecycleService(
           );
         }
 
-        // The signed event provides companyId, but the approved installation table has no
-        // immutable company binding. Do not discard that evidence or route it through the
-        // legacy LINE onboarding tables. Provisioning stays blocked pending an additive design.
+        // Company-aware atomic provisioning now exists, but the public HighLevel lifecycle
+        // examples do not consistently establish appNamespace/installType/version/webhook fields.
+        // Keep automatic INSERT blocked until the signed sandbox payload contract is reviewed.
         throw new Every8dGhlMarketplaceLifecycleError(
           "provisioning_blocked",
-          "EVERY8D Connect installation provisioning requires an approved company binding"
+          "EVERY8D Connect installation provisioning requires a confirmed sandbox lifecycle contract"
         );
       }
 
@@ -127,6 +127,7 @@ export function createEvery8dGhlMarketplaceLifecycleService(
           marketplaceAppId: dependencies.config.marketplaceAppId,
           oauthClientId: dependencies.config.oauthClientId,
           locationId: payload.locationId,
+          companyId: payload.companyId,
           conversationProviderId: dependencies.config.conversationProviderId
         });
 
