@@ -23,7 +23,12 @@
 - `npm run typecheck`: passed during implementation correction loop.
 - `npm run build`: passed as part of the full test run.
 - Local PostgreSQL probe: client 17.11 is installed, but the host lacks server catalogs (`share/postgres.bki`), Docker, and WSL; therefore no local cluster could be created and no external database was contacted.
-- PostgreSQL 17 executable validation is wired to the repository's isolated CI service in `test/postgres/ghlPublicOAuthBootstrap.sh`; final run details are recorded after the Draft PR CI completes.
+- Draft PR CI run `35869828163` passed both jobs: `validate` (22 seconds) and
+  `postgres-concurrency` (49 seconds).
+- The disposable `postgres:17-bookworm` service reported PostgreSQL 17.11 and proved the
+  forward migration, guarded rollback, forward reapply, focused SQL cases, and real
+  multi-connection admission, callback/INSTALL, exchange-claim, and both finalization/UNINSTALL
+  lock-order races. No external database was contacted.
 
 ## Safety review
 
