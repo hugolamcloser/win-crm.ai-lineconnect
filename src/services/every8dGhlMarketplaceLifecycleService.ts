@@ -6,7 +6,6 @@ import {
 import {
   every8dGhlOAuthRepository,
   getExactExistingTenantForEvery8d,
-  uninstallEvery8dGhlMarketplaceInstallation,
   type Every8dGhlExactTenant,
   type Every8dGhlMarketplaceInstallation
 } from "./every8dGhlOAuthRepository";
@@ -18,7 +17,8 @@ export type Every8dGhlMarketplaceLifecyclePayload = {
   installType?: string;
   locationId?: string;
   companyId?: string;
-  webhookId?: string;
+  timestamp: string;
+  webhookId: string;
   isBulkInstallation?: boolean;
   installToFutureLocations?: boolean;
   approveAllLocations?: boolean;
@@ -46,20 +46,17 @@ export class Every8dGhlMarketplaceLifecycleError extends Error {
 type LifecycleDependencies = {
   config: Every8dGhlOAuthConfig;
   getExactTenant(locationId: string): Promise<Every8dGhlExactTenant | null>;
-  provisionInstallation(input: {
+  applyLifecycleEvent(input: {
+    eventType: "INSTALL" | "UNINSTALL";
     marketplaceAppId: string;
     oauthClientId: string;
-    tenantId: string;
+    tenantId: string | null;
     locationId: string;
-    companyId: string;
+    companyId: string | null;
     conversationProviderId: string;
+    eventAt: string;
+    eventId: string;
   }): Promise<Every8dGhlMarketplaceInstallation>;
-  uninstallInstallation(input: {
-    marketplaceAppId: string;
-    oauthClientId: string;
-    locationId: string;
-    conversationProviderId: string;
-  }): Promise<{ id: string; status: string; installation_generation: number } | null>;
 };
 
 const exactOwnershipIdentifier = /^[A-Za-z0-9_-]{1,128}$/;
@@ -81,25 +78,28 @@ function configuredMarketplaceVersionId(config: Every8dGhlOAuthConfig): string {
   return new URL(config.installationUrl).pathname.split("/").at(-1) ?? "";
 }
 
-function isExactProvisionedInstallation(
+function isExactLifecycleInstallation(
   installation: Every8dGhlMarketplaceInstallation,
   input: {
     config: Every8dGhlOAuthConfig;
-    tenant: Every8dGhlExactTenant;
+    tenant?: Every8dGhlExactTenant;
     locationId: string;
-    companyId: string;
+    companyId?: string;
   }
 ): boolean {
   return installation.app_namespace === "every8d_connect" &&
     installation.marketplace_app_id === input.config.marketplaceAppId &&
     installation.oauth_client_id === input.config.oauthClientId &&
-    installation.tenant_id === input.tenant.id &&
+    (!input.tenant || installation.tenant_id === input.tenant.id) &&
     installation.location_id === input.locationId &&
-    installation.company_id === input.companyId &&
+    installation.company_id !== null &&
+    (!input.companyId || installation.company_id === input.companyId) &&
     installation.conversation_provider_id === input.config.conversationProviderId &&
     installation.channel === "sms" &&
     installation.provider === "every8d" &&
-    (installation.status === "pending" || installation.status === "active");
+    (installation.status === "pending" ||
+      installation.status === "active" ||
+      installation.status === "uninstalled");
 }
 
 export function createEvery8dGhlMarketplaceLifecycleService(
@@ -157,16 +157,19 @@ export function createEvery8dGhlMarketplaceLifecycleService(
           );
         }
 
-        const installation = await dependencies.provisionInstallation({
+        const installation = await dependencies.applyLifecycleEvent({
+          eventType: "INSTALL",
           marketplaceAppId: dependencies.config.marketplaceAppId,
           oauthClientId: dependencies.config.oauthClientId,
           tenantId: tenant.id,
           locationId: payload.locationId,
           companyId: payload.companyId,
-          conversationProviderId: dependencies.config.conversationProviderId
+          conversationProviderId: dependencies.config.conversationProviderId,
+          eventAt: payload.timestamp,
+          eventId: payload.webhookId
         });
 
-        if (!isExactProvisionedInstallation(installation, {
+        if (installation.status === "disabled" || !isExactLifecycleInstallation(installation, {
           config: dependencies.config,
           tenant,
           locationId: payload.locationId,
@@ -179,21 +182,29 @@ export function createEvery8dGhlMarketplaceLifecycleService(
         }
 
         return {
-          status: installation.status === "active" ? "active" : "pending",
+          status: installation.status,
           installationId: installation.id,
           installationGeneration: installation.installation_generation
         };
       }
 
       if (payload.type === "UNINSTALL") {
-        const installation = await dependencies.uninstallInstallation({
+        const installation = await dependencies.applyLifecycleEvent({
+          eventType: "UNINSTALL",
           marketplaceAppId: dependencies.config.marketplaceAppId,
           oauthClientId: dependencies.config.oauthClientId,
+          tenantId: null,
           locationId: payload.locationId,
-          conversationProviderId: dependencies.config.conversationProviderId
+          companyId: null,
+          conversationProviderId: dependencies.config.conversationProviderId,
+          eventAt: payload.timestamp,
+          eventId: payload.webhookId
         });
 
-        if (!installation || installation.status !== "uninstalled") {
+        if (!installation || installation.status === "disabled" || !isExactLifecycleInstallation(installation, {
+          config: dependencies.config,
+          locationId: payload.locationId
+        })) {
           throw new Every8dGhlMarketplaceLifecycleError(
             "ownership_conflict",
             "EVERY8D Connect installation ownership conflicted"
@@ -201,7 +212,7 @@ export function createEvery8dGhlMarketplaceLifecycleService(
         }
 
         return {
-          status: "uninstalled",
+          status: installation.status,
           installationId: installation.id,
           installationGeneration: installation.installation_generation
         };
@@ -215,6 +226,5 @@ export function createEvery8dGhlMarketplaceLifecycleService(
 export const every8dGhlMarketplaceLifecycleService = createEvery8dGhlMarketplaceLifecycleService({
   config: readEvery8dGhlOAuthConfig(),
   getExactTenant: getExactExistingTenantForEvery8d,
-  provisionInstallation: (input) => every8dGhlOAuthRepository.provisionInstallation(input),
-  uninstallInstallation: uninstallEvery8dGhlMarketplaceInstallation
+  applyLifecycleEvent: (input) => every8dGhlOAuthRepository.applyLifecycleEvent(input)
 });

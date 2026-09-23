@@ -85,6 +85,9 @@ function exactInstallation(overrides = {}) {
     provider: "every8d",
     status: "pending",
     installation_generation: 1,
+    latest_lifecycle_event_at: null,
+    latest_lifecycle_event_id: null,
+    latest_lifecycle_event_type: null,
     access_token_ciphertext: null,
     refresh_token_ciphertext: null,
     encryption_key_version: null,
@@ -127,35 +130,57 @@ function createHarness(options = {}) {
         ghl_provider_id: "line-provider"
       };
     },
-    provisionInstallation: async (input) => {
-      provisions += 1;
-      provisionInput = input;
-      if (options.provisionResult !== undefined) return options.provisionResult;
-      if (
-        input.marketplaceAppId !== observedAppId ||
-        input.oauthClientId !== "every8d-client-98" ||
-        input.tenantId !== "00000000-0000-4000-8000-000000000098" ||
-        input.locationId !== observedLocationId ||
-        input.companyId !== observedCompanyId ||
-        input.conversationProviderId !== "every8d-provider-98"
-      ) {
-        throw new Error("synthetic ownership conflict");
+    applyLifecycleEvent: async (input) => {
+      if (input.eventType === "INSTALL") {
+        provisions += 1;
+        provisionInput = input;
+        if (options.provisionResult !== undefined) return options.provisionResult;
+        if (
+          input.marketplaceAppId !== observedAppId ||
+          input.oauthClientId !== "every8d-client-98" ||
+          input.tenantId !== "00000000-0000-4000-8000-000000000098" ||
+          input.locationId !== observedLocationId ||
+          input.companyId !== observedCompanyId ||
+          input.conversationProviderId !== "every8d-provider-98"
+        ) {
+          throw new Error("synthetic ownership conflict");
+        }
+      } else {
+        uninstalls += 1;
+        uninstallInput = input;
+        if (options.uninstallResult !== undefined) return options.uninstallResult;
+        if (!exactStoredIdentity(input)) return null;
       }
+
       if (!installation) installation = exactInstallation();
-      return { ...installation };
-    },
-    uninstallInstallation: async (input) => {
-      uninstalls += 1;
-      uninstallInput = input;
-      if (options.uninstallResult !== undefined) return options.uninstallResult;
-      if (!exactStoredIdentity(input)) return null;
-      if (installation.status !== "uninstalled") {
-        installation = {
-          ...installation,
-          status: "uninstalled",
-          installation_generation: installation.installation_generation + 1
-        };
+      const incomingAt = Date.parse(input.eventAt);
+      const storedAt = installation.latest_lifecycle_event_at === null
+        ? null
+        : Date.parse(installation.latest_lifecycle_event_at);
+      if (storedAt !== null && incomingAt < storedAt) return { ...installation };
+      if (storedAt !== null && incomingAt === storedAt) {
+        if (
+          installation.latest_lifecycle_event_id !== input.eventId ||
+          installation.latest_lifecycle_event_type !== input.eventType
+        ) {
+          throw new Error("synthetic equal-time lifecycle ambiguity");
+        }
+        return { ...installation };
       }
+
+      const transition = input.eventType === "INSTALL"
+        ? installation.status === "disabled" || installation.status === "uninstalled"
+        : installation.status !== "uninstalled";
+      installation = {
+        ...installation,
+        status: input.eventType === "INSTALL"
+          ? (transition ? "pending" : installation.status)
+          : "uninstalled",
+        installation_generation: installation.installation_generation + (transition ? 1 : 0),
+        latest_lifecycle_event_at: input.eventAt,
+        latest_lifecycle_event_id: input.eventId,
+        latest_lifecycle_event_type: input.eventType
+      };
       return { ...installation };
     }
   });
@@ -187,6 +212,17 @@ test("observed UNINSTALL shape is accepted by the parser with only observed fiel
   assert.deepEqual(parseEvery8dGhlMarketplaceLifecyclePayload(fixture), fixture);
 });
 
+for (const [name, payload] of [
+  ["missing timestamp", observedInstallPayload({ timestamp: undefined })],
+  ["malformed timestamp", observedInstallPayload({ timestamp: "not-a-timestamp" })],
+  ["calendar-invalid timestamp", observedInstallPayload({ timestamp: "2026-02-30T14:20:53.728Z" })],
+  ["missing webhookId", observedInstallPayload({ webhookId: undefined })]
+]) {
+  test(`${name} is rejected at the signed lifecycle payload boundary`, () => {
+    assert.throws(() => parseEvery8dGhlMarketplaceLifecyclePayload(payload));
+  });
+}
+
 test("signed observed Location INSTALL provisions exact immutable company ownership", async () => {
   const harness = createHarness();
   const result = await harness.service.handle(observedInstallPayload());
@@ -200,12 +236,15 @@ test("signed observed Location INSTALL provisions exact immutable company owners
   assert.equal(harness.provisions, 1);
   assert.equal(harness.uninstalls, 0);
   assert.deepEqual(harness.provisionInput, {
+    eventType: "INSTALL",
     marketplaceAppId: observedAppId,
     oauthClientId: "every8d-client-98",
     tenantId: "00000000-0000-4000-8000-000000000098",
     locationId: observedLocationId,
     companyId: observedCompanyId,
-    conversationProviderId: "every8d-provider-98"
+    conversationProviderId: "every8d-provider-98",
+    eventAt: "2026-09-22T14:20:53.728Z",
+    eventId: "ab2bccb7-9c5c-4f49-b40d-9bbd665c024a"
   });
 });
 
@@ -260,10 +299,15 @@ test("UNINSTALL without companyId or installType succeeds only against exact sto
   assert.equal(harness.provisions, 0);
   assert.equal(harness.uninstalls, 1);
   assert.deepEqual(harness.uninstallInput, {
+    eventType: "UNINSTALL",
     marketplaceAppId: observedAppId,
     oauthClientId: "every8d-client-98",
+    tenantId: null,
     locationId: observedLocationId,
-    conversationProviderId: "every8d-provider-98"
+    companyId: null,
+    conversationProviderId: "every8d-provider-98",
+    eventAt: "2026-09-22T14:35:55.549Z",
+    eventId: "31c72437-bcc2-4c9e-bf0d-55910b229dc0"
   });
   assert.equal(harness.installation.company_id, observedCompanyId);
 });
@@ -312,26 +356,74 @@ test("repeated UNINSTALL with the same webhookId converges on one terminal gener
   assert.equal(harness.installation.installation_generation, 8);
 });
 
-test("changed webhookId duplicate lifecycle cannot become installation identity", async () => {
+test("equal timestamp with a different webhookId fails closed without mutation", async () => {
   const harness = createHarness();
   const first = await harness.service.handle(observedInstallPayload());
-  const second = await harness.service.handle(observedInstallPayload({ webhookId: "different-install-delivery" }));
+  await assert.rejects(
+    () => harness.service.handle(observedInstallPayload({ webhookId: "different-install-delivery" })),
+    /equal-time lifecycle ambiguity/
+  );
 
-  assert.deepEqual(second, first);
   assert.equal(harness.installationRows, 1);
   assert.equal(harness.installation.id, first.installationId);
-  assert.equal(JSON.stringify(harness.provisionInput).includes("webhookId"), false);
+  assert.equal(harness.installation.installation_generation, 1);
+  assert.equal(harness.installation.latest_lifecycle_event_id, "ab2bccb7-9c5c-4f49-b40d-9bbd665c024a");
 });
 
-test("changed webhookId duplicate UNINSTALL keeps the same stored installation identity and generation", async () => {
-  const harness = createHarness({ installation: exactInstallation({ status: "active", installation_generation: 7 }) });
-  const first = await harness.service.handle(observedUninstallPayload());
-  const second = await harness.service.handle(observedUninstallPayload({ webhookId: "different-uninstall-delivery" }));
+test("equal timestamp with a contradictory event type fails closed without mutation", async () => {
+  const at = "2026-09-22T14:35:55.549Z";
+  const eventId = "31c72437-bcc2-4c9e-bf0d-55910b229dc0";
+  const harness = createHarness({
+    installation: exactInstallation({
+      status: "uninstalled",
+      installation_generation: 8,
+      latest_lifecycle_event_at: at,
+      latest_lifecycle_event_id: eventId,
+      latest_lifecycle_event_type: "UNINSTALL"
+    })
+  });
+  await assert.rejects(
+    () => harness.service.handle(observedInstallPayload({ timestamp: at, webhookId: eventId })),
+    /equal-time lifecycle ambiguity/
+  );
 
-  assert.deepEqual(second, first);
-  assert.equal(harness.installationRows, 1);
   assert.equal(harness.installation.installation_generation, 8);
-  assert.equal(JSON.stringify(harness.uninstallInput).includes("webhookId"), false);
+  assert.equal(harness.installation.status, "uninstalled");
+});
+
+test("INSTALL A then UNINSTALL B then stale INSTALL A remains uninstalled at generation 2", async () => {
+  const harness = createHarness({ installation: null });
+  const installA = observedInstallPayload();
+  const uninstallB = observedUninstallPayload();
+
+  await harness.service.handle(installA);
+  await harness.service.handle(uninstallB);
+  const stale = await harness.service.handle(installA);
+
+  assert.equal(stale.status, "uninstalled");
+  assert.equal(stale.installationGeneration, 2);
+  assert.equal(harness.installation.installation_generation, 2);
+  assert.equal(harness.installation.latest_lifecycle_event_id, uninstallB.webhookId);
+});
+
+test("stale UNINSTALL B cannot reverse newer reinstall C or increment generation", async () => {
+  const harness = createHarness({ installation: null });
+  const installA = observedInstallPayload();
+  const uninstallB = observedUninstallPayload();
+  const installC = observedInstallPayload({
+    timestamp: "2026-09-22T14:50:00.000Z",
+    webhookId: "install-c"
+  });
+
+  await harness.service.handle(installA);
+  await harness.service.handle(uninstallB);
+  await harness.service.handle(installC);
+  const stale = await harness.service.handle(uninstallB);
+
+  assert.equal(stale.status, "pending");
+  assert.equal(stale.installationGeneration, 3);
+  assert.equal(harness.installation.installation_generation, 3);
+  assert.equal(harness.installation.latest_lifecycle_event_id, "install-c");
 });
 
 for (const [name, payload] of [

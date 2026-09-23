@@ -6,15 +6,15 @@
 - Approved branch: `codex/phase-2g-d3-lifecycle-evidence`.
 - Authority level: Level 3 implementation, test, commit, push, and Draft PR only.
 - Started at: 2026-09-22.
-- Last updated at: 2026-09-22.
+- Last updated at: 2026-09-23.
 
 ## Task objective
 
-Represent the controlled EVERY8D Connect HighLevel INSTALL, UNINSTALL, retry, and code-only callback evidence without weakening immutable company/tenant ownership. Do not change production state, provider activation, OAuth enablement, EVERY8D transport, SMS, or LINE behavior.
+Repair the controlled EVERY8D Connect HighLevel INSTALL/UNINSTALL replay boundary so signed event chronology, exact replay, status changes, and generation changes are durable and atomic in PostgreSQL. Preserve the code-only callback rejection and all ownership, OAuth, LINE, SMS, and production safety boundaries.
 
 ## Current hypothesis
 
-The existing D1 atomic provisioning RPC and generation compare-and-swap design already own installation identity and retry convergence. D3 only needs to validate the observed signed contract, wire eligible INSTALL events to that RPC, and make UNINSTALL recover immutable company ownership from the exact stored row.
+The D1 provisioning RPC owns installation identity but does not persist event chronology, so arrival-order processing can reverse a newer lifecycle transition. A minimal additive watermark on the ownership row plus one row-locking PostgreSQL function can make chronology and mutation atomic without introducing a second installation identity or a separate event table.
 
 ## Files inspected
 
@@ -32,7 +32,8 @@ The existing D1 atomic provisioning RPC and generation compare-and-swap design a
 | --- | --- | --- |
 | INSTALL includes Location install type and company; UNINSTALL omits both. | Supplied controlled D3 payloads | Event-type-specific validation is required. |
 | `appNamespace` and stable installation identity are absent. | Supplied controlled D3 payloads | Namespace remains internal; row identity stays database-owned. |
-| Retry deliveries preserve their event `webhookId`; separate lifecycle events use different values. | Supplied controlled D3 observations | `webhookId` is event metadata, not installation identity; no new schema is needed. |
+| Retry deliveries preserve their event `webhookId`; separate lifecycle events use different values. | Supplied controlled D3 observations | `webhookId` participates in exact replay identity but never installation identity. |
+| Stale opposite events can arrive after a newer transition. | Final read-only D3 re-audit | The database must compare signed timestamps under the same row lock used for status/generation mutation. |
 | Direct Marketplace callback carried code but no state. | Supplied controlled D3 observation | Existing fail-closed callback validation must remain unchanged. |
 
 ## Commands executed and results
@@ -49,7 +50,8 @@ The existing D1 atomic provisioning RPC and generation compare-and-swap design a
 
 | Approach | Outcome | New evidence |
 | --- | --- | --- |
-| Reuse the D1 atomic RPC and row generation | Accepted | No event-dedup table is needed for safe lifecycle convergence. |
+| Add timestamp/ID/type watermark columns to the ownership row | Accepted | Row uniqueness remains installation identity while one lock serializes chronology and transition state. |
+| Replace split INSTALL/UNINSTALL mutations with one ordered RPC | Accepted | Exact retry, stale delivery, and concurrent opposite events share one transactional decision. |
 | Resolve UNINSTALL company from exact stored ownership | Accepted | Payload company/install type can remain absent without cross-tenant inference. |
 
 ## Rejected approaches and reasons
@@ -57,7 +59,9 @@ The existing D1 atomic provisioning RPC and generation compare-and-swap design a
 | Rejected approach | Reason rejected |
 | --- | --- |
 | Store `webhookId` as installation identity | INSTALL and UNINSTALL have different IDs; retries only establish delivery/event identity. |
-| Add a convenience event-dedup migration | Existing row uniqueness, atomic provisioning, and generation compare-and-swap already satisfy the required behavior. |
+| Keep using the unordered D1 provisioning RPC | It can reactivate an uninstalled row before signed event chronology is compared. |
+| Use only an in-memory lock or TypeScript compare-and-swap | It does not survive restart, multiple Railway instances, or response loss. |
+| Order events by `webhookId` | Observed IDs are random UUIDs and establish identity, not chronology. |
 | Accept code-only OAuth callback | Would weaken CSRF/browser binding and permit exchange without valid state. |
 | Select or activate the Conversation Provider | Installation success is not provider activation and this task forbids the change. |
 
@@ -65,11 +69,17 @@ The existing D1 atomic provisioning RPC and generation compare-and-swap design a
 
 | File | Change | Runtime impact |
 | --- | --- | --- |
-| `src/routes/every8dGhlMarketplaceWebhook.ts` | Parse observed version and event ID; export parser seam. | Keeps signature verification first and accepts observed field presence. |
-| `src/services/every8dGhlMarketplaceLifecycleService.ts` | Event-specific validation; exact version policy; INSTALL provisioning; stored-owner UNINSTALL input. | Enables only exact signed Location lifecycle transitions when runtime configuration is deliberately enabled. |
-| `src/services/every8dGhlOAuthRepository.ts` | Exact non-NULL stored-company UNINSTALL lookup and stored-company compare-and-swap. | Removes reliance on absent UNINSTALL company evidence. |
-| `test/every8dGhlMarketplaceWebhook.test.cjs` | Exact D3 fixtures and lifecycle retry/isolation tests. | Test-only. |
-| `test/every8dGhlOAuthRepository.test.cjs` | Stored-company, ambiguity, client/provider/location isolation tests. | Test-only. |
+| `src/routes/every8dGhlMarketplaceWebhook.ts` | Require strict calendar-valid RFC 3339 timestamp and event ID. | Rejects missing/malformed chronology before lifecycle mutation. |
+| `src/services/every8dGhlMarketplaceLifecycleService.ts` | Route both event types through one ordered repository operation. | Preserves event-specific ownership validation while allowing stale events to return current state. |
+| `src/services/every8dGhlOAuthRepository.ts` | Call only the ordered lifecycle RPC; remove the split read/update uninstall path. | Eliminates process-local arrival-order decisions. |
+| `supabase/migrations/202609230001_ghl_marketplace_lifecycle_ordering.sql` | Add durable watermark, v3 integrity trigger, and atomic ordered lifecycle function. | Makes replay/order decision and state mutation one PostgreSQL transaction. |
+| `supabase/rollback/202609230001_ghl_marketplace_lifecycle_ordering.sql` | Refuse rollback when accepted lifecycle evidence exists. | Prevents silent evidence destruction. |
+| `test/every8dGhlMarketplaceWebhook.test.cjs` | Strict evidence, exact replay, stale reversal, equal-time ambiguity, and generation proofs. | Test-only. |
+| `test/every8dGhlOAuthRepository.test.cjs` | Ordered RPC adapter proof. | Test-only. |
+| `test/postgres/ghlMarketplaceLifecycleOrdering.sql` | Executable lifecycle chronology and privilege proof. | Test-only. |
+| `test/postgres/ghlMarketplaceLifecycleOrdering.sh` | Guarded rollback and two-real-connection race proof. | Test-only. |
+| `test/postgres/ghlMarketplaceOwnership.sh` | Temporarily removes/reapplies D3 around historical D1 rollback proofs. | Test-only. |
+| `.github/workflows/ci.yml` | Run the focused lifecycle PostgreSQL proof in hosted CI. | CI-only. |
 | `test/every8dGhlOAuthRoute.test.cjs` | Code-only callback rejection test. | Test-only. |
 | `docs/phase-2g-d-company-ownership.md` | D3 evidence and contract documentation. | Documentation only. |
 | `docs/agent-run-phase-2g-d-d3.md` | This evidence log. | Documentation only. |
@@ -78,8 +88,8 @@ The existing D1 atomic provisioning RPC and generation compare-and-swap design a
 
 | Check | Result | Notes |
 | --- | --- | --- |
-| `npm run typecheck` | Passed | Final run. |
-| `npm test` | Passed | 531 passed; 0 failed, skipped, cancelled, or todo. |
+| `npm run typecheck` | Passed | Replay-repair working tree. |
+| `npm test` | Passed | 529 passed; 0 failed, skipped, cancelled, or todo. |
 | `npm run build` | Passed | Final run. |
 | `git diff --check` | Passed | Only expected LF-to-CRLF working-copy notices. |
 | PostgreSQL 17 ownership/concurrency suite | Pending hosted CI | Local Docker/server unavailable; no production database was contacted. |
@@ -98,4 +108,4 @@ None in D3 scope. A separate controlled OAuth-initiation design must resolve the
 
 ## Recommended next action
 
-Complete final local validation, open a Draft PR, wait for hosted CI including PostgreSQL 17, and stop for re-audit without merge or deployment.
+Complete final local validation, push the focused repair to existing Draft PR #102, wait for hosted CI including PostgreSQL 17, and stop for final re-audit without merge or deployment.

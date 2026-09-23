@@ -8,6 +8,8 @@ readonly migration=supabase/migrations/202609170001_ghl_marketplace_ownership.sq
 readonly rollback=supabase/rollback/202609170001_ghl_marketplace_ownership.sql
 readonly company_migration=supabase/migrations/202609220001_ghl_marketplace_company_ownership.sql
 readonly company_rollback=supabase/rollback/202609220001_ghl_marketplace_company_ownership.sql
+readonly lifecycle_migration=supabase/migrations/202609230001_ghl_marketplace_lifecycle_ordering.sql
+readonly lifecycle_rollback=supabase/rollback/202609230001_ghl_marketplace_lifecycle_ordering.sql
 readonly tenant=00000000-0000-4000-8000-000000000095
 readonly installation=10000000-0000-4000-8000-000000000095
 proof_log=$(mktemp)
@@ -53,6 +55,7 @@ assert_query "select current_database() = 'wincrm_test' and
   not exists(select 1 from public.ghl_marketplace_oauth_states)" 'requires empty new schema'
 
 # Prove the D1 migration against an actual row created under the pre-D1 schema.
+psql_query < "$lifecycle_rollback" > "$proof_log"
 psql_query < "$company_rollback" > "$proof_log"
 psql_query -q -c "insert into public.tenants(id, location_id, ghl_provider_id, line_channel_id)
   values ('00000000-0000-4000-8000-000000000094', 'issue100-forward-location', 'issue100-forward-line', 'issue100-forward-channel');
@@ -376,5 +379,6 @@ assert_query "select to_regclass('public.ghl_marketplace_installations') is null
 psql_query -q -c 'drop view public.ghl_marketplace_oauth_states;'
 psql_query < "$migration" > "$proof_log"
 psql_query < "$company_migration" > "$proof_log"
+psql_query < "$lifecycle_migration" > "$proof_log"
 [[ "$before" == "$(protected_fingerprint)" ]] || { echo 'FAIL: protected LINE/SMS data changed' >&2; exit 1; }
 echo 'Marketplace ownership PostgreSQL proof passed; company concurrency, guarded rollbacks and transactional failure verified'

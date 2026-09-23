@@ -36,7 +36,7 @@ The server-only `provision_every8d_ghl_marketplace_installation_v1` database fun
 - permits the same company at different exact Locations; and
 - reactivates disabled/uninstalled ownership as pending with exactly one generation increment.
 
-The D3 lifecycle service calls this narrow RPC only after Ed25519 verification and exact signed INSTALL validation. The expected `versionId` is derived from the already reviewed and SHA-256-pinned Location installation URL, so no new production configuration name or latest-version fallback is introduced. No in-memory lock is used as an ownership guarantee.
+The original D3 lifecycle service called this narrow RPC only after Ed25519 verification and exact signed INSTALL validation. The D3 replay repair retires service-role execution of this unordered primitive in favor of the timestamp-ordered lifecycle function described below. The expected `versionId` remains derived from the already reviewed and SHA-256-pinned Location installation URL, so no new production configuration name or latest-version fallback is introduced. No in-memory lock is used as an ownership guarantee.
 
 ## OAuth and encryption binding
 
@@ -46,7 +46,7 @@ AES-256-GCM authenticated data now also binds `companyId`. The envelope version 
 
 ## Uninstall and reinstall
 
-UNINSTALL does not trust or require `companyId`, `installType`, `appNamespace`, or an installation identifier from the event. It finds exactly one row by the internal `every8d_connect` namespace and exact configured app/client/provider plus signed Location, requires a non-NULL immutable stored company owner, and uses that stored company in the compare-and-swap update. Zero or ambiguous rows fail closed. Successful uninstall preserves the row, marks it uninstalled, and increments generation once; duplicate delivery returns the same terminal generation. Database state rules continue to reject old state consumption, and v2 ciphertext binds the old generation and stored company.
+UNINSTALL does not trust or require `companyId`, `installType`, `appNamespace`, or an installation identifier from the event. The ordered lifecycle function resolves the row by the internal `every8d_connect` namespace and exact configured app/client/provider plus signed Location, requires a non-NULL immutable stored company owner, and locks that row before comparing event chronology. Zero or ambiguous ownership fails closed. An accepted newer uninstall preserves the row, marks it uninstalled, and increments generation once; exact replay returns the committed terminal generation without mutation. Database state rules continue to reject old state consumption, and v2 ciphertext binds the old generation and stored company.
 
 ## Rollback
 
@@ -65,9 +65,26 @@ The controlled Location evidence from 2026-09-22 established:
 - HighLevel committed installation/removal despite those 503 responses, and Marketplace installation did not select the SMS Conversation Provider.
 - OAuth remained disabled, no provider was selected, no EVERY8D call occurred, and no SMS was sent.
 
-Accordingly, `webhookId` is accepted only as event/delivery metadata and is never passed to provisioning, lookup, or update persistence. Existing atomic row identity and generation semantics already make identical or changed-`webhookId` retries converge, so D3 adds no event table or schema migration.
+Accordingly, `webhookId` is event identity and is never installation identity. The original arrival-order implementation was insufficient: a stale opposite event could reactivate or uninstall a newer generation. Additive migration `202609230001_ghl_marketplace_lifecycle_ordering.sql` therefore stores the latest accepted event timestamp, ID, and type on the database-owned installation row.
 
-INSTALL is eligible only for exact type, configured app, pinned version, `Location` install type, valid Location/company identifiers, no bulk/future-location flags, one exact existing tenant/location, and separate provider ownership. The signed company becomes immutable stored ownership through the existing RPC. No global/default/latest fallback exists.
+The server-only `apply_every8d_ghl_marketplace_lifecycle_v1` function is now the only service-role lifecycle transition. It locks the exact ownership row and compares signed event chronology in the same PostgreSQL transaction that changes status or generation:
+
+- older timestamps return the current row without changing status, generation, or watermark;
+- equal timestamp plus the same event ID and type is an exact retry and returns the committed result without mutation;
+- equal timestamp with a different ID or contradictory type fails closed because UUID values do not establish chronology;
+- only a newer timestamp may advance the watermark and apply a lifecycle transition;
+- reactivation from disabled/uninstalled advances generation exactly once; and
+- uninstall from a non-uninstalled state advances generation exactly once.
+
+The row uniqueness constraint remains installation identity. A committed transition followed by HTTP response loss is therefore safe to replay: the exact timestamp/ID/type returns the same row and generation. The v3 integrity trigger prevents lifecycle watermarks from moving backward or being rewritten at the same timestamp. Browser roles receive no table or function access; the function has a fixed `search_path`, and direct service-role status/generation mutation plus the old unordered provisioning function are revoked.
+
+INSTALL is eligible only for exact type, configured app, pinned version, `Location` install type, valid Location/company identifiers, no bulk/future-location flags, one exact existing tenant/location, and separate provider ownership. The signed company becomes immutable stored ownership through the ordered lifecycle RPC. No global/default/latest fallback exists.
+
+Both lifecycle event types also require a syntactically valid, calendar-valid RFC 3339 timestamp and a bounded event ID before mutation. The route verifies the Ed25519 signature over the raw body before parsing this evidence.
+
+## D3 replay-repair rollback
+
+The paired D3 rollback locks the installation table and refuses to remove any non-NULL lifecycle watermark. Only an empty-evidence schema can restore the v2 trigger and D1 grants, remove the ordered function, and drop the three additive columns. It cannot silently discard accepted lifecycle chronology. Neither forward nor rollback migration is applied to production by this task.
 
 ## Observed code-only OAuth callback
 

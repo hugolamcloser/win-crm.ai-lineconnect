@@ -1,10 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const {
-  createEvery8dGhlOAuthRepository,
-  createUninstallEvery8dGhlMarketplaceInstallation
-} = require("../dist/services/every8dGhlOAuthRepository");
+const { createEvery8dGhlOAuthRepository } = require("../dist/services/every8dGhlOAuthRepository");
 
 function createPostgrestHarness(returnedRow) {
   const calls = { table: null, update: null, eq: [], in: [], not: [], rpc: null };
@@ -115,7 +112,7 @@ test("repository persists encrypted credentials with exact ownership filters and
   assert.equal(JSON.stringify(harness.calls.update).includes("synthetic-refresh-secret"), false);
 });
 
-test("repository provisions company ownership only through the atomic database primitive", async () => {
+test("repository applies lifecycle evidence only through the atomic ordered database primitive", async () => {
   const returned = {
     id: "10000000-0000-4000-8000-000000000100",
     app_namespace: "every8d_connect",
@@ -133,162 +130,31 @@ test("repository provisions company ownership only through the atomic database p
   const harness = createPostgrestHarness(returned);
   const repository = createEvery8dGhlOAuthRepository(() => harness.client);
 
-  const result = await repository.provisionInstallation({
+  const result = await repository.applyLifecycleEvent({
+    eventType: "INSTALL",
     marketplaceAppId: returned.marketplace_app_id,
     oauthClientId: returned.oauth_client_id,
     tenantId: returned.tenant_id,
     locationId: returned.location_id,
     companyId: returned.company_id,
-    conversationProviderId: returned.conversation_provider_id
+    conversationProviderId: returned.conversation_provider_id,
+    eventAt: "2026-09-22T14:20:53.728Z",
+    eventId: "install-event-100"
   });
 
   assert.equal(result, returned);
   assert.deepEqual(harness.calls.rpc, {
-    name: "provision_every8d_ghl_marketplace_installation_v1",
+    name: "apply_every8d_ghl_marketplace_lifecycle_v1",
     input: {
+      input_event_type: "INSTALL",
       input_marketplace_app_id: returned.marketplace_app_id,
       input_oauth_client_id: returned.oauth_client_id,
       input_tenant_id: returned.tenant_id,
       input_location_id: returned.location_id,
       input_company_id: returned.company_id,
-      input_conversation_provider_id: returned.conversation_provider_id
+      input_conversation_provider_id: returned.conversation_provider_id,
+      input_event_at: "2026-09-22T14:20:53.728Z",
+      input_event_id: "install-event-100"
     }
   });
 });
-
-function createUninstallHarness(overrides = {}) {
-  let row = {
-    id: "10000000-0000-4000-8000-000000000100",
-    app_namespace: "every8d_connect",
-    marketplace_app_id: "every8d-app-100",
-    oauth_client_id: "every8d-client-100",
-    tenant_id: "00000000-0000-4000-8000-000000000100",
-    location_id: "location-100",
-    company_id: "company-100",
-    conversation_provider_id: "every8d-provider-100",
-    channel: "sms",
-    provider: "every8d",
-    status: "active",
-    installation_generation: 7,
-    ...overrides
-  };
-  let updates = 0;
-  let initialReads = 0;
-  let releaseInitialReads;
-  const initialReadGate = new Promise((resolve) => { releaseInitialReads = resolve; });
-
-  function matches(filters) {
-    return filters.every(([column, value]) => row?.[column] === value);
-  }
-
-  function query() {
-    const filters = [];
-    const notNullColumns = [];
-    let updateValue = null;
-    return {
-      select() { return this; },
-      update(value) { updateValue = value; return this; },
-      eq(column, value) { filters.push([column, value]); return this; },
-      not(column, operator, value) {
-        assert.equal(operator, "is");
-        assert.equal(value, null);
-        notNullColumns.push(column);
-        return this;
-      },
-      async maybeSingle() {
-        if (overrides.ambiguous && !updateValue) {
-          return { data: null, error: { code: "PGRST116", message: "multiple rows" } };
-        }
-        if (!updateValue) {
-          const snapshot = row && matches(filters) && notNullColumns.every((column) => row[column] !== null)
-            ? { ...row }
-            : null;
-          if (overrides.concurrentReads && initialReads < 2) {
-            initialReads += 1;
-            if (initialReads === 2) releaseInitialReads();
-            await initialReadGate;
-          }
-          return { data: snapshot, error: null };
-        }
-        if (!row || !matches(filters)) return { data: null, error: null };
-        row = { ...row, ...updateValue };
-        updates += 1;
-        return { data: { ...row }, error: null };
-      }
-    };
-  }
-
-  const uninstall = createUninstallEvery8dGhlMarketplaceInstallation(() => ({
-    from(table) {
-      assert.equal(table, "ghl_marketplace_installations");
-      return query();
-    }
-  }));
-  const exactInput = {
-    marketplaceAppId: "every8d-app-100",
-    oauthClientId: "every8d-client-100",
-    locationId: "location-100",
-    conversationProviderId: "every8d-provider-100"
-  };
-
-  return {
-    uninstall,
-    exactInput,
-    get row() { return row; },
-    get updates() { return updates; }
-  };
-}
-
-test("sequential duplicate uninstall returns the exact terminal row without a second generation increment", async () => {
-  const harness = createUninstallHarness();
-  const first = await harness.uninstall(harness.exactInput);
-  const second = await harness.uninstall(harness.exactInput);
-
-  assert.deepEqual(second, first);
-  assert.equal(first.status, "uninstalled");
-  assert.equal(first.installation_generation, 8);
-  assert.equal(harness.updates, 1);
-});
-
-test("concurrent duplicate uninstall callers converge on one exact terminal generation", async () => {
-  const harness = createUninstallHarness({ concurrentReads: true });
-  const [first, second] = await Promise.all([
-    harness.uninstall(harness.exactInput),
-    harness.uninstall(harness.exactInput)
-  ]);
-
-  assert.deepEqual(second, first);
-  assert.equal(first.status, "uninstalled");
-  assert.equal(first.installation_generation, 8);
-  assert.equal(harness.row.installation_generation, 8);
-  assert.equal(harness.updates, 1);
-});
-
-test("uninstall requires one non-null stored immutable company owner", async () => {
-  const harness = createUninstallHarness({ company_id: null });
-  assert.equal(await harness.uninstall(harness.exactInput), null);
-  assert.equal(harness.row.status, "active");
-  assert.equal(harness.updates, 0);
-});
-
-test("uninstall ambiguity fails closed without mutation", async () => {
-  const harness = createUninstallHarness({ ambiguous: true });
-  assert.equal(await harness.uninstall(harness.exactInput), null);
-  assert.equal(harness.row.status, "active");
-  assert.equal(harness.updates, 0);
-});
-
-for (const [name, changed] of [
-  ["app", { marketplaceAppId: "foreign-app" }],
-  ["client", { oauthClientId: "foreign-client" }],
-  ["location", { locationId: "foreign-location" }],
-  ["provider", { conversationProviderId: "foreign-provider" }]
-]) {
-  test(`uninstall rejects a wrong ${name} without mutation`, async () => {
-    const harness = createUninstallHarness();
-    assert.equal(await harness.uninstall({ ...harness.exactInput, ...changed }), null);
-    assert.equal(harness.row.status, "active");
-    assert.equal(harness.row.installation_generation, 7);
-    assert.equal(harness.updates, 0);
-  });
-}
