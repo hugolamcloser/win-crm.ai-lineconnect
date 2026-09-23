@@ -64,6 +64,7 @@ The D3 ordering RPC needs two database-owned prerequisites: a migration-time chr
 | Second-repair `npm run build` | Production TypeScript build | Passed | Build completed with no error. |
 | Second-repair `git diff --check` | Patch whitespace | Passed | Only expected working-copy line-ending notices. |
 | Second-repair PostgreSQL 17 probe | Find a genuine local database runner | Unavailable | Docker is not installed; the PostgreSQL 17.11 command-line-tools package lacks `share/postgres.bki`, so `initdb` cannot create a disposable cluster. Hosted CI remains the supported executable database path. |
+| Second-repair hosted CI run `35811368180` | Execute final migration chain, rollback/reapply, ownership, chronology, and deterministic concurrency proofs on PostgreSQL 17 | Passed | `validate` passed in 24s and `postgres-concurrency` passed in 48s. The observer recorded backend `1135` waiting on row-lock holder `1113` before A was released. |
 
 ## Approaches attempted
 
@@ -111,8 +112,8 @@ The D3 ordering RPC needs two database-owned prerequisites: a migration-time chr
 | `npm test` | Passed | 529 passed; 0 failed, skipped, cancelled, or todo. |
 | `npm run build` | Passed | Final run. |
 | `git diff --check` | Passed | Only expected LF-to-CRLF working-copy notices. |
-| Hosted `validate` | Pending for second repair | First-repair run `35805997246` passed but does not validate this repair. |
-| PostgreSQL 17 ownership/concurrency suite | Pending for second repair | First-repair run `35805997246` passed but predates the baseline, registration, strict-tuple, and observed-lock changes. |
+| Hosted `validate` | Passed | Second-repair run `35811368180`; typecheck, 529 tests, and build passed in 24s. |
+| PostgreSQL 17 ownership/concurrency suite | Passed | Second-repair run `35811368180`; full chain passed in 48s, including pre-D3 baselines, registration pinning, strict tuples, rollback/reapply, and observed backend `1135` waiting on blocker `1113`. |
 
 ## Budget and stop-rule status
 
