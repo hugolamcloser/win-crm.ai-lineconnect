@@ -110,23 +110,28 @@ select pg_temp.assert_true(
   (public.apply_every8d_ghl_marketplace_lifecycle_v2(
     'INSTALL', 'oauth-app', 'oauth-client', '00000000-0000-4000-8000-000000000202',
     'oauth-location-b', 'oauth-company', 'oauth-provider', 'oauth-version',
-    '2026-09-23T13:00:00Z', 'install-b')->>'outcome') = 'applied'
-  and (select status = 'ready' from public.ghl_marketplace_oauth_bootstraps
-    where state_hash = repeat('2',64)), 'callback-first INSTALL converges to ready');
+    '2026-09-23T13:00:00Z', 'install-b')->>'outcome') = 'applied',
+  'callback-first INSTALL is newly applied');
+select pg_temp.assert_true((select status = 'ready'
+  from public.ghl_marketplace_oauth_bootstraps where state_hash = repeat('2',64)),
+  'callback-first INSTALL converges to ready');
 select pg_temp.assert_true(
   (public.apply_every8d_ghl_marketplace_lifecycle_v2(
     'INSTALL', 'oauth-app', 'oauth-client', '00000000-0000-4000-8000-000000000202',
     'oauth-location-b', 'oauth-company', 'oauth-provider', 'oauth-version',
-    '2026-09-23T13:00:00Z', 'install-b')->>'outcome') = 'exact_replay'
-  and (select status = 'ready' from public.ghl_marketplace_oauth_bootstraps
-    where state_hash = repeat('2',64)), 'exact INSTALL replay does not duplicate rendezvous');
+    '2026-09-23T13:00:00Z', 'install-b')->>'outcome') = 'exact_replay',
+  'exact INSTALL replay is distinguished');
+select pg_temp.assert_true((select status = 'ready'
+  from public.ghl_marketplace_oauth_bootstraps where state_hash = repeat('2',64)),
+  'exact INSTALL replay does not duplicate rendezvous');
 select pg_temp.assert_true(
   (public.apply_every8d_ghl_marketplace_lifecycle_v2(
     'UNINSTALL', 'oauth-app', 'oauth-client', null, 'oauth-location-b', null,
     'oauth-provider', 'oauth-version', '2026-09-23T12:59:00Z', 'stale-uninstall')->>'outcome')
-      = 'stale_ignored'
-  and (select status = 'ready' from public.ghl_marketplace_oauth_bootstraps
-    where state_hash = repeat('2',64)), 'stale lifecycle event causes zero bootstrap mutation');
+      = 'stale_ignored', 'stale lifecycle event is distinguished');
+select pg_temp.assert_true((select status = 'ready'
+  from public.ghl_marketplace_oauth_bootstraps where state_hash = repeat('2',64)),
+  'stale lifecycle event causes zero bootstrap mutation');
 select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
   'UNINSTALL', 'oauth-app', 'oauth-client', null, 'oauth-location-b', null,
   'oauth-provider', 'oauth-version', '2026-09-23T13:00:00Z', 'equal-conflict')$q$,
@@ -135,10 +140,11 @@ select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v
 select pg_temp.assert_true(
   (public.apply_every8d_ghl_marketplace_lifecycle_v2(
     'UNINSTALL', 'oauth-app', 'oauth-client', null, 'oauth-location-b', null,
-    'oauth-provider', 'oauth-version', '2026-09-23T13:10:00Z', 'uninstall-b')->>'outcome') = 'applied'
-  and (select status = 'failed' and failure_class = 'lifecycle_invalidated'
-    and authorization_code_ciphertext is null from public.ghl_marketplace_oauth_bootstraps
-    where state_hash = repeat('2',64)), 'UNINSTALL invalidates ready attempt and scrubs code');
+    'oauth-provider', 'oauth-version', '2026-09-23T13:10:00Z', 'uninstall-b')->>'outcome') = 'applied',
+  'UNINSTALL is newly applied');
+select pg_temp.assert_true((select status = 'failed' and failure_class = 'lifecycle_invalidated'
+  and authorization_code_ciphertext is null from public.ghl_marketplace_oauth_bootstraps
+  where state_hash = repeat('2',64)), 'UNINSTALL invalidates ready attempt and scrubs code');
 
 -- Reinstall generation isolation; stale exact UNINSTALL cannot revoke the later attempt.
 select * from public.create_every8d_public_oauth_bootstrap_v1(
@@ -149,23 +155,27 @@ select pg_temp.assert_true(
   (public.apply_every8d_ghl_marketplace_lifecycle_v2(
     'INSTALL', 'oauth-app', 'oauth-client', '00000000-0000-4000-8000-000000000202',
     'oauth-location-b', 'oauth-company', 'oauth-provider', 'oauth-version',
-    '2026-09-23T13:20:00Z', 'reinstall-b')->>'outcome') = 'applied'
-  and (select claimed_installation_generation = 3 and status = 'awaiting_callback'
-    from public.ghl_marketplace_oauth_bootstraps where state_hash = repeat('3',64)),
+    '2026-09-23T13:20:00Z', 'reinstall-b')->>'outcome') = 'applied',
+  'reinstall is newly applied');
+select pg_temp.assert_true((select claimed_installation_generation = 3 and status = 'awaiting_callback'
+  from public.ghl_marketplace_oauth_bootstraps where state_hash = repeat('3',64)),
   'reinstall creates and claims a new isolated generation');
 select pg_temp.assert_true(
   (public.apply_every8d_ghl_marketplace_lifecycle_v2(
     'UNINSTALL', 'oauth-app', 'oauth-client', null, 'oauth-location-b', null,
     'oauth-provider', 'oauth-version', '2026-09-23T13:10:00Z', 'uninstall-b')->>'outcome')
-      = 'stale_ignored'
-  and (select status = 'awaiting_callback' from public.ghl_marketplace_oauth_bootstraps
-    where state_hash = repeat('3',64)), 'old UNINSTALL replay cannot revoke new generation');
+      = 'stale_ignored', 'old UNINSTALL replay is stale after reinstall');
+select pg_temp.assert_true((select status = 'awaiting_callback'
+  from public.ghl_marketplace_oauth_bootstraps where state_hash = repeat('3',64)),
+  'old UNINSTALL replay cannot revoke new generation');
 select pg_temp.assert_true(
   (public.apply_every8d_ghl_marketplace_lifecycle_v2(
     'UNINSTALL', 'oauth-app', 'oauth-client', null, 'oauth-location-b', null,
-    'oauth-provider', 'oauth-version', '2026-09-23T13:30:00Z', 'uninstall-c')->>'outcome') = 'applied'
-  and (select status = 'failed' from public.ghl_marketplace_oauth_bootstraps
-    where state_hash = repeat('3',64)), 'UNINSTALL before callback invalidates claimed attempt');
+    'oauth-provider', 'oauth-version', '2026-09-23T13:30:00Z', 'uninstall-c')->>'outcome') = 'applied',
+  'new UNINSTALL is applied');
+select pg_temp.assert_true((select status = 'failed'
+  from public.ghl_marketplace_oauth_bootstraps where state_hash = repeat('3',64)),
+  'UNINSTALL before callback invalidates claimed attempt');
 
 -- Callback stored without INSTALL is also invalidated; old ciphertext cannot migrate.
 select * from public.create_every8d_public_oauth_bootstrap_v1(
