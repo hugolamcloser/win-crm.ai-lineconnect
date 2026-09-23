@@ -1,5 +1,7 @@
 # Phase 2G-C — EVERY8D Connect HighLevel OAuth runtime foundation
 
+> Post-D3 note: the installed/shared-secret flow documented here remains supported. The separate public first-install bootstrap, durable INSTALL/callback rendezvous, and owner-managed Marketplace-version gate are documented in [`every8d-public-oauth-bootstrap.md`](every8d-public-oauth-bootstrap.md).
+
 Issue: [#98](https://github.com/hugolamcloser/win-crm.ai-lineconnect/issues/98).
 
 This slice adds a default-off HighLevel Marketplace OAuth foundation for the separate EVERY8D Connect app. It does not enable HighLevel External Authentication, authenticate to EVERY8D, activate a Conversation Provider, configure a Delivery URL, call EVERY8D, create an SMS operation, consume SMS authorization, or send SMS.
