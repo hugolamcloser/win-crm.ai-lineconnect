@@ -46,6 +46,7 @@ The D1 provisioning RPC owns installation identity but does not persist event ch
 | `npm test` | Full repository regression suite | Passed, 529 tests | 529 passed; 0 failed, skipped, cancelled, or todo. |
 | Local PostgreSQL 17 probe | Find disposable database runner | Unavailable | Client is installed, but no local server or Docker runtime exists; hosted CI owns the real PostgreSQL 17 run. |
 | Hosted PostgreSQL 17 run `35805822829` | First D3 migration execution | Failed before lifecycle assertions | PostgreSQL rejects regex repetition bound `{1,256}`; replaced with `char_length` plus the same character allowlist. |
+| Hosted CI run `35805997246` | Corrected final validation | Passed | `validate` passed in 21s; PostgreSQL 17 `postgres-concurrency` passed in 50s, including the two-connection lifecycle race. |
 
 ## Approaches attempted
 
@@ -93,7 +94,8 @@ The D1 provisioning RPC owns installation identity but does not persist event ch
 | `npm test` | Passed | 529 passed; 0 failed, skipped, cancelled, or todo. |
 | `npm run build` | Passed | Final run. |
 | `git diff --check` | Passed | Only expected LF-to-CRLF working-copy notices. |
-| PostgreSQL 17 ownership/concurrency suite | Pending hosted CI | Local Docker/server unavailable; no production database was contacted. |
+| Hosted `validate` | Passed | Run `35805997246`; 529 tests plus typecheck/build. |
+| PostgreSQL 17 ownership/concurrency suite | Passed | Run `35805997246`; migration chain, rollback guards, and two-connection lifecycle race passed. |
 
 ## Budget and stop-rule status
 
@@ -109,4 +111,4 @@ None in D3 scope. A separate controlled OAuth-initiation design must resolve the
 
 ## Recommended next action
 
-Complete final local validation, push the focused repair to existing Draft PR #102, wait for hosted CI including PostgreSQL 17, and stop for final re-audit without merge or deployment.
+Stop for final re-audit of existing Draft PR #102 without merge, deployment, provider activation, OAuth enablement, or production migration.
