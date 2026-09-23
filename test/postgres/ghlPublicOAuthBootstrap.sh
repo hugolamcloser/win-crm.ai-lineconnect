@@ -106,12 +106,14 @@ psql_query -q -c "set role service_role; select public.fail_every8d_oauth_bootst
 
 # Prepare an exchanging attempt, then force finalization to hold the shared lock
 # order before UNINSTALL. UNINSTALL must clear credentials after finalization.
+psql_query -q -c "set role service_role; select id from public.create_every8d_public_oauth_bootstrap_v1(
+  'race-app','race-client','race-provider','race-version',repeat('c',64),repeat('d',64),
+  'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('9',64),600);"
+finalize_id=$(psql_query -Atqc "select id from public.ghl_marketplace_oauth_bootstraps
+  where state_hash=repeat('c',64)" | tr -d '\r')
 psql_query -q -c "set role service_role;
-  select id from public.create_every8d_public_oauth_bootstrap_v1(
-    'race-app','race-client','race-provider','race-version',repeat('c',64),repeat('d',64),
-    'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('9',64),600);
   select public.accept_every8d_public_oauth_callback_v1(
-    (select id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('c',64)),
+    '$finalize_id',
     repeat('c',64),repeat('d',64),'https://oauth.example.invalid/oauth/every8d-connect/callback',
     repeat('9',64),convert_to('encrypted-finalize-first','utf8'),'code-v1');
   select public.apply_every8d_ghl_marketplace_lifecycle_v2(
@@ -119,10 +121,8 @@ psql_query -q -c "set role service_role;
     'race-location','race-company','race-provider','race-version',
     '2026-09-23T15:10:00Z','race-install-refresh');
   select public.claim_every8d_oauth_exchange_v1(
-    (select id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('c',64)),
+    '$finalize_id',
     'race-version',repeat('9',64));"
-finalize_id=$(psql_query -Atqc "select id from public.ghl_marketplace_oauth_bootstraps
-  where state_hash=repeat('c',64)" | tr -d '\r')
 psql_query -Atq > "$race_dir/finalize-first.out" <<SQL &
 begin;
 set local role service_role;
@@ -148,23 +148,23 @@ assert_query "select i.status='uninstalled' and i.access_token_ciphertext is nul
 
 # Reverse lock order: UNINSTALL holds installation then attempt; finalization
 # waits and must return false after lifecycle invalidation.
+psql_query -q -c "set role service_role; select id from public.create_every8d_public_oauth_bootstrap_v1(
+  'race-app','race-client','race-provider','race-version',repeat('e',64),repeat('f',64),
+  'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('9',64),600);"
+uninstall_first_id=$(psql_query -Atqc "select id from public.ghl_marketplace_oauth_bootstraps
+  where state_hash=repeat('e',64)" | tr -d '\r')
 psql_query -q -c "set role service_role;
-  select id from public.create_every8d_public_oauth_bootstrap_v1(
-    'race-app','race-client','race-provider','race-version',repeat('e',64),repeat('f',64),
-    'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('9',64),600);
   select public.apply_every8d_ghl_marketplace_lifecycle_v2(
     'INSTALL','race-app','race-client','00000000-0000-4000-8000-000000000211',
     'race-location','race-company','race-provider','race-version',
     '2026-09-23T15:30:00Z','race-reinstall');
   select public.accept_every8d_public_oauth_callback_v1(
-    (select id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('e',64)),
+    '$uninstall_first_id',
     repeat('e',64),repeat('f',64),'https://oauth.example.invalid/oauth/every8d-connect/callback',
     repeat('9',64),convert_to('encrypted-uninstall-first','utf8'),'code-v1');
   select public.claim_every8d_oauth_exchange_v1(
-    (select id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('e',64)),
+    '$uninstall_first_id',
     'race-version',repeat('9',64));"
-uninstall_first_id=$(psql_query -Atqc "select id from public.ghl_marketplace_oauth_bootstraps
-  where state_hash=repeat('e',64)" | tr -d '\r')
 psql_query -Atq > "$race_dir/uninstall-first.out" <<SQL &
 begin;
 set local role service_role;
