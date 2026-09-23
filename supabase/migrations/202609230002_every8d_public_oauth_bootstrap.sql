@@ -358,17 +358,17 @@ begin
 
   perform pg_advisory_xact_lock(hashtextextended('every8d_public_oauth_bootstrap_admission_v1', 0));
 
-  update public.ghl_marketplace_oauth_bootstraps
+  update public.ghl_marketplace_oauth_bootstraps b
   set status = 'failed', terminal_at = clock_timestamp(), failure_class = 'bootstrap_expired',
       authorization_code_ciphertext = null, authorization_code_key_version = null
-  where status in ('awaiting_callback', 'waiting_install', 'ready')
-    and expires_at <= clock_timestamp();
+  where b.status in ('awaiting_callback', 'waiting_install', 'ready')
+    and b.expires_at <= clock_timestamp();
 
-  update public.ghl_marketplace_oauth_bootstraps
+  update public.ghl_marketplace_oauth_bootstraps b
   set status = 'failed', terminal_at = clock_timestamp(), failure_class = 'exchange_outcome_unknown',
       authorization_code_ciphertext = null, authorization_code_key_version = null
-  where status = 'exchanging'
-    and exchange_started_at <= clock_timestamp() - interval '2 minutes';
+  where b.status = 'exchanging'
+    and b.exchange_started_at <= clock_timestamp() - interval '2 minutes';
 
   if (select count(*) from public.ghl_marketplace_oauth_bootstraps
       where status in ('awaiting_callback', 'waiting_install', 'ready', 'exchanging')) >= 32
