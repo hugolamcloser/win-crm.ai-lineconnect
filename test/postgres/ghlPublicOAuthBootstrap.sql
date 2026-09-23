@@ -207,7 +207,8 @@ select pg_temp.assert_true(
 
 reset role;
 
--- Crash fixtures: expired waiting/ready and stale exchanging are terminalized and scrubbed.
+-- Crash fixtures: waiting_install remains durable, ready remains recoverable, and stale
+-- exchanging is terminalized and scrubbed without replay.
 alter table public.ghl_marketplace_oauth_bootstraps disable trigger protect_ghl_marketplace_oauth_bootstrap;
 insert into public.ghl_marketplace_oauth_bootstraps(
   app_namespace, marketplace_version_id, state_hash, browser_binding_hash, redirect_uri,
@@ -217,8 +218,13 @@ insert into public.ghl_marketplace_oauth_bootstraps(
 ) values
 ('every8d_connect','oauth-version',repeat('5',64),repeat('e',64),
  'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),'waiting_install',
- clock_timestamp()-interval '10 minutes',clock_timestamp()-interval '1 minute',
+ clock_timestamp()-interval '10 minutes',clock_timestamp()+interval '1 minute',
  clock_timestamp()-interval '9 minutes',convert_to('code-e','utf8'),'code-v1',null,null,null),
+('every8d_connect','oauth-version',repeat('7',64),repeat('0',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),'ready',
+ clock_timestamp()-interval '10 minutes',clock_timestamp()+interval '1 minute',
+ clock_timestamp()-interval '9 minutes',convert_to('code-g','utf8'),'code-v1',
+ (select id from public.ghl_marketplace_installations where location_id='oauth-location-a'),1,null),
 ('every8d_connect','oauth-version',repeat('6',64),repeat('f',64),
  'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),'exchanging',
  clock_timestamp()-interval '10 minutes',clock_timestamp()+interval '1 minute',
@@ -229,9 +235,17 @@ alter table public.ghl_marketplace_oauth_bootstraps enable trigger protect_ghl_m
 set local role service_role;
 select * from public.list_every8d_oauth_recoverable_v1('oauth-version', repeat('f',64), 8);
 reset role;
-select pg_temp.assert_true((select bool_and(status='failed' and authorization_code_ciphertext is null)
-  from public.ghl_marketplace_oauth_bootstraps where state_hash in (repeat('5',64),repeat('6',64))),
-  'crash recovery terminalizes expired waiting and stale exchanging without replay');
+select pg_temp.assert_true((select status='waiting_install' and authorization_code_ciphertext is not null
+  from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('5',64)),
+  'waiting_install survives a reconciler crash/restart pass');
+select pg_temp.assert_true((select id from public.ghl_marketplace_oauth_bootstraps
+  where state_hash=repeat('7',64)) in (
+    select * from public.list_every8d_oauth_recoverable_v1('oauth-version', repeat('f',64), 8)
+  ), 'ready remains recoverable after a reconciler crash/restart pass');
+select pg_temp.assert_true((select status='failed'
+    and failure_class='exchange_outcome_unknown' and authorization_code_ciphertext is null
+  from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('6',64)),
+  'stale exchanging is terminalized and scrubbed without replay');
 
 rollback;
 \echo 'Public OAuth bootstrap/rendezvous PostgreSQL proof passed'
