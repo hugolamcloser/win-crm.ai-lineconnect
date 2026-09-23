@@ -86,11 +86,14 @@ jobs:
           $$;
           SQL
 
-      - name: Apply complete migration chain
+      - name: Apply migration chain through D3
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: |
           for migration in supabase/migrations/*.sql; do
+            if [[ "$migration" == *"202609230002_every8d_public_oauth_bootstrap.sql" ]]; then
+              continue
+            fi
             echo "Applying $migration"
             docker exec -i "$POSTGRES_CONTAINER_ID" \
               psql -X -v ON_ERROR_STOP=1 -U postgres -d wincrm_test \
@@ -116,3 +119,8 @@ jobs:
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: bash test/postgres/ghlMarketplaceLifecycleOrdering.sh
+
+      - name: Prove public OAuth bootstrap, rollback, rendezvous, and concurrency
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: bash test/postgres/ghlPublicOAuthBootstrap.sh
