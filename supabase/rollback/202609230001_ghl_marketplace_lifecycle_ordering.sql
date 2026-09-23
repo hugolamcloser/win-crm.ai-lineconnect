@@ -6,10 +6,17 @@ lock table public.ghl_marketplace_installations in access exclusive mode;
 do $$
 begin
   if exists (select 1 from public.ghl_marketplace_installations
-    where latest_lifecycle_event_at is not null
-      or latest_lifecycle_event_id is not null
-      or latest_lifecycle_event_type is not null) then
-    raise exception 'lifecycle ordering rollback refused: preserve accepted lifecycle evidence'
+    where not (
+      (latest_lifecycle_event_at is null
+        and latest_lifecycle_event_id is null
+        and latest_lifecycle_event_type is null)
+      or
+      (latest_lifecycle_event_at is not null
+        and latest_lifecycle_event_type = 'INTERNAL_BASELINE'
+        and latest_lifecycle_event_id =
+          'internal_d3_baseline_' || id::text || '_' || status || '_g' || installation_generation::text)
+    )) then
+    raise exception 'lifecycle ordering rollback refused: preserve accepted authoritative lifecycle evidence'
       using errcode = 'P0001';
   end if;
 end;
@@ -35,5 +42,8 @@ alter table public.ghl_marketplace_installations
   drop column latest_lifecycle_event_at,
   drop column latest_lifecycle_event_id,
   drop column latest_lifecycle_event_type;
+
+drop table public.ghl_marketplace_app_registrations;
+drop function public.protect_ghl_marketplace_app_registration_v1();
 
 commit;

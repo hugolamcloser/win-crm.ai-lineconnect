@@ -15,7 +15,7 @@ export type Every8dGhlMarketplaceInstallation = {
   installation_generation: number;
   latest_lifecycle_event_at: string | null;
   latest_lifecycle_event_id: string | null;
-  latest_lifecycle_event_type: "INSTALL" | "UNINSTALL" | null;
+  latest_lifecycle_event_type: "INSTALL" | "UNINSTALL" | "INTERNAL_BASELINE" | null;
   access_token_ciphertext: string | null;
   refresh_token_ciphertext: string | null;
   encryption_key_version: string | null;

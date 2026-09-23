@@ -2,11 +2,83 @@
 -- No provider activation, OAuth enablement, production data, or send authority is added here.
 begin;
 set local lock_timeout = '5s';
+lock table public.ghl_marketplace_installations in access exclusive mode;
+
+-- This owner-managed singleton is the database authority for the reviewed EVERY8D
+-- Marketplace identity. Existing consistent D1 ownership is pinned during upgrade;
+-- an empty installation table remains fail closed until a database owner registers it.
+create table public.ghl_marketplace_app_registrations (
+  app_namespace text primary key check (app_namespace = 'every8d_connect'),
+  marketplace_app_id text not null check (marketplace_app_id ~ '^[A-Za-z0-9_-]{1,128}$'),
+  oauth_client_id text not null check (
+    char_length(oauth_client_id) between 1 and 256
+    and oauth_client_id ~ '^[A-Za-z0-9_.-]+$'
+  ),
+  conversation_provider_id text not null check (
+    conversation_provider_id ~ '^[A-Za-z0-9_-]{1,128}$'
+  ),
+  channel text not null check (channel = 'sms'),
+  provider text not null check (provider = 'every8d'),
+  registered_at timestamptz not null default transaction_timestamp()
+);
+
+create function public.protect_ghl_marketplace_app_registration_v1()
+returns trigger language plpgsql security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  raise exception 'marketplace app registration is immutable' using errcode = '23514';
+end;
+$$;
+
+create trigger protect_ghl_marketplace_app_registration
+before update or delete on public.ghl_marketplace_app_registrations
+for each row execute function public.protect_ghl_marketplace_app_registration_v1();
+
+alter table public.ghl_marketplace_app_registrations enable row level security;
+revoke all on public.ghl_marketplace_app_registrations from public, anon, authenticated, service_role;
+revoke all on function public.protect_ghl_marketplace_app_registration_v1()
+  from public, anon, authenticated, service_role;
+
+do $$
+declare
+  existing_identity_count bigint;
+begin
+  select count(*) into existing_identity_count
+  from (
+    select distinct app_namespace, marketplace_app_id, oauth_client_id,
+      conversation_provider_id, channel, provider
+    from public.ghl_marketplace_installations
+  ) identities;
+
+  if existing_identity_count > 1 then
+    raise exception 'D3 migration refused: existing Marketplace ownership is not one exact registration'
+      using errcode = '23514';
+  end if;
+
+  insert into public.ghl_marketplace_app_registrations (
+    app_namespace, marketplace_app_id, oauth_client_id,
+    conversation_provider_id, channel, provider
+  )
+  select distinct app_namespace, marketplace_app_id, oauth_client_id,
+    conversation_provider_id, channel, provider
+  from public.ghl_marketplace_installations;
+end;
+$$;
 
 alter table public.ghl_marketplace_installations
   add column latest_lifecycle_event_at timestamptz,
   add column latest_lifecycle_event_id text,
   add column latest_lifecycle_event_type text;
+
+-- Upgrade every pre-D3 row at one transaction timestamp. This is an internal
+-- chronology fence, not a fabricated HighLevel webhook: its type is distinct
+-- and its namespaced ID is constrained to the exact row, status, and generation.
+update public.ghl_marketplace_installations
+set latest_lifecycle_event_at = transaction_timestamp(),
+    latest_lifecycle_event_id = 'internal_d3_baseline_' || id::text || '_' || status
+      || '_g' || installation_generation::text,
+    latest_lifecycle_event_type = 'INTERNAL_BASELINE';
 
 alter table public.ghl_marketplace_installations
   add constraint ghl_marketplace_installations_lifecycle_watermark_check
@@ -16,10 +88,19 @@ alter table public.ghl_marketplace_installations
       and latest_lifecycle_event_type is null)
     or
     (latest_lifecycle_event_at is not null
+      and latest_lifecycle_event_id is not null
+      and latest_lifecycle_event_type is not null
       and isfinite(latest_lifecycle_event_at)
       and char_length(latest_lifecycle_event_id) between 1 and 256
       and latest_lifecycle_event_id ~ '^[A-Za-z0-9_-]+$'
-      and latest_lifecycle_event_type in ('INSTALL', 'UNINSTALL'))
+      and (
+        latest_lifecycle_event_type in ('INSTALL', 'UNINSTALL')
+        or (
+          latest_lifecycle_event_type = 'INTERNAL_BASELINE'
+          and latest_lifecycle_event_id = 'internal_d3_baseline_' || id::text || '_' || status
+            || '_g' || installation_generation::text
+        )
+      ))
   );
 
 create function public.protect_ghl_marketplace_installation_v3()
@@ -27,6 +108,23 @@ returns trigger language plpgsql security definer
 set search_path = pg_catalog, public
 as $$
 begin
+  if not (
+    (new.latest_lifecycle_event_at is null
+      and new.latest_lifecycle_event_id is null
+      and new.latest_lifecycle_event_type is null)
+    or
+    (new.latest_lifecycle_event_at is not null
+      and new.latest_lifecycle_event_id is not null
+      and new.latest_lifecycle_event_type is not null)
+  ) then
+    raise exception 'marketplace lifecycle watermark must be entirely null or entirely present'
+      using errcode = '23514';
+  end if;
+
+  if tg_op = 'INSERT' and new.latest_lifecycle_event_type = 'INTERNAL_BASELINE' then
+    raise exception 'marketplace internal baseline is migration-owned' using errcode = '23514';
+  end if;
+
   if tg_op = 'UPDATE' then
     if row(new.id, new.app_namespace, new.marketplace_app_id, new.oauth_client_id,
       new.tenant_id, new.location_id, new.conversation_provider_id, new.channel, new.provider, new.created_at)
@@ -43,6 +141,11 @@ begin
     if old.status in ('disabled', 'uninstalled') and new.status in ('pending', 'active')
       and new.installation_generation::bigint <> old.installation_generation::bigint + 1 then
       raise exception 'marketplace reactivation requires a new generation' using errcode = '23514';
+    end if;
+    if new.latest_lifecycle_event_type = 'INTERNAL_BASELINE'
+      and row(new.latest_lifecycle_event_at, new.latest_lifecycle_event_id, new.latest_lifecycle_event_type)
+        is distinct from row(old.latest_lifecycle_event_at, old.latest_lifecycle_event_id, old.latest_lifecycle_event_type) then
+      raise exception 'marketplace internal baseline is migration-owned' using errcode = '23514';
     end if;
     if old.latest_lifecycle_event_at is not null then
       if new.latest_lifecycle_event_at is null
@@ -96,6 +199,7 @@ language plpgsql security definer
 set search_path = pg_catalog, public
 as $$
 declare
+  registration public.ghl_marketplace_app_registrations%rowtype;
   bound public.ghl_marketplace_installations%rowtype;
 begin
   if input_event_type is null or input_event_type not in ('INSTALL', 'UNINSTALL')
@@ -109,6 +213,19 @@ begin
     or input_event_id is null or char_length(input_event_id) not between 1 and 256
     or input_event_id !~ '^[A-Za-z0-9_-]+$' then
     raise exception 'marketplace lifecycle evidence is invalid' using errcode = '23514';
+  end if;
+
+  select r.* into registration
+  from public.ghl_marketplace_app_registrations r
+  where r.app_namespace = 'every8d_connect';
+
+  if not found
+    or registration.marketplace_app_id <> input_marketplace_app_id
+    or registration.oauth_client_id <> input_oauth_client_id
+    or registration.conversation_provider_id <> input_conversation_provider_id
+    or registration.channel <> 'sms'
+    or registration.provider <> 'every8d' then
+    raise exception 'marketplace lifecycle identity is not registered' using errcode = '23514';
   end if;
 
   if input_event_type = 'INSTALL' then
@@ -126,24 +243,24 @@ begin
       company_id, conversation_provider_id, channel, provider, status,
       latest_lifecycle_event_at, latest_lifecycle_event_id, latest_lifecycle_event_type
     ) values (
-      'every8d_connect', input_marketplace_app_id, input_oauth_client_id, input_tenant_id,
-      input_location_id, input_company_id, input_conversation_provider_id, 'sms', 'every8d', 'pending',
-      input_event_at, input_event_id, input_event_type
+      registration.app_namespace, registration.marketplace_app_id, registration.oauth_client_id,
+      input_tenant_id, input_location_id, input_company_id, registration.conversation_provider_id,
+      registration.channel, registration.provider, 'pending', input_event_at, input_event_id, input_event_type
     ) on conflict (marketplace_app_id, location_id) do nothing;
 
     select i.* into bound
     from public.ghl_marketplace_installations i
-    where i.marketplace_app_id = input_marketplace_app_id
+    where i.marketplace_app_id = registration.marketplace_app_id
       and i.location_id = input_location_id
     for update;
 
     if not found
-      or bound.app_namespace <> 'every8d_connect'
-      or bound.oauth_client_id <> input_oauth_client_id
+      or bound.app_namespace <> registration.app_namespace
+      or bound.oauth_client_id <> registration.oauth_client_id
       or bound.tenant_id <> input_tenant_id
-      or bound.conversation_provider_id <> input_conversation_provider_id
-      or bound.channel <> 'sms'
-      or bound.provider <> 'every8d'
+      or bound.conversation_provider_id <> registration.conversation_provider_id
+      or bound.channel <> registration.channel
+      or bound.provider <> registration.provider
       or (bound.company_id is not null and bound.company_id <> input_company_id) then
       raise exception 'marketplace lifecycle ownership conflicted' using errcode = '23514';
     end if;
@@ -154,14 +271,14 @@ begin
 
     select i.* into bound
     from public.ghl_marketplace_installations i
-    where i.app_namespace = 'every8d_connect'
-      and i.marketplace_app_id = input_marketplace_app_id
-      and i.oauth_client_id = input_oauth_client_id
+    where i.app_namespace = registration.app_namespace
+      and i.marketplace_app_id = registration.marketplace_app_id
+      and i.oauth_client_id = registration.oauth_client_id
       and i.location_id = input_location_id
       and i.company_id is not null
-      and i.conversation_provider_id = input_conversation_provider_id
-      and i.channel = 'sms'
-      and i.provider = 'every8d'
+      and i.conversation_provider_id = registration.conversation_provider_id
+      and i.channel = registration.channel
+      and i.provider = registration.provider
     for update;
 
     if not found then
@@ -224,13 +341,15 @@ revoke all on function public.protect_ghl_marketplace_installation_v3(),
 grant execute on function public.apply_every8d_ghl_marketplace_lifecycle_v1(text,text,text,uuid,text,text,text,timestamptz,text)
   to service_role;
 
+comment on table public.ghl_marketplace_app_registrations is
+  'Owner-managed immutable registration for the exact EVERY8D Connect app/client/conversation-provider/channel identity. No browser or service-role mutation.';
 comment on column public.ghl_marketplace_installations.latest_lifecycle_event_at is
-  'Signed HighLevel event chronology watermark; lifecycle mutation and watermark advancement are one transaction.';
+  'Lifecycle chronology watermark. Pre-D3 rows receive the D3 transaction time; later values come from signed HighLevel evidence.';
 comment on column public.ghl_marketplace_installations.latest_lifecycle_event_id is
-  'Identity of the latest accepted HighLevel lifecycle event; never installation identity.';
+  'HighLevel event identity, or the constrained internal_d3_baseline row/state/generation identifier; never installation identity.';
 comment on column public.ghl_marketplace_installations.latest_lifecycle_event_type is
-  'Type of the latest accepted HighLevel lifecycle event, constrained to INSTALL or UNINSTALL.';
+  'INSTALL or UNINSTALL for signed HighLevel evidence; INTERNAL_BASELINE only for the migration-owned upgrade fence.';
 comment on function public.apply_every8d_ghl_marketplace_lifecycle_v1(text,text,text,uuid,text,text,text,timestamptz,text) is
-  'Server-only atomic lifecycle order/replay boundary. Older events do not mutate; equal-time conflicts fail closed.';
+  'Server-only registered-identity lifecycle order/replay boundary. Older events do not mutate; equal-time conflicts fail closed.';
 
 commit;
