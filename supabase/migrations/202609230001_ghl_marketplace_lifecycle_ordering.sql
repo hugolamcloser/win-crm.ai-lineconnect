@@ -17,7 +17,8 @@ alter table public.ghl_marketplace_installations
     or
     (latest_lifecycle_event_at is not null
       and isfinite(latest_lifecycle_event_at)
-      and latest_lifecycle_event_id ~ '^[A-Za-z0-9_-]{1,256}$'
+      and char_length(latest_lifecycle_event_id) between 1 and 256
+      and latest_lifecycle_event_id ~ '^[A-Za-z0-9_-]+$'
       and latest_lifecycle_event_type in ('INSTALL', 'UNINSTALL'))
   );
 
@@ -105,7 +106,8 @@ begin
     or input_conversation_provider_id is null
     or input_conversation_provider_id !~ '^[A-Za-z0-9_-]{1,128}$'
     or input_event_at is null or not isfinite(input_event_at)
-    or input_event_id is null or input_event_id !~ '^[A-Za-z0-9_-]{1,256}$' then
+    or input_event_id is null or char_length(input_event_id) not between 1 and 256
+    or input_event_id !~ '^[A-Za-z0-9_-]+$' then
     raise exception 'marketplace lifecycle evidence is invalid' using errcode = '23514';
   end if;
 

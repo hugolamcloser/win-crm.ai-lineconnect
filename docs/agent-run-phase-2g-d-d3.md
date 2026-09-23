@@ -42,9 +42,10 @@ The D1 provisioning RPC owns installation identity but does not persist event ch
 | --- | --- | --- | --- |
 | `git fetch origin` | Refresh authoritative main | Passed | Branch created from `c5d7e043137423b6f3de17e17ef75ebbbc2c0860`. |
 | `npm run typecheck` | Type safety | Passed after one compile-only narrowing correction | No runtime contract correction loop was needed. |
-| Focused Node test run | Lifecycle/repository/callback behavior | Passed, 40 tests before one final retry assertion | Exact observed shapes and retry behavior covered; the final full run includes the added assertion. |
-| `npm test` | Full repository regression suite | Passed, 531 tests | 531 passed; 0 failed, skipped, cancelled, or todo. |
+| Focused Node test run | Lifecycle/repository/callback behavior | Passed, 41 tests | Exact observed shapes, event forwarding, replay, stale reversal, and equal-time ambiguity are covered. |
+| `npm test` | Full repository regression suite | Passed, 529 tests | 529 passed; 0 failed, skipped, cancelled, or todo. |
 | Local PostgreSQL 17 probe | Find disposable database runner | Unavailable | Client is installed, but no local server or Docker runtime exists; hosted CI owns the real PostgreSQL 17 run. |
+| Hosted PostgreSQL 17 run `35805822829` | First D3 migration execution | Failed before lifecycle assertions | PostgreSQL rejects regex repetition bound `{1,256}`; replaced with `char_length` plus the same character allowlist. |
 
 ## Approaches attempted
 
@@ -97,7 +98,7 @@ The D1 provisioning RPC owns installation identity but does not persist event ch
 ## Budget and stop-rule status
 
 - Active coding tasks: one.
-- Implementation correction loops used: one compile-time type narrowing correction.
+- Implementation correction loops used: one hosted PostgreSQL syntax correction (`{1,256}` to `char_length` plus allowlist).
 - Reviewer correction loops used: zero.
 - Repeated errors or failed approaches: none.
 - Stop rule triggered: no.
