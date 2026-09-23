@@ -1,16 +1,14 @@
-import type { RequestHandler } from "express";
-import { Router } from "express";
+import { Router, type RequestHandler, type Response } from "express";
 import { z } from "zod";
-import { env } from "../config/env";
 import { logger } from "../config/logger";
 import { requireSharedSecret } from "../middleware/sharedSecret";
-import {
-  Every8dGhlOAuthError,
-  every8dGhlOAuthRuntime
-} from "../services/every8dGhlOAuthService";
+import { every8dGhlOAuthReconciler } from "../services/every8dGhlOAuthReconciler";
+import { Every8dGhlOAuthError, every8dGhlOAuthRuntime } from "../services/every8dGhlOAuthService";
+import type { Every8dOAuthBootstrapStatus } from "../services/every8dGhlOAuthRepository";
 
 const bindingCookieName = "wincrm_every8d_oauth_binding";
 const cookiePath = "/oauth/every8d-connect";
+const startSchema = z.object({}).strict();
 const exactIdentifier = z.string().trim().min(1).max(256);
 const initiationSchema = z.object({
   installationId: exactIdentifier,
@@ -23,79 +21,72 @@ const callbackSchema = z.object({
 }).strict();
 
 type OAuthRuntime = {
+  isEnabled(): boolean;
+  start(): Promise<{ authorizationUrl: string; browserBinding: string; expiresAt: string }>;
   initiate(input: { installationId: string; tenantId: string; locationId: string }): Promise<{
     authorizationUrl: string;
     browserBinding: string;
     expiresAt: string;
   }>;
-  completeCallback(input: { code: string; state: string; browserBinding: string }): Promise<{
-    status: "connected";
+  acceptCallback(input: { code: string; state: string; browserBinding: string }): Promise<{
+    status: "pending";
+    ready: boolean;
   }>;
+  completeCallback(input: { code: string; state: string; browserBinding: string }): Promise<{
+    status: "pending" | "connected";
+    ready: boolean;
+  }>;
+  getStatus(browserBinding: string): Promise<Every8dOAuthBootstrapStatus | null>;
 };
 
 type OAuthRouteDependencies = {
   runtime: OAuthRuntime;
+  triggerReconcile(): void;
+  now(): number;
   initiationGuard: RequestHandler;
-  secureCookies: boolean;
 };
 
-function cookieAttributes(input: { maxAge: number; secure: boolean }): string {
+function cookieAttributes(maxAge: number): string {
   return [
     `Path=${cookiePath}`,
-    `Max-Age=${Math.max(0, Math.floor(input.maxAge))}`,
+    `Max-Age=${Math.max(0, Math.floor(maxAge))}`,
     "HttpOnly",
     "SameSite=Lax",
-    input.secure ? "Secure" : ""
-  ].filter(Boolean).join("; ");
+    "Secure"
+  ].join("; ");
 }
 
-function setBindingCookie(
-  res: Parameters<RequestHandler>[1],
-  value: string,
-  expiresAt: string,
-  secure: boolean
-): void {
-  const maxAge = Math.ceil((new Date(expiresAt).getTime() - Date.now()) / 1000);
-  res.setHeader(
-    "Set-Cookie",
-    `${bindingCookieName}=${encodeURIComponent(value)}; ${cookieAttributes({ maxAge, secure })}`
-  );
+function setBindingCookie(res: Response, value: string, expiresAt: string, now: number): void {
+  const maxAge = Math.max(0, Math.ceil((new Date(expiresAt).getTime() - now) / 1000));
+  res.setHeader("Set-Cookie", `${bindingCookieName}=${encodeURIComponent(value)}; ${cookieAttributes(maxAge)}`);
 }
 
-function clearBindingCookie(res: Parameters<RequestHandler>[1], secure: boolean): void {
-  res.setHeader(
-    "Set-Cookie",
-    `${bindingCookieName}=; ${cookieAttributes({ maxAge: 0, secure })}`
-  );
+function clearBindingCookie(res: { setHeader(name: string, value: string): void }): void {
+  res.setHeader("Set-Cookie", `${bindingCookieName}=; ${cookieAttributes(0)}`);
 }
 
 function readBindingCookie(header: string | undefined): string | null {
   if (!header) return null;
-
-  const matches = header
-    .split(";")
-    .map((entry) => entry.trim())
+  const matches = header.split(";").map((entry) => entry.trim())
     .filter((entry) => entry.startsWith(`${bindingCookieName}=`));
-
   if (matches.length !== 1) return null;
-
   try {
     const value = decodeURIComponent(matches[0]!.slice(bindingCookieName.length + 1));
     return value.length > 0 && value.length <= 4096 ? value : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 function errorStatus(error: Every8dGhlOAuthError): number {
   if (error.code === "oauth_disabled" || error.code === "oauth_configuration_invalid") return 503;
-  if (
-    error.code === "oauth_request_invalid" ||
-    error.code === "installation_not_eligible" ||
-    error.code === "oauth_state_invalid" ||
-    error.code === "token_response_rejected"
-  ) return 400;
-  return 502;
+  if (error.code === "oauth_admission_rejected") return 429;
+  if (error.code === "token_exchange_failed" || error.code === "credential_persistence_failed") return 502;
+  return 400;
+}
+
+function statusBody(status: Every8dOAuthBootstrapStatus | null): "pending" | "connected" | "failed" {
+  if (status === "succeeded") return "connected";
+  if (status === "failed" || status === null) return "failed";
+  return "pending";
 }
 
 export function createEvery8dGhlOAuthRouter(dependencies: OAuthRouteDependencies): Router {
@@ -104,18 +95,40 @@ export function createEvery8dGhlOAuthRouter(dependencies: OAuthRouteDependencies
   router.use(cookiePath, (_req, res, next) => {
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Pragma", "no-cache");
+    res.setHeader("Referrer-Policy", "no-referrer");
+    res.setHeader("X-Frame-Options", "DENY");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; base-uri 'none'");
     next();
+  });
+
+  router.post(`${cookiePath}/start`, async (req, res) => {
+    try {
+      if (!dependencies.runtime.isEnabled()) {
+        await dependencies.runtime.start();
+      }
+      startSchema.parse(req.body ?? {});
+      const start = await dependencies.runtime.start();
+      setBindingCookie(res, start.browserBinding, start.expiresAt, dependencies.now());
+      res.redirect(303, start.authorizationUrl);
+    } catch (error) {
+      if (error instanceof Every8dGhlOAuthError) {
+        logger.warn({ oauthErrorCode: error.code }, "Rejected EVERY8D Connect OAuth start");
+        res.status(errorStatus(error)).json({ ok: false, error: error.code });
+        return;
+      }
+      res.status(400).json({ ok: false, error: "oauth_request_invalid" });
+    }
   });
 
   router.post(`${cookiePath}/initiate`, dependencies.initiationGuard, async (req, res) => {
     try {
       const input = initiationSchema.parse(req.body);
       const initiation = await dependencies.runtime.initiate(input);
-      setBindingCookie(res, initiation.browserBinding, initiation.expiresAt, dependencies.secureCookies);
+      setBindingCookie(res, initiation.browserBinding, initiation.expiresAt, dependencies.now());
       res.redirect(302, initiation.authorizationUrl);
     } catch (error) {
       if (error instanceof Every8dGhlOAuthError) {
-        logger.warn({ oauthErrorCode: error.code }, "Rejected EVERY8D Connect OAuth initiation");
+        logger.warn({ oauthErrorCode: error.code }, "Rejected EVERY8D Connect installed OAuth initiation");
         res.status(errorStatus(error)).json({ ok: false, error: error.code });
         return;
       }
@@ -127,15 +140,17 @@ export function createEvery8dGhlOAuthRouter(dependencies: OAuthRouteDependencies
     try {
       const input = callbackSchema.parse(req.query);
       const browserBinding = readBindingCookie(req.header("cookie") ?? undefined);
-      if (!browserBinding) {
-        throw new Every8dGhlOAuthError("oauth_state_invalid", "EVERY8D Connect OAuth state is invalid");
+      if (!browserBinding) throw new Every8dGhlOAuthError("oauth_state_invalid", "OAuth state is invalid");
+      const accepted = await dependencies.runtime.completeCallback({ ...input, browserBinding });
+      if (accepted.ready) dependencies.triggerReconcile();
+      if (accepted.status === "connected") {
+        clearBindingCookie(res);
+        res.status(200).json({ ok: true, status: "connected" });
+        return;
       }
-
-      const result = await dependencies.runtime.completeCallback({ ...input, browserBinding });
-      clearBindingCookie(res, dependencies.secureCookies);
-      res.status(200).json({ ok: true, status: result.status });
+      res.redirect(303, `${cookiePath}/pending`);
     } catch (error) {
-      clearBindingCookie(res, dependencies.secureCookies);
+      clearBindingCookie(res);
       if (error instanceof Every8dGhlOAuthError) {
         logger.warn({ oauthErrorCode: error.code }, "Rejected EVERY8D Connect OAuth callback");
         res.status(errorStatus(error)).json({ ok: false, error: error.code });
@@ -145,11 +160,35 @@ export function createEvery8dGhlOAuthRouter(dependencies: OAuthRouteDependencies
     }
   });
 
+  router.get(`${cookiePath}/status`, async (req, res) => {
+    try {
+      const browserBinding = readBindingCookie(req.header("cookie") ?? undefined);
+      if (!browserBinding) throw new Every8dGhlOAuthError("oauth_state_invalid", "OAuth state is invalid");
+      const status = statusBody(await dependencies.runtime.getStatus(browserBinding));
+      if (status !== "pending") clearBindingCookie(res);
+      res.status(200).json({ ok: true, status });
+    } catch (error) {
+      if (error instanceof Every8dGhlOAuthError) {
+        res.status(errorStatus(error)).json({ ok: false, error: error.code });
+        return;
+      }
+      res.status(400).json({ ok: false, error: "oauth_request_invalid" });
+    }
+  });
+
+  router.get(`${cookiePath}/pending`, (_req, res) => {
+    res.status(200).type("html").send(
+      "<!doctype html><html><head><meta charset=\"utf-8\"><title>EVERY8D connection pending</title></head>" +
+      "<body><main><h1>Connection pending</h1><p>You may close this page. Completion does not depend on this browser.</p></main></body></html>"
+    );
+  });
+
   return router;
 }
 
 export const every8dGhlOAuthRouter = createEvery8dGhlOAuthRouter({
   runtime: every8dGhlOAuthRuntime,
-  initiationGuard: requireSharedSecret,
-  secureCookies: env.NODE_ENV === "production"
+  triggerReconcile: () => every8dGhlOAuthReconciler.trigger(),
+  now: Date.now,
+  initiationGuard: requireSharedSecret
 });

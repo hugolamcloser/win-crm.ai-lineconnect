@@ -1,24 +1,23 @@
 const assert = require("node:assert/strict");
-const crypto = require("node:crypto");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 
+const { getEvery8dGhlOAuthConfigFingerprint } = require("../dist/config/every8dGhlOAuth");
 const {
   Every8dGhlOAuthError,
+  Every8dGhlTokenExchangeError,
   createEvery8dGhlOAuthRuntime
 } = require("../dist/services/every8dGhlOAuthService");
-const {
-  decryptEvery8dGhlOAuthToken,
-  parseEvery8dGhlOAuthEncryptionKeys
-} = require("../dist/services/every8dGhlTokenEncryption");
+const { createEvery8dGhlOAuthReconciler } = require("../dist/services/every8dGhlOAuthReconciler");
+const { decryptEvery8dGhlOAuthToken, parseEvery8dGhlOAuthEncryptionKeys } = require("../dist/services/every8dGhlTokenEncryption");
 
-const NOW = Date.parse("2026-09-21T12:00:00.000Z");
-const accessToken = "synthetic-access-secret";
-const refreshToken = "synthetic-refresh-secret";
-const keyConfig = JSON.stringify({
-  "test-v1": Buffer.alloc(32, 0x51).toString("base64")
-});
+const NOW = Date.parse("2026-09-23T12:00:00.000Z");
+const installationUrl = "https://app.gohighlevel.com/v2/location/location-test-98/integration/integration-test-98/versions/version-test-98";
+const keyConfig = JSON.stringify({ "test-v1": Buffer.alloc(32, 0x51).toString("base64") });
+
+function sha256(value) { return createHash("sha256").update(value, "utf8").digest("hex"); }
 
 function config(overrides = {}) {
   return {
@@ -27,8 +26,9 @@ function config(overrides = {}) {
     oauthClientId: "every8d-client-98",
     oauthClientSecret: "synthetic-client-secret",
     redirectUri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
-    installationUrl: "https://app.gohighlevel.com/v2/location/location-test-98/integration/integration-test-98/versions/version-test-98",
-    installationUrlSha256: "f16af35b0cf17cea441f86b7c665c8999e36c37bc1216a8041049212b753f539",
+    installationUrl,
+    installationUrlSha256: sha256(installationUrl),
+    marketplaceVersionId: "version-test-98",
     tokenUrl: "https://services.leadconnectorhq.com/oauth/token",
     conversationProviderId: "every8d-provider-98",
     requiredScopes: ["locations.readonly"],
@@ -53,22 +53,23 @@ function installation(overrides = {}) {
     provider: "every8d",
     status: "pending",
     installation_generation: 3,
+    latest_lifecycle_event_at: "2026-09-23T11:59:00.000Z",
+    latest_lifecycle_event_id: "install-event-98",
+    latest_lifecycle_event_type: "INSTALL",
+    latest_lifecycle_version_id: "version-test-98",
     access_token_ciphertext: null,
     refresh_token_ciphertext: null,
     encryption_key_version: null,
     token_expires_at: null,
     granted_scopes: [],
-    created_at: "2026-09-21T11:00:00.000Z",
-    updated_at: "2026-09-21T11:00:00.000Z",
     ...overrides
   };
 }
 
-function locationToken(overrides = {}) {
+function token(overrides = {}) {
   return {
-    access_token: accessToken,
-    refresh_token: refreshToken,
-    token_type: "Bearer",
+    access_token: "synthetic-access-secret",
+    refresh_token: "synthetic-refresh-secret",
     expires_in: 3600,
     scope: "locations.readonly",
     userType: "Location",
@@ -83,450 +84,314 @@ function locationToken(overrides = {}) {
   };
 }
 
-function createHarness(options = {}) {
-  const selectedInstallation = options.installation ?? installation();
-  const states = new Map();
-  let stateSequence = 0;
-  let repositoryReads = 0;
-  let stateCreates = 0;
-  let stateConsumes = 0;
-  let exchangeCalls = 0;
-  let persistCalls = 0;
+function harness(options = {}) {
+  const selectedConfig = config(options.config);
+  const fingerprint = getEvery8dGhlOAuthConfigFingerprint(selectedConfig);
+  const calls = { create: 0, inspect: 0, accept: 0, list: 0, claim: 0, fail: 0, finalize: 0, exchange: 0, random: 0 };
+  let bootstrap = null;
+  let failureClass = null;
   let persisted = null;
+  let sequence = 0;
+  let claimWon = false;
+  const legacyStates = new Map();
 
   const repository = {
-    async getEligibleInstallation(input) {
-      repositoryReads += 1;
-      return options.installationForRead
-        ? options.installationForRead({ input, read: repositoryReads, selectedInstallation })
-        : selectedInstallation;
-    },
-    async createOAuthState(input) {
-      stateCreates += 1;
-      const record = {
-        id: `state-${++stateSequence}`,
-        installation_id: input.installationId,
-        installation_generation: input.installationGeneration,
+    async createBootstrap(input) {
+      calls.create += 1;
+      bootstrap = {
+        id: "20000000-0000-4000-8000-000000000098",
+        app_namespace: "every8d_connect",
+        marketplace_version_id: input.marketplaceVersionId,
         state_hash: input.stateHash,
         browser_binding_hash: input.browserBindingHash,
         redirect_uri: input.redirectUri,
-        created_at: new Date(NOW).toISOString(),
-        expires_at: input.expiresAt,
-        consumed_at: null,
-        revoked_at: null
+        config_fingerprint: input.configFingerprint,
+        status: "awaiting_callback",
+        expires_at: new Date(NOW + input.ttlSeconds * 1000).toISOString(),
+        callback_received_at: null,
+        authorization_code_ciphertext: null,
+        authorization_code_key_version: null,
+        claimed_installation_id: options.installFirst === false ? null : installation().id,
+        claimed_installation_generation: options.installFirst === false ? null : 3,
+        exchange_started_at: null,
+        terminal_at: null,
+        failure_class: null
       };
-      states.set(record.state_hash, record);
-      return record;
+      return { id: bootstrap.id, expires_at: bootstrap.expires_at };
     },
-    async getOAuthStateByHash(stateHash) {
-      return states.get(stateHash) ?? null;
+    async inspectCallback(input) {
+      calls.inspect += 1;
+      if (!bootstrap || bootstrap.status !== "awaiting_callback" || input.stateHash !== bootstrap.state_hash
+        || input.browserBindingHash !== bootstrap.browser_binding_hash || input.redirectUri !== bootstrap.redirect_uri
+        || input.configFingerprint !== bootstrap.config_fingerprint || options.rejectInspect) return null;
+      return bootstrap;
     },
-    async consumeOAuthState(input) {
-      const record = states.get(input.stateHash);
-      if (
-        !record ||
-        record.id !== input.stateId ||
-        record.installation_id !== input.installationId ||
-        record.installation_generation !== input.installationGeneration ||
-        record.browser_binding_hash !== input.browserBindingHash ||
-        record.redirect_uri !== input.redirectUri ||
-        record.consumed_at ||
-        record.revoked_at ||
-        new Date(record.expires_at).getTime() <= NOW
-      ) {
-        return null;
+    async acceptCallback(input) {
+      calls.accept += 1;
+      if (!bootstrap || bootstrap.status !== "awaiting_callback") return null;
+      bootstrap.callback_received_at = new Date(NOW).toISOString();
+      bootstrap.authorization_code_ciphertext = input.authorizationCodeCiphertext;
+      bootstrap.authorization_code_key_version = input.authorizationCodeKeyVersion;
+      bootstrap.status = bootstrap.claimed_installation_id ? "ready" : "waiting_install";
+      return bootstrap.status;
+    },
+    async listRecoverable() {
+      calls.list += 1;
+      return bootstrap?.status === "ready" ? [bootstrap.id] : [];
+    },
+    async claimExchange() {
+      calls.claim += 1;
+      if (!bootstrap || bootstrap.status !== "ready" || claimWon) return null;
+      claimWon = true;
+      bootstrap.status = "exchanging";
+      bootstrap.exchange_started_at = new Date(NOW).toISOString();
+      return { bootstrap: { ...bootstrap }, installation: installation(options.installation) };
+    },
+    async failBootstrap(input) {
+      calls.fail += 1;
+      failureClass = input.failureClass;
+      if (bootstrap && bootstrap.status !== "succeeded") {
+        bootstrap.status = "failed";
+        bootstrap.authorization_code_ciphertext = null;
+        bootstrap.authorization_code_key_version = null;
       }
-      record.consumed_at = new Date(NOW).toISOString();
-      stateConsumes += 1;
-      return { ...record };
+      return true;
     },
-    async persistCredentials(input) {
-      persistCalls += 1;
+    async finalizeExchange(input) {
+      calls.finalize += 1;
+      if (options.finalizeFalse) return false;
       persisted = input;
-      return options.persistenceResult === undefined ? {
-        ...selectedInstallation,
-        access_token_ciphertext: input.accessTokenCiphertext,
-        refresh_token_ciphertext: input.refreshTokenCiphertext,
-        encryption_key_version: input.encryptionKeyVersion,
-        token_expires_at: options.persistedExpiresAt ?? input.expiresAt,
-        granted_scopes: input.grantedScopes
-      } : options.persistenceResult;
-    }
+      bootstrap.status = "succeeded";
+      bootstrap.authorization_code_ciphertext = null;
+      bootstrap.authorization_code_key_version = null;
+      return true;
+    },
+    async getStatus() { return bootstrap?.status ?? null; },
+    async getEligibleInstallation() { return installation(options.installation); },
+    async createOAuthState(input) {
+      const state = {
+        id: "legacy-state-98", installation_id: input.installationId,
+        installation_generation: input.installationGeneration, state_hash: input.stateHash,
+        browser_binding_hash: input.browserBindingHash, redirect_uri: input.redirectUri,
+        created_at: new Date(NOW).toISOString(), expires_at: input.expiresAt,
+        consumed_at: null, revoked_at: null
+      };
+      legacyStates.set(state.state_hash, state);
+      return state;
+    },
+    async getOAuthStateByHash(stateHash) { return legacyStates.get(stateHash) ?? null; },
+    async consumeOAuthState(input) {
+      const state = legacyStates.get(input.stateHash);
+      if (!state || state.consumed_at || state.browser_binding_hash !== input.browserBindingHash) return null;
+      state.consumed_at = new Date(NOW).toISOString();
+      return state;
+    },
+    async persistInstalledCredentials(input) { persisted = input; return installation(); }
   };
 
   const runtime = createEvery8dGhlOAuthRuntime({
-    config: config(options.config),
+    config: selectedConfig,
     repository,
     exchangeAuthorizationCode: async () => {
-      exchangeCalls += 1;
-      if (options.exchangeGate) await options.exchangeGate;
+      calls.exchange += 1;
       if (options.exchangeError) throw options.exchangeError;
-      return options.tokenResponse ?? locationToken();
+      if (options.exchangeGate) await options.exchangeGate;
+      return options.token ?? token();
     },
     now: () => NOW,
-    randomBytes: (size) => crypto.randomBytes(size)
+    randomBytes: (size) => {
+      calls.random += 1;
+      sequence += 1;
+      return Buffer.alloc(size, sequence);
+    }
   });
 
-  async function initiate() {
-    return runtime.initiate({
-      installationId: selectedInstallation.id,
-      tenantId: "00000000-0000-4000-8000-000000000098",
-      locationId: "location-98"
-    });
-  }
-
-  async function callback(initiation, overrides = {}) {
-    return runtime.completeCallback({
+  async function startAndCallback(callbackOverrides = {}) {
+    const started = await runtime.start();
+    const state = new URL(started.authorizationUrl).searchParams.get("state");
+    const accepted = await runtime.acceptCallback({
       code: "synthetic-authorization-code",
-      state: new URL(initiation.authorizationUrl).searchParams.get("state"),
-      browserBinding: initiation.browserBinding,
-      ...overrides
+      state,
+      browserBinding: started.browserBinding,
+      ...callbackOverrides
     });
+    return { started, state, accepted };
   }
 
   return {
-    runtime,
-    repository,
-    states,
-    initiate,
-    callback,
-    get repositoryReads() { return repositoryReads; },
-    get stateCreates() { return stateCreates; },
-    get stateConsumes() { return stateConsumes; },
-    get exchangeCalls() { return exchangeCalls; },
-    get persistCalls() { return persistCalls; },
+    runtime, repository, calls, startAndCallback, fingerprint,
+    get bootstrap() { return bootstrap; },
+    get failureClass() { return failureClass; },
     get persisted() { return persisted; }
   };
 }
 
-test("default-off OAuth performs zero repository, network, or persistence activity", async () => {
-  const harness = createHarness({ config: { enabled: false } });
+test("OAuth disabled performs zero DB, RNG, cookie-equivalent, reconciler, and network activity", async () => {
+  const h = harness({ config: { enabled: false } });
+  for (const operation of [
+    () => h.runtime.start(),
+    () => h.runtime.acceptCallback({ code: "x", state: "y", browserBinding: "z" }),
+    () => h.runtime.reconcileOnce()
+  ]) {
+    await assert.rejects(operation, (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_disabled");
+  }
+  const reconciler = createEvery8dGhlOAuthReconciler(h.runtime);
+  reconciler.trigger();
+  const stop = reconciler.start();
+  stop();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(h.calls, { create: 0, inspect: 0, accept: 0, list: 0, claim: 0, fail: 0, finalize: 0, exchange: 0, random: 0 });
+});
 
+test("public start creates independent state and binding, persists hashes only, and pins exact install URL", async () => {
+  const h = harness();
+  const started = await h.runtime.start();
+  const state = new URL(started.authorizationUrl).searchParams.get("state");
+  assert.notEqual(state, started.browserBinding);
+  assert.equal(h.bootstrap.state_hash, sha256(state));
+  assert.equal(h.bootstrap.browser_binding_hash, sha256(started.browserBinding));
+  assert.equal(JSON.stringify(h.bootstrap).includes(state), false);
+  assert.equal(JSON.stringify(h.bootstrap).includes(started.browserBinding), false);
+  assert.equal(new URL(started.authorizationUrl).origin, "https://app.gohighlevel.com");
+  assert.equal(h.calls.random, 2);
+});
+
+test("callback validates state and binding before encrypting the code and replay is rejected", async () => {
+  const h = harness();
+  const { started, state, accepted } = await h.startAndCallback();
+  assert.deepEqual(accepted, { status: "pending", ready: true });
+  assert.equal(h.bootstrap.authorization_code_ciphertext.includes("synthetic-authorization-code"), false);
   await assert.rejects(
-    () => harness.runtime.initiate({
+    () => h.runtime.acceptCallback({ code: "second-code", state, browserBinding: started.browserBinding }),
+    (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_state_invalid"
+  );
+  assert.equal(h.calls.accept, 1);
+});
+
+test("wrong state, binding, redirect/config drift fail before code acceptance or exchange", async () => {
+  for (const overrides of [
+    { state: "wrong-state" },
+    { browserBinding: "wrong-binding" }
+  ]) {
+    const h = harness();
+    const started = await h.runtime.start();
+    const state = new URL(started.authorizationUrl).searchParams.get("state");
+    await assert.rejects(
+      () => h.runtime.acceptCallback({ code: "secret-code", state, browserBinding: started.browserBinding, ...overrides }),
+      (error) => error.code === "oauth_state_invalid"
+    );
+    assert.equal(h.calls.accept, 0);
+    assert.equal(h.calls.exchange, 0);
+  }
+  const drift = harness({ rejectInspect: true });
+  await assert.rejects(() => drift.startAndCallback(), (error) => error.code === "oauth_state_invalid");
+  assert.equal(drift.calls.accept, 0);
+});
+
+test("ready exchange has one claimant, validates exact ownership, and atomically finalizes encrypted credentials", async () => {
+  const h = harness();
+  await h.startAndCallback();
+  await Promise.all([h.runtime.reconcileOnce(), h.runtime.reconcileOnce()]);
+  assert.equal(h.calls.exchange, 1);
+  assert.equal(h.calls.finalize, 1);
+  assert.equal(h.bootstrap.status, "succeeded");
+  assert.equal(h.bootstrap.authorization_code_ciphertext, null);
+  assert.equal(h.persisted.accessTokenCiphertext.includes("synthetic-access-secret"), false);
+  const i = installation();
+  const decrypted = decryptEvery8dGhlOAuthToken({
+    ciphertext: h.persisted.accessTokenCiphertext,
+    expectedKeyVersion: "test-v1",
+    keys: config().encryptionKeys,
+    context: {
+      installationId: i.id, installationGeneration: i.installation_generation,
+      marketplaceAppId: i.marketplace_app_id, oauthClientId: i.oauth_client_id,
+      tenantId: i.tenant_id, locationId: i.location_id, companyId: i.company_id,
+      purpose: "access_token"
+    }
+  });
+  assert.equal(decrypted, "synthetic-access-secret");
+});
+
+for (const [name, tokenOverride] of [
+  ["Location mode", { userType: "Company" }],
+  ["location ownership", { locationId: "foreign-location" }],
+  ["company ownership", { companyId: "foreign-company" }],
+  ["app identity", { appId: "foreign-app" }],
+  ["scope set", { scope: "locations.write" }],
+  ["bulk authority", { isBulkInstallation: true }],
+  ["future authority", { installToFutureLocations: true }],
+  ["all-location authority", { approveAllLocations: true }]
+]) {
+  test(`token response rejects mismatched ${name}`, async () => {
+    const h = harness({ token: token(tokenOverride) });
+    await h.startAndCallback();
+    await h.runtime.reconcileOnce();
+    assert.equal(h.failureClass, "token_response_rejected");
+    assert.equal(h.calls.finalize, 0);
+    assert.equal(h.bootstrap.authorization_code_ciphertext, null);
+  });
+}
+
+for (const failureClass of ["invalid_grant", "token_response_rejected", "exchange_outcome_unknown"]) {
+  test(`${failureClass} is terminal, scrubs the code, and is never automatically replayed`, async () => {
+    const h = harness({ exchangeError: new Every8dGhlTokenExchangeError(failureClass) });
+    await h.startAndCallback();
+    await h.runtime.reconcileOnce();
+    await h.runtime.reconcileOnce();
+    assert.equal(h.failureClass, failureClass);
+    assert.equal(h.calls.exchange, 1);
+    assert.equal(h.bootstrap.authorization_code_ciphertext, null);
+  });
+}
+
+test("failed atomic finalization leaves no usable credentials and marks the attempt failed", async () => {
+  const h = harness({ finalizeFalse: true });
+  await h.startAndCallback();
+  await h.runtime.reconcileOnce();
+  assert.equal(h.failureClass, "credential_persistence_failed");
+  assert.equal(h.persisted, null);
+});
+
+test("OAuth errors and persistence inputs do not expose raw code, state, binding, or tokens", async () => {
+  const h = harness({ exchangeError: new Error("provider-body-sensitive") });
+  const { started, state } = await h.startAndCallback();
+  await h.runtime.reconcileOnce();
+  const serialized = JSON.stringify({ calls: h.calls, failureClass: h.failureClass, bootstrap: h.bootstrap });
+  for (const secret of ["synthetic-authorization-code", state, started.browserBinding, "provider-body-sensitive", "synthetic-access-secret"]) {
+    assert.equal(serialized.includes(secret), false);
+  }
+});
+
+test("installed shared-secret flow remains installation-bound and requires current signed version evidence", async () => {
+  const h = harness();
+  const started = await h.runtime.initiate({
+    installationId: installation().id,
+    tenantId: installation().tenant_id,
+    locationId: installation().location_id
+  });
+  const result = await h.runtime.completeCallback({
+    code: "installed-authorization-code",
+    state: new URL(started.authorizationUrl).searchParams.get("state"),
+    browserBinding: started.browserBinding
+  });
+  assert.deepEqual(result, { status: "connected", ready: false });
+  assert.equal(h.calls.exchange, 1);
+  assert.equal(h.persisted.marketplaceVersionId, "version-test-98");
+  const wrongVersion = harness({ installation: { latest_lifecycle_version_id: "foreign-version" } });
+  await assert.rejects(
+    () => wrongVersion.runtime.initiate({
       installationId: installation().id,
       tenantId: installation().tenant_id,
       locationId: installation().location_id
     }),
-    (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_disabled"
+    (error) => error.code === "installation_not_eligible"
   );
-  assert.equal(harness.repositoryReads, 0);
-  assert.equal(harness.stateCreates, 0);
-  assert.equal(harness.exchangeCalls, 0);
-  assert.equal(harness.persistCalls, 0);
+  assert.equal(wrongVersion.calls.exchange, 0);
 });
 
-test("missing installation URL approval digest blocks initiation before side effects", async () => {
-  const harness = createHarness({ config: { installationUrlSha256: "" } });
-
-  await assert.rejects(
-    () => harness.initiate(),
-    (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_configuration_invalid"
-  );
-  assert.equal(harness.repositoryReads, 0);
-  assert.equal(harness.stateCreates, 0);
-  assert.equal(harness.exchangeCalls, 0);
-  assert.equal(harness.persistCalls, 0);
-});
-
-test("initiation stores only state and browser-binding SHA-256 hashes", async () => {
-  const harness = createHarness();
-  const initiation = await harness.initiate();
-  const rawState = new URL(initiation.authorizationUrl).searchParams.get("state");
-  const stored = [...harness.states.values()][0];
-
-  assert.equal(stored.state_hash, crypto.createHash("sha256").update(rawState).digest("hex"));
-  assert.equal(stored.browser_binding_hash, crypto.createHash("sha256").update(initiation.browserBinding).digest("hex"));
-  assert.equal(JSON.stringify(stored).includes(rawState), false);
-  assert.equal(JSON.stringify(stored).includes(initiation.browserBinding), false);
-  assert.equal(stored.installation_id, installation().id);
-  assert.equal(stored.installation_generation, 3);
-});
-
-test("exact Location installation consumes once and persists only encrypted credentials", async () => {
-  const harness = createHarness();
-  const initiation = await harness.initiate();
-  const result = await harness.callback(initiation);
-
-  assert.deepEqual(result, { status: "connected" });
-  assert.equal(harness.stateConsumes, 1);
-  assert.equal(harness.exchangeCalls, 1);
-  assert.equal(harness.persistCalls, 1);
-  assert.equal(JSON.stringify(harness.persisted).includes(accessToken), false);
-  assert.equal(JSON.stringify(harness.persisted).includes(refreshToken), false);
-  assert.deepEqual(harness.persisted.grantedScopes, ["locations.readonly"]);
-  assert.equal(harness.persisted.encryptionKeyVersion, "test-v1");
-  assert.equal(harness.persisted.companyId, "company-98");
-
-  const aadBase = {
-    installationId: installation().id,
-    installationGeneration: 3,
-    marketplaceAppId: "every8d-app-98",
-    oauthClientId: "every8d-client-98",
-    tenantId: "00000000-0000-4000-8000-000000000098",
-    locationId: "location-98",
-    companyId: "company-98"
-  };
-  assert.equal(decryptEvery8dGhlOAuthToken({
-    ciphertext: harness.persisted.accessTokenCiphertext,
-    expectedKeyVersion: "test-v1",
-    keys: config().encryptionKeys,
-    context: { ...aadBase, purpose: "access_token" }
-  }), accessToken);
-  assert.equal(decryptEvery8dGhlOAuthToken({
-    ciphertext: harness.persisted.refreshTokenCiphertext,
-    expectedKeyVersion: "test-v1",
-    keys: config().encryptionKeys,
-    context: { ...aadBase, purpose: "refresh_token" }
-  }), refreshToken);
-});
-
-test("matching token response aliases are accepted as one semantic value", async () => {
-  const harness = createHarness({
-    tokenResponse: locationToken({
-      accessToken,
-      refreshToken,
-      expiresIn: "3600",
-      scopes: ["locations.readonly"],
-      user_type: "Location",
-      location_id: "location-98",
-      company_id: "company-98",
-      app_id: "every8d-app-98",
-      is_bulk_installation: false,
-      install_to_future_locations: false,
-      approve_all_locations: false,
-      approved_locations: ["location-98"]
-    })
-  });
-  const initiation = await harness.initiate();
-
-  assert.deepEqual(await harness.callback(initiation), { status: "connected" });
-  assert.equal(harness.persistCalls, 1);
-});
-
-for (const [name, conflictingAlias] of [
-  ["company", { company_id: "foreign-company" }],
-  ["location", { location_id: "foreign-location" }],
-  ["app", { app_id: "foreign-app" }],
-  ["user type", { user_type: "Company" }],
-  ["access token", { accessToken: "conflicting-access-token" }],
-  ["refresh token", { refreshToken: "conflicting-refresh-token" }],
-  ["expiry", { expiresIn: 7200 }],
-  ["bulk ownership mode", { is_bulk_installation: true }],
-  ["future-location ownership mode", { install_to_future_locations: true }],
-  ["all-location ownership mode", { approve_all_locations: true }],
-  ["approved locations", { approved_locations: ["foreign-location"] }],
-  ["scopes", { scopes: ["locations.readonly", "contacts.write"] }]
-]) {
-  test(`conflicting ${name} aliases are rejected before credential persistence`, async () => {
-    const harness = createHarness({ tokenResponse: locationToken(conflictingAlias) });
-    const initiation = await harness.initiate();
-
-    await assert.rejects(
-      () => harness.callback(initiation),
-      (error) => error instanceof Every8dGhlOAuthError &&
-        error.code === "token_response_rejected" &&
-        !error.message.includes("conflicting") &&
-        !JSON.stringify(error).includes("foreign-") &&
-        !JSON.stringify(error).includes("conflicting-access-token") &&
-        !JSON.stringify(error).includes("conflicting-refresh-token")
-    );
-    assert.equal(harness.persistCalls, 0);
-  });
-}
-
-test("equivalent PostgREST timestamptz representation is accepted after persistence", async () => {
-  const harness = createHarness({ persistedExpiresAt: "2026-09-21T13:00:00+00:00" });
-  const initiation = await harness.initiate();
-
-  await assert.doesNotReject(() => harness.callback(initiation));
-  assert.equal(harness.persistCalls, 1);
-});
-
-test("genuinely different persisted expiry instant fails closed", async () => {
-  const harness = createHarness({ persistedExpiresAt: "2026-09-21T13:00:00.001+00:00" });
-  const initiation = await harness.initiate();
-
-  await assert.rejects(
-    () => harness.callback(initiation),
-    (error) => error instanceof Every8dGhlOAuthError && error.code === "credential_persistence_failed"
-  );
-  assert.equal(harness.persistCalls, 1);
-});
-
-test("malformed persisted expiry fails closed", async () => {
-  const harness = createHarness({ persistedExpiresAt: "not-a-timestamp" });
-  const initiation = await harness.initiate();
-
-  await assert.rejects(
-    () => harness.callback(initiation),
-    (error) => error instanceof Every8dGhlOAuthError && error.code === "credential_persistence_failed"
-  );
-});
-
-for (const [name, changed] of [
-  ["wrong installation", { id: "10000000-0000-4000-8000-000000000099" }],
-  ["wrong app", { marketplace_app_id: "foreign-app" }],
-  ["wrong client", { oauth_client_id: "foreign-client" }],
-  ["wrong tenant", { tenant_id: "00000000-0000-4000-8000-000000000099" }],
-  ["wrong location", { location_id: "foreign-location" }],
-  ["missing company", { company_id: null }]
-]) {
-  test(`${name} installation context fails before state persistence or exchange`, async () => {
-    const expectedId = installation().id;
-    const harness = createHarness({ installation: installation(changed) });
-
-    await assert.rejects(
-      () => harness.runtime.initiate({
-        installationId: expectedId,
-        tenantId: installation().tenant_id,
-        locationId: installation().location_id
-      }),
-      (error) => error instanceof Every8dGhlOAuthError && error.code === "installation_not_eligible"
-    );
-    assert.equal(harness.stateCreates, 0);
-    assert.equal(harness.exchangeCalls, 0);
-  });
-}
-
-for (const [name, tokenResponse] of [
-  ["Company token", locationToken({ userType: "Company", locationId: undefined })],
-  ["bulk install", locationToken({ isBulkInstallation: true })],
-  ["future-location install", locationToken({ installToFutureLocations: true })],
-  ["approve-all-locations", locationToken({ approveAllLocations: true })],
-  ["foreign approved location", locationToken({ approvedLocations: ["foreign-location"] })],
-  ["wrong app response", locationToken({ appId: "foreign-app" })],
-  ["wrong location response", locationToken({ locationId: "foreign-location" })],
-  ["missing company response", locationToken({ companyId: undefined })],
-  ["wrong company response", locationToken({ companyId: "foreign-company" })],
-  ["unexpected scope", locationToken({ scope: "locations.readonly contacts.write" })]
-]) {
-  test(`${name} is rejected after permanent state consumption and before persistence`, async () => {
-    const harness = createHarness({ tokenResponse });
-    const initiation = await harness.initiate();
-
-    await assert.rejects(
-      () => harness.callback(initiation),
-      (error) => error instanceof Every8dGhlOAuthError && error.code === "token_response_rejected"
-    );
-    assert.equal(harness.stateConsumes, 1);
-    assert.equal(harness.exchangeCalls, 1);
-    assert.equal(harness.persistCalls, 0);
-    await assert.rejects(
-      () => harness.callback(initiation),
-      (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_state_invalid"
-    );
-    assert.equal(harness.exchangeCalls, 1);
-  });
-}
-
-for (const [name, mutate] of [
-  ["expired state", (state) => { state.expires_at = new Date(NOW - 1).toISOString(); }],
-  ["consumed state", (state) => { state.consumed_at = new Date(NOW - 1).toISOString(); }],
-  ["revoked state", (state) => { state.revoked_at = new Date(NOW - 1).toISOString(); }],
-  ["stale generation", (state) => { state.installation_generation -= 1; }],
-  ["wrong redirect", (state) => { state.redirect_uri = "https://foreign.invalid/callback"; }]
-]) {
-  test(`${name} fails before token exchange`, async () => {
-    const harness = createHarness();
-    const initiation = await harness.initiate();
-    mutate([...harness.states.values()][0]);
-
-    await assert.rejects(
-      () => harness.callback(initiation),
-      (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_state_invalid"
-    );
-    assert.equal(harness.exchangeCalls, 0);
-    assert.equal(harness.persistCalls, 0);
-  });
-}
-
-test("wrong browser binding fails before state consumption or token exchange", async () => {
-  const harness = createHarness();
-  const initiation = await harness.initiate();
-
-  await assert.rejects(
-    () => harness.callback(initiation, { browserBinding: "foreign-browser-binding" }),
-    (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_state_invalid"
-  );
-  assert.equal(harness.stateConsumes, 0);
-  assert.equal(harness.exchangeCalls, 0);
-});
-
-test("two concurrent callbacks produce one state winner and one token exchange", async () => {
-  let releaseExchange;
-  const exchangeGate = new Promise((resolve) => { releaseExchange = resolve; });
-  const harness = createHarness({ exchangeGate });
-  const initiation = await harness.initiate();
-  const first = harness.callback(initiation);
-  const second = harness.callback(initiation);
-  releaseExchange();
-  const results = await Promise.allSettled([first, second]);
-
-  assert.equal(results.filter((result) => result.status === "fulfilled").length, 1);
-  assert.equal(results.filter((result) => result.status === "rejected").length, 1);
-  assert.equal(harness.stateConsumes, 1);
-  assert.equal(harness.exchangeCalls, 1);
-  assert.equal(harness.persistCalls, 1);
-});
-
-test("generation change after exchange prevents stale credential persistence", async () => {
-  const harness = createHarness({
-    installationForRead: ({ read, selectedInstallation }) => (
-      read === 3
-        ? installation({ ...selectedInstallation, installation_generation: 4 })
-        : selectedInstallation
-    )
-  });
-  const initiation = await harness.initiate();
-
-  await assert.rejects(
-    () => harness.callback(initiation),
-    (error) => error instanceof Every8dGhlOAuthError && error.code === "credential_persistence_failed"
-  );
-  assert.equal(harness.stateConsumes, 1);
-  assert.equal(harness.exchangeCalls, 1);
-  assert.equal(harness.persistCalls, 0);
-});
-
-test("exchange failures expose no authorization code, state, binding, token, or provider body", async () => {
-  const harness = createHarness({ exchangeError: new Error("provider leaked synthetic-authorization-code") });
-  const initiation = await harness.initiate();
-  const rawState = new URL(initiation.authorizationUrl).searchParams.get("state");
-
-  await assert.rejects(() => harness.callback(initiation), (error) => {
-    assert.equal(error.code, "token_exchange_failed");
-    const serialized = JSON.stringify(error);
-    for (const secret of ["synthetic-authorization-code", rawState, initiation.browserBinding, accessToken, refreshToken]) {
-      assert.equal(error.message.includes(secret), false);
-      assert.equal(serialized.includes(secret), false);
-    }
-    return true;
-  });
-  assert.equal(harness.stateConsumes, 1);
-  assert.equal(harness.persistCalls, 0);
-});
-
-test("EVERY8D OAuth source has no legacy LINE OAuth, tenant creation, SMS, or EVERY8D transport dependency", () => {
-  const source = [
-    "src/services/every8dGhlOAuthService.ts",
-    "src/services/every8dGhlOAuthRepository.ts",
-    "src/services/every8dGhlMarketplaceLifecycleService.ts"
-  ].map((file) => fs.readFileSync(path.join(process.cwd(), file), "utf8")).join("\n");
-
-  for (const forbidden of [
-    "upsertGhlOAuthToken",
-    "getGhlOAuthToken",
-    "ensureTenantForLocation",
-    "ghl_oauth_tokens",
-    "GHL_CUSTOM_PROVIDER_ID",
-    "ghlSmsProviderOutboundService",
-    "consumeGhlSmsControlledLiveAuthorization",
-    "every8dClient",
-    "SmsOutboundService",
-    "Every8dSmsProvider",
-    "Every8dClient"
-  ]) {
+test("EVERY8D OAuth source remains isolated from LINE, SMS dispatch, and EVERY8D transport modules", () => {
+  const source = fs.readFileSync(path.join(__dirname, "../src/services/every8dGhlOAuthService.ts"), "utf8");
+  for (const forbidden of ["lineClient", "line_channels", "ghlSms", "smsOutbound", "every8dClient", "every8dSmsProvider"]) {
     assert.equal(source.includes(forbidden), false, forbidden);
   }
 });

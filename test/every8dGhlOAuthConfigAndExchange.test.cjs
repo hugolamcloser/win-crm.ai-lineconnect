@@ -8,7 +8,7 @@ const {
   readEvery8dGhlOAuthConfig
 } = require("../dist/config/every8dGhlOAuth");
 const {
-  Every8dGhlOAuthError,
+  Every8dGhlTokenExchangeError,
   exchangeEvery8dGhlAuthorizationCode
 } = require("../dist/services/every8dGhlOAuthService");
 
@@ -157,7 +157,7 @@ test("token exchange rejects an alternate endpoint before any network request", 
         return new Response("{}", { status: 200 });
       }
     }),
-    (error) => error instanceof Every8dGhlOAuthError && error.code === "token_exchange_failed"
+    (error) => error instanceof Every8dGhlTokenExchangeError
   );
   assert.equal(requests, 0);
 });
@@ -208,7 +208,7 @@ test("token exchange refuses every redirect status without a follow-up network r
           });
         }
       }),
-      (error) => error instanceof Every8dGhlOAuthError && error.code === "token_exchange_failed",
+      (error) => error instanceof Every8dGhlTokenExchangeError,
       String(status)
     );
     assert.equal(requests, 1, String(status));
@@ -226,11 +226,38 @@ test("token exchange rejects oversized and malformed provider responses without 
         fetchImpl: async () => new Response(body, { status: 200 })
       }),
       (error) => {
-        assert.equal(error instanceof Every8dGhlOAuthError, true);
-        assert.equal(error.code, "token_exchange_failed");
+        assert.equal(error instanceof Every8dGhlTokenExchangeError, true);
         assert.equal(error.message.includes(body.slice(0, 20)), false);
         return true;
       }
     );
   }
 });
+
+test("invalid_grant is classified as a definitive one-time terminal exchange outcome", async () => {
+  const config = readEvery8dGhlOAuthConfig(completeEnvironment());
+  await assert.rejects(
+    () => exchangeEvery8dGhlAuthorizationCode({
+      code: "synthetic-code", config,
+      fetchImpl: async () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 })
+    }),
+    (error) => error instanceof Every8dGhlTokenExchangeError && error.failureClass === "invalid_grant"
+  );
+});
+
+for (const [name, fetchImpl] of [
+  ["timeout", async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); }],
+  ["network failure", async () => { throw new Error("network unavailable"); }],
+  ["429", async () => new Response("rate limited", { status: 429 })],
+  ["5xx", async () => new Response("provider unavailable", { status: 503 })]
+]) {
+  test(`${name} is classified exchange_outcome_unknown and is not made retryable`, async () => {
+    const config = readEvery8dGhlOAuthConfig(completeEnvironment());
+    await assert.rejects(
+      () => exchangeEvery8dGhlAuthorizationCode({ code: "synthetic-code", config, fetchImpl }),
+      (error) => error instanceof Every8dGhlTokenExchangeError
+        && error.failureClass === "exchange_outcome_unknown"
+        && !error.message.includes("synthetic-code")
+    );
+  });
+}
