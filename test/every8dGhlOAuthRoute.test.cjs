@@ -113,6 +113,32 @@ test("callback failure response never exposes OAuth inputs or provider diagnosti
   assert.match(response.headers.get("set-cookie"), /Max-Age=0/i);
 });
 
+test("observed code-only Marketplace callback remains rejected without state or token exchange", async (t) => {
+  let callbackCalls = 0;
+  const runtime = {
+    initiate: async () => { throw new Error("not expected"); },
+    completeCallback: async () => {
+      callbackCalls += 1;
+      throw new Error("not expected");
+    }
+  };
+  const { server, baseUrl } = await startRouter({ runtime });
+  t.after(() => server.close());
+
+  const response = await fetch(
+    `${baseUrl}/oauth/every8d-connect/callback?code=authorization-code-sensitive`,
+    { headers: { cookie: "wincrm_every8d_oauth_binding=synthetic-browser-binding" } }
+  );
+  const bodyText = await response.text();
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(JSON.parse(bodyText), { ok: false, error: "oauth_request_invalid" });
+  assert.equal(callbackCalls, 0);
+  assert.equal(bodyText.includes("authorization-code-sensitive"), false);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.match(response.headers.get("set-cookie"), /Max-Age=0/i);
+});
+
 test("initiation guard rejects before OAuth runtime activity", async (t) => {
   let runtimeCalls = 0;
   const runtime = {

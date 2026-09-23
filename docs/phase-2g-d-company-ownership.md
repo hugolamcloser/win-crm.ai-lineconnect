@@ -1,4 +1,4 @@
-# Phase 2G-D D1 — staged HighLevel company ownership
+# Phase 2G-D — staged HighLevel company ownership and D3 lifecycle contract
 
 Issue: [#100](https://github.com/hugolamcloser/win-crm.ai-lineconnect/issues/100).
 
@@ -36,7 +36,7 @@ The server-only `provision_every8d_ghl_marketplace_installation_v1` database fun
 - permits the same company at different exact Locations; and
 - reactivates disabled/uninstalled ownership as pending with exactly one generation increment.
 
-The application repository exposes this narrow RPC, but the lifecycle service does not call it in D1. Automatic INSTALL provisioning remains blocked because public HighLevel examples do not reliably establish `appNamespace`, `installType`, `versionId`, `webhookId`, a stable installation ID, or event ordering. This avoids encoding an unproven signed-payload contract. No in-memory lock is used as an ownership guarantee.
+The original D3 lifecycle service called this narrow RPC only after Ed25519 verification and exact signed INSTALL validation. The D3 replay repair retires service-role execution of this unordered primitive in favor of the timestamp-ordered lifecycle function described below. The expected `versionId` remains derived from the already reviewed and SHA-256-pinned Location installation URL, so no new production configuration name or latest-version fallback is introduced. No in-memory lock is used as an ownership guarantee.
 
 ## OAuth and encryption binding
 
@@ -46,7 +46,7 @@ AES-256-GCM authenticated data now also binds `companyId`. The envelope version 
 
 ## Uninstall and reinstall
 
-UNINSTALL now requires signed company evidence and exact app/client/location/company/provider lookup. A company mismatch cannot invalidate a row. Successful uninstall still preserves the row, marks it uninstalled, and increments generation. Database state rules continue to reject old state consumption; v2 ciphertext also binds the old generation and company. Automatic reinstall provisioning remains behind the D3 contract gate, while the database primitive already proves the approved transition semantics.
+UNINSTALL does not trust or require `companyId`, `installType`, `appNamespace`, or an installation identifier from the event. The ordered lifecycle function resolves the row by the internal `every8d_connect` namespace and exact configured app/client/provider plus signed Location, requires a non-NULL immutable stored company owner, and locks that row before comparing event chronology. Zero or ambiguous ownership fails closed. An accepted newer uninstall preserves the row, marks it uninstalled, and increments generation once; exact replay returns the committed terminal generation without mutation. Database state rules continue to reject old state consumption, and v2 ciphertext binds the old generation and stored company.
 
 ## Rollback
 
@@ -54,22 +54,48 @@ The D1 rollback locks the installation table and refuses to discard any non-NULL
 
 No forward or rollback SQL in this slice is authorized for production.
 
-## Required D3 evidence before enabling INSTALL provisioning
+## D3 controlled HighLevel evidence and implemented contract
 
-Capture one Ed25519-verified Ah Lam payload and establish, without guessing:
+The controlled Location evidence from 2026-09-22 established:
 
-- exact INSTALL and UNINSTALL field names, types, and presence;
-- whether `appNamespace` and `installType=Location` are actually signed;
-- exact app ID, Location ID, and non-empty company ID;
-- whether `versionId`, `timestamp`, or `webhookId` exists and its safe semantics;
-- whether any stable HighLevel installation identifier exists;
-- duplicate delivery and reinstall payload behavior;
-- lifecycle webhook versus browser callback ordering;
-- whether install-link `state` survives unchanged; and
-- whether app installation can be separated from OAuth consent/authorization.
+- INSTALL contained exact app/version identity, `installType: "Location"`, Location, company, user/company display metadata, timestamp, and `webhookId`.
+- UNINSTALL contained only type, app/version identity, Location, timestamp, and `webhookId`; it did not contain company or install type.
+- Neither event contained `appNamespace` or a stable `installationId`/`installId`/`id`. `every8d_connect` is therefore only an internal namespace.
+- HighLevel retried both event types after the default-off endpoint returned `503 lifecycle_disabled`. Retries preserved each event's `webhookId`, while INSTALL and UNINSTALL used different values.
+- HighLevel committed installation/removal despite those 503 responses, and Marketplace installation did not select the SMS Conversation Provider.
+- OAuth remained disabled, no provider was selected, no EVERY8D call occurred, and no SMS was sent.
 
-Until reviewed evidence supports a precise parser, INSTALL returns `provisioning_blocked` after signature/config/tenant validation and writes no installation.
+Accordingly, `webhookId` is event identity and is never installation identity. The original arrival-order implementation was insufficient: a stale opposite event could reactivate or uninstall a newer generation. Additive migration `202609230001_ghl_marketplace_lifecycle_ordering.sql` therefore stores the latest accepted event timestamp, ID, and type on the database-owned installation row.
+
+Every row that already exists when D3 is applied receives a migration-owned `INTERNAL_BASELINE` at the migration transaction timestamp. This is explicitly synthetic internal chronology, not HighLevel evidence. Its namespaced ID is constrained to the row UUID, status, and installation generation that existed at upgrade time. A pre-D3 event timestamp is therefore older than the baseline and cannot reactivate an existing uninstalled generation or uninstall an existing pending/eligible generation. A genuine event timestamp after the migration remains newer and replaces the baseline normally; exact replay of that accepted event remains idempotent.
+
+D3 also creates the owner-managed `ghl_marketplace_app_registrations` singleton for the internal `every8d_connect` namespace. If existing D1 rows all have one consistent app/client/Conversation Provider/channel/provider identity, the migration pins that identity; conflicting existing identities abort the migration transaction. If there are no rows, lifecycle creation remains fail closed until a database owner inserts the separately reviewed identifiers. `anon`, `authenticated`, and `service_role` receive no table privileges, and an immutability trigger rejects registration update/delete. The lifecycle RPC reads this exact registration as a security-definer boundary before any insert, so a generic service-role caller cannot establish ownership with another app ID, OAuth client ID, Conversation Provider ID, channel, or provider. Company ownership still comes only from the validated signed INSTALL input and becomes immutable on the installation row.
+
+The server-only `apply_every8d_ghl_marketplace_lifecycle_v1` function is now the only service-role lifecycle transition. It locks the exact ownership row and compares signed event chronology in the same PostgreSQL transaction that changes status or generation:
+
+- older timestamps return the current row without changing status, generation, or watermark;
+- equal timestamp plus the same event ID and type is an exact retry and returns the committed result without mutation;
+- equal timestamp with a different ID or contradictory type fails closed because UUID values do not establish chronology;
+- only a newer timestamp may advance the watermark and apply a lifecycle transition;
+- reactivation from disabled/uninstalled advances generation exactly once; and
+- uninstall from a non-uninstalled state advances generation exactly once.
+
+The row uniqueness constraint remains installation identity. A committed transition followed by HTTP response loss is therefore safe to replay: the exact timestamp/ID/type returns the same row and generation. The persistent check and v3 integrity trigger require the watermark tuple to be either entirely NULL or entirely present, reject non-finite timestamps, malformed IDs, and unsupported types, prevent watermarks from moving backward or being rewritten at the same timestamp, and prevent runtime creation or rewriting of `INTERNAL_BASELINE`. Browser roles receive no table or function access; the functions have fixed `search_path`, and direct service-role status/generation mutation plus the old unordered provisioning function are revoked.
+
+INSTALL is eligible only for exact type, configured app, pinned version, `Location` install type, valid Location/company identifiers, no bulk/future-location flags, one exact existing tenant/location, and separate provider ownership. The signed company becomes immutable stored ownership through the ordered lifecycle RPC. No global/default/latest fallback exists.
+
+Both lifecycle event types also require a syntactically valid, calendar-valid RFC 3339 timestamp and a bounded event ID before mutation. The route verifies the Ed25519 signature over the raw body before parsing this evidence. The PostgreSQL concurrency proof keeps the newer transition open in connection A, captures both backend PIDs, observes connection B with `wait_event_type = 'Lock'` and `pg_blocking_pids(B)` containing A, and only then commits A. It therefore proves real database lock contention rather than assuming overlap from process timing.
+
+## D3 replay-repair rollback
+
+The paired D3 rollback locks the installation table. Rows with only an exact migration-owned `INTERNAL_BASELINE` (or an all-NULL tuple) may be downgraded because removing that synthetic fence does not discard HighLevel evidence; installation, OAuth, token, and audit rows remain intact. Any accepted `INSTALL` or `UNINSTALL` watermark makes rollback fail closed before it removes an object. A permitted rollback restores the v2 trigger and D1 grants and removes only the ordered function, registration object, integrity function, constraint, and three additive watermark columns. Neither forward nor rollback migration is applied to production by this task.
+
+## Observed code-only OAuth callback
+
+After Allow & Install, the controlled Marketplace path redirected to `/oauth/every8d-connect/callback` with an authorization code but no `state`. The code value was not retained. This direct Marketplace flow therefore did not preserve the runtime's custom state/browser binding in the observed case.
+
+The callback contract is intentionally unchanged: missing `state` returns `400 oauth_request_invalid` before runtime callback activity or token exchange. A separate controlled OAuth-initiation design is required before any code may be exchanged. Installation success remains distinct from OAuth authorization and Conversation Provider activation.
 
 ## Isolation
 
-The D1 modules do not use LINE onboarding or `ghl_oauth_tokens`, do not create tenants, do not import SMS operation/authorization services, and do not call an EVERY8D transport. PostgreSQL proofs fingerprint the protected tenant, LINE token, SMS operation, and armed-authorization fixtures before and after migration/rollback exercises.
+The Phase 2G-D modules do not use LINE onboarding or `ghl_oauth_tokens`, do not create tenants, do not import SMS operation/authorization services, and do not call an EVERY8D transport. PostgreSQL proofs fingerprint the protected tenant, LINE token, SMS operation, and armed-authorization fixtures before and after migration/rollback exercises. Provider activation is not part of lifecycle provisioning.

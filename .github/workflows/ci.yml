@@ -111,3 +111,8 @@ jobs:
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: bash test/postgres/ghlMarketplaceOwnership.sh
+
+      - name: Prove Marketplace lifecycle replay and ordering
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: bash test/postgres/ghlMarketplaceLifecycleOrdering.sh

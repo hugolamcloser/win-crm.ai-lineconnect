@@ -13,6 +13,9 @@ export type Every8dGhlMarketplaceInstallation = {
   provider: "every8d";
   status: "pending" | "active" | "disabled" | "uninstalled";
   installation_generation: number;
+  latest_lifecycle_event_at: string | null;
+  latest_lifecycle_event_id: string | null;
+  latest_lifecycle_event_type: "INSTALL" | "UNINSTALL" | "INTERNAL_BASELINE" | null;
   access_token_ciphertext: string | null;
   refresh_token_ciphertext: string | null;
   encryption_key_version: string | null;
@@ -46,13 +49,16 @@ export type Every8dGhlInstallationIdentity = {
 };
 
 export type Every8dGhlOAuthRepository = {
-  provisionInstallation(input: {
+  applyLifecycleEvent(input: {
+    eventType: "INSTALL" | "UNINSTALL";
     marketplaceAppId: string;
     oauthClientId: string;
-    tenantId: string;
+    tenantId: string | null;
     locationId: string;
-    companyId: string;
+    companyId: string | null;
     conversationProviderId: string;
+    eventAt: string;
+    eventId: string;
   }): Promise<Every8dGhlMarketplaceInstallation>;
   getEligibleInstallation(input: Every8dGhlInstallationIdentity): Promise<Every8dGhlMarketplaceInstallation | null>;
   createOAuthState(input: {
@@ -103,15 +109,18 @@ export function createEvery8dGhlOAuthRepository(
   getClient: Every8dGhlSupabaseGetter = getSupabase
 ): Every8dGhlOAuthRepository {
   return {
-    async provisionInstallation(input) {
+    async applyLifecycleEvent(input) {
       const { data, error } = await getClient()
-        .rpc("provision_every8d_ghl_marketplace_installation_v1", {
+        .rpc("apply_every8d_ghl_marketplace_lifecycle_v1", {
+          input_event_type: input.eventType,
           input_marketplace_app_id: input.marketplaceAppId,
           input_oauth_client_id: input.oauthClientId,
           input_tenant_id: input.tenantId,
           input_location_id: input.locationId,
           input_company_id: input.companyId,
-          input_conversation_provider_id: input.conversationProviderId
+          input_conversation_provider_id: input.conversationProviderId,
+          input_event_at: input.eventAt,
+          input_event_id: input.eventId
         })
         .single();
       if (error || !data) throwDatabaseError(error);
@@ -236,70 +245,3 @@ export async function getExactExistingTenantForEvery8d(
   if (!data || data.length !== 1) return null;
   return data[0] as Every8dGhlExactTenant;
 }
-
-type Every8dGhlUninstallIdentity = {
-  marketplaceAppId: string;
-  oauthClientId: string;
-  locationId: string;
-  companyId: string;
-  conversationProviderId: string;
-};
-
-export function createUninstallEvery8dGhlMarketplaceInstallation(
-  getClient: Every8dGhlSupabaseGetter = getSupabase
-): (input: Every8dGhlUninstallIdentity) => Promise<Every8dGhlMarketplaceInstallation | null> {
-  return async (input) => {
-    const supabase = getClient();
-    const readExactInstallation = async (): Promise<Every8dGhlMarketplaceInstallation | null> => {
-      const { data, error } = await supabase
-        .from("ghl_marketplace_installations")
-        .select("*")
-        .eq("app_namespace", "every8d_connect")
-        .eq("marketplace_app_id", input.marketplaceAppId)
-        .eq("oauth_client_id", input.oauthClientId)
-        .eq("location_id", input.locationId)
-        .eq("company_id", input.companyId)
-        .eq("conversation_provider_id", input.conversationProviderId)
-        .maybeSingle();
-      if (error) throwDatabaseError(error);
-      return data as Every8dGhlMarketplaceInstallation | null;
-    };
-
-    const existing = await readExactInstallation();
-    if (!existing) return null;
-    if (existing.status === "uninstalled") return existing;
-
-    const terminalGeneration = existing.installation_generation + 1;
-    const { data: uninstalledData, error: uninstallError } = await supabase
-      .from("ghl_marketplace_installations")
-      .update({
-        status: "uninstalled",
-        installation_generation: terminalGeneration
-      })
-      .eq("id", existing.id)
-      .eq("app_namespace", "every8d_connect")
-      .eq("marketplace_app_id", input.marketplaceAppId)
-      .eq("oauth_client_id", input.oauthClientId)
-      .eq("location_id", input.locationId)
-      .eq("company_id", input.companyId)
-      .eq("conversation_provider_id", input.conversationProviderId)
-      .eq("installation_generation", existing.installation_generation)
-      .eq("status", existing.status)
-      .select("*")
-      .maybeSingle();
-    if (uninstallError) throwDatabaseError(uninstallError);
-    if (uninstalledData) return uninstalledData as Every8dGhlMarketplaceInstallation;
-
-    const concurrentTerminal = await readExactInstallation();
-    if (
-      concurrentTerminal?.status === "uninstalled" &&
-      concurrentTerminal.installation_generation === terminalGeneration
-    ) {
-      return concurrentTerminal;
-    }
-    return null;
-  };
-}
-
-export const uninstallEvery8dGhlMarketplaceInstallation =
-  createUninstallEvery8dGhlMarketplaceInstallation();

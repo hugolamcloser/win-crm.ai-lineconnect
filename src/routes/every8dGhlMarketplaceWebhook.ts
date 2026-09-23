@@ -12,17 +12,36 @@ import {
 import type { RawBodyRequest } from "../types/http";
 
 const identifier = z.string().trim().min(1).max(256);
+const lifecycleEventId = z.string().min(1).max(256).regex(/^[A-Za-z0-9_-]+$/);
+const lifecycleTimestamp = z.string().datetime({ offset: true }).refine((value) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T/.exec(value);
+  if (!match || !Number.isFinite(Date.parse(value))) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leapYear = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leapYear ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return month >= 1 && month <= 12 && day >= 1 && day <= daysInMonth[month - 1];
+}, "Invalid lifecycle timestamp");
 const lifecycleSchema = z.object({
   type: identifier,
   appId: identifier.optional(),
-  appNamespace: identifier.optional(),
+  versionId: identifier.optional(),
   installType: identifier.optional(),
   locationId: identifier.optional(),
   companyId: identifier.optional(),
+  timestamp: lifecycleTimestamp,
+  webhookId: lifecycleEventId,
   isBulkInstallation: z.boolean().optional(),
   installToFutureLocations: z.boolean().optional(),
   approveAllLocations: z.boolean().optional()
 }).passthrough();
+
+export function parseEvery8dGhlMarketplaceLifecyclePayload(
+  value: unknown
+): Every8dGhlMarketplaceLifecyclePayload {
+  return lifecycleSchema.parse(value);
+}
 
 type WebhookDependencies = {
   verifySignature(input: { rawBody: Buffer; ghlSignature?: string }): boolean;
@@ -49,7 +68,7 @@ export function createEvery8dGhlMarketplaceWebhookRouter(dependencies: WebhookDe
         throw new HttpError(401, "Invalid HighLevel lifecycle webhook signature");
       }
 
-      const payload = lifecycleSchema.parse(req.body);
+      const payload = parseEvery8dGhlMarketplaceLifecyclePayload(req.body);
       const result = await dependencies.handler(payload);
       logger.info(
         { eventType: payload.type, lifecycleStatus: result.status },
