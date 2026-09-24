@@ -352,7 +352,8 @@ begin
   if input_state_hash !~ '^[0-9a-f]{64}$'
     or input_browser_binding_hash !~ '^[0-9a-f]{64}$'
     or input_config_fingerprint !~ '^[0-9a-f]{64}$'
-    or input_expected_location_id !~ '^[A-Za-z0-9_.-]{1,256}$'
+    or char_length(input_expected_location_id) not between 1 and 256
+    or input_expected_location_id !~ '^[A-Za-z0-9_.-]+$'
     or input_expires_at is null or not isfinite(input_expires_at)
     or input_expires_at <= created_at_value
     or input_expires_at > created_at_value + interval '15 minutes'
