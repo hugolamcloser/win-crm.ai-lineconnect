@@ -139,6 +139,58 @@ select pg_temp.assert_true((select status='ready' and claimed_installation_gener
 
 -- Required NULL inputs fail closed at the SECURITY DEFINER boundary with zero mutation.
 select id as gen3_id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('3',64) \gset
+create temp table oauth_invalid_input_snapshot as
+ select jsonb_agg(to_jsonb(b) order by b.id) as attempts
+ from public.ghl_marketplace_oauth_bootstraps b;
+set local role service_role;
+select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ null,'oauth-app','oauth-client','00000000-0000-4000-8000-000000000201','oauth-location-a',
+ 'company-a','oauth-provider','oauth-version','2026-09-23T14:00:00Z','null-event-type')$q$,
+ '23514','NULL lifecycle event type');
+select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL',null,'oauth-client','00000000-0000-4000-8000-000000000201','oauth-location-a',
+ 'company-a','oauth-provider','oauth-version','2026-09-23T14:00:00Z','null-app')$q$,
+ '23514','NULL lifecycle Marketplace app ID');
+select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL','oauth-app',null,'00000000-0000-4000-8000-000000000201','oauth-location-a',
+ 'company-a','oauth-provider','oauth-version','2026-09-23T14:00:00Z','null-client')$q$,
+ '23514','NULL lifecycle OAuth client ID');
+select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000201',null,
+ 'company-a','oauth-provider','oauth-version','2026-09-23T14:00:00Z','null-location')$q$,
+ '23514','NULL lifecycle Location ID');
+select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000201','oauth-location-a',
+ 'company-a',null,'oauth-version','2026-09-23T14:00:00Z','null-provider')$q$,
+ '23514','NULL lifecycle Conversation Provider ID');
+select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000201','oauth-location-a',
+ 'company-a','oauth-provider',null,'2026-09-23T14:00:00Z','null-version')$q$,
+ '23514','NULL lifecycle Marketplace version ID');
+select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000201','oauth-location-a',
+ 'company-a','oauth-provider','oauth-version',null,'null-event-time')$q$,
+ '23514','NULL lifecycle event timestamp');
+select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000201','oauth-location-a',
+ 'company-a','oauth-provider','oauth-version','2026-09-23T14:00:00Z',null)$q$,
+ '23514','NULL lifecycle event ID');
+select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL','oauth-app','oauth-client',null,'oauth-location-a','company-a','oauth-provider',
+ 'oauth-version','2026-09-23T14:00:00Z','null-tenant')$q$,
+ '23514','NULL INSTALL tenant ID');
+select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000201','oauth-location-a',
+ null,'oauth-provider','oauth-version','2026-09-23T14:00:00Z','null-company')$q$,
+ '23514','NULL INSTALL company ID');
+reset role;
+select pg_temp.assert_true(
+ (select count(*)=2 from public.ghl_marketplace_installations)
+ and (select count(*)=3 from public.ghl_marketplace_oauth_bootstraps)
+ and (select latest_lifecycle_event_id='reinstall-a' and installation_generation=3
+      from public.ghl_marketplace_installations where location_id='oauth-location-a'),
+ 'invalid lifecycle NULL inputs perform zero installation or bootstrap mutation');
+
 set local role service_role;
 select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
  null,'oauth-client','oauth-provider','oauth-version','oauth-location-a',repeat('8',64),repeat('9',64),
@@ -193,13 +245,25 @@ select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_rec
  null,repeat('f',64),8)),'NULL recovery version');
 select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
  'oauth-version',null,8)),'NULL recovery fingerprint');
+select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
+ 'oauth-version',repeat('f',64),null)),'NULL recovery limit');
+select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
+ 'oauth-version',repeat('f',64),0)),'zero recovery limit');
+select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
+ 'oauth-version',repeat('f',64),-1)),'negative recovery limit');
+select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
+ 'oauth-version',repeat('f',64),17)),'recovery limit above maximum');
 select pg_temp.assert_true(not public.fail_every8d_oauth_bootstrap_v1(null,'configuration_drift'),
  'NULL failure bootstrap ID');
 select pg_temp.assert_true(not public.fail_every8d_oauth_bootstrap_v1(:'gen3_id'::uuid,null),
  'NULL failure class');
 reset role;
-select pg_temp.assert_true((select status='ready' from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('3',64)),
- 'invalid exchange claims perform zero state movement');
+select pg_temp.assert_true(
+ (select status='ready' from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('3',64))
+ and (select attempts=(select jsonb_agg(to_jsonb(b) order by b.id)
+                       from public.ghl_marketplace_oauth_bootstraps b)
+      from oauth_invalid_input_snapshot),
+ 'invalid exchange/recovery inputs perform zero state movement or cleanup');
 
 -- A deterministic failure permits a fresh authenticated state/code in the same generation.
 set local role service_role;

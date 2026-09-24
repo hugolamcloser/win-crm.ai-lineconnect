@@ -37,6 +37,19 @@ function completeEnvironment(overrides = {}) {
   };
 }
 
+function completeTokenResponse(overrides = {}) {
+  return {
+    access_token: "synthetic-access",
+    refresh_token: "synthetic-refresh",
+    expires_in: 3600,
+    scope: "locations.readonly",
+    userType: "Location",
+    locationId: "location-test-98",
+    companyId: "company-test-98",
+    ...overrides
+  };
+}
+
 test("EVERY8D HighLevel OAuth is disabled by default without parsing secret configuration", () => {
   const config = readEvery8dGhlOAuthConfig({
     EVERY8D_GHL_OAUTH_ENCRYPTION_KEYS: "deliberately-invalid-while-disabled"
@@ -159,6 +172,7 @@ test("token exchange rejects an alternate endpoint before any network request", 
       }
     }),
     (error) => error instanceof Every8dGhlTokenExchangeError
+      && error.failureClass === "token_response_rejected"
   );
   assert.equal(requests, 0);
 });
@@ -166,7 +180,7 @@ test("token exchange rejects an alternate endpoint before any network request", 
 test("authorization-code exchange uses only dedicated Location client input", async () => {
   const config = readEvery8dGhlOAuthConfig(completeEnvironment());
   let request = null;
-  const payload = { access_token: "synthetic-access", refresh_token: "synthetic-refresh" };
+  const payload = completeTokenResponse();
   const result = await exchangeEvery8dGhlAuthorizationCode({
     code: "synthetic-code",
     config,
@@ -248,17 +262,33 @@ test("unreadable 2xx token response is ambiguous", async () => {
   );
 });
 
-test("complete explicit provider rejection is deterministic", async () => {
-  const config = readEvery8dGhlOAuthConfig(completeEnvironment());
-  await assert.rejects(
-    () => exchangeEvery8dGhlAuthorizationCode({
-      code: "synthetic-code", config,
-      fetchImpl: async () => new Response(JSON.stringify({ error: "invalid_client" }), { status: 400 })
-    }),
-    (error) => error instanceof Every8dGhlTokenExchangeError
-      && error.failureClass === "token_response_rejected"
-  );
-});
+for (const [name, payload] of [
+  ["empty object", {}],
+  ["scalar", "partial"],
+  ["array", []],
+  ["missing access token", completeTokenResponse({ access_token: undefined })],
+  ["missing refresh token", completeTokenResponse({ refresh_token: undefined })],
+  ["missing user ownership", completeTokenResponse({ userType: undefined })],
+  ["missing Location ownership", completeTokenResponse({ locationId: undefined })],
+  ["missing company ownership", completeTokenResponse({ companyId: undefined })],
+  ["missing expiry", completeTokenResponse({ expires_in: undefined })],
+  ["missing scopes", completeTokenResponse({ scope: undefined })],
+  ["wrong structural types", completeTokenResponse({ access_token: 7, expires_in: {}, scope: ["locations.readonly", 7] })],
+  ["structurally partial valid JSON", { access_token: "synthetic-access", userType: "Location" }]
+]) {
+  test(`parseable 2xx ${name} is ambiguous`, async () => {
+    const config = readEvery8dGhlOAuthConfig(completeEnvironment());
+    await assert.rejects(
+      () => exchangeEvery8dGhlAuthorizationCode({
+        code: "synthetic-code", config,
+        fetchImpl: async () => new Response(JSON.stringify(payload), { status: 200 })
+      }),
+      (error) => error instanceof Every8dGhlTokenExchangeError
+        && error.failureClass === "exchange_outcome_unknown",
+      name
+    );
+  });
+}
 
 test("invalid_grant is classified as a definitive one-time terminal exchange outcome", async () => {
   const config = readEvery8dGhlOAuthConfig(completeEnvironment());
@@ -270,6 +300,27 @@ test("invalid_grant is classified as a definitive one-time terminal exchange out
     (error) => error instanceof Every8dGhlTokenExchangeError && error.failureClass === "invalid_grant"
   );
 });
+
+for (const [name, status, body] of [
+  ["408 parseable response", 408, JSON.stringify({ error: "something" })],
+  ["401 parseable response", 401, JSON.stringify({ error: "invalid_client" })],
+  ["403 parseable response", 403, JSON.stringify({ error: "access_denied" })],
+  ["generic 400 unknown error", 400, JSON.stringify({ error: "temporarily_unavailable" })],
+  ["malformed 4xx JSON", 400, "{not-json"]
+]) {
+  test(`${name} is ambiguous`, async () => {
+    const config = readEvery8dGhlOAuthConfig(completeEnvironment());
+    await assert.rejects(
+      () => exchangeEvery8dGhlAuthorizationCode({
+        code: "synthetic-code", config,
+        fetchImpl: async () => new Response(body, { status })
+      }),
+      (error) => error instanceof Every8dGhlTokenExchangeError
+        && error.failureClass === "exchange_outcome_unknown",
+      name
+    );
+  });
+}
 
 for (const [name, fetchImpl] of [
   ["timeout", async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); }],

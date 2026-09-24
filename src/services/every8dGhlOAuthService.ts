@@ -72,6 +72,15 @@ type LocationTokenResponse = {
   scopes: string[];
 };
 
+type CompleteLocationTokenResponse = LocationTokenResponse & {
+  userType: string;
+  locationId: string;
+  companyId: string;
+  appId?: string;
+  approvedLocations?: string[];
+  ownershipModes: Array<boolean | undefined>;
+};
+
 type RuntimeDependencies = {
   config: Every8dGhlOAuthConfig;
   repository: Every8dGhlOAuthRepository;
@@ -200,13 +209,9 @@ function persistedCredentialsAreExact(input: {
     && sameStrings(persistedScopes, expectedScopes);
 }
 
-function validateLocationTokenResponse(
-  value: unknown,
-  installation: Every8dGhlMarketplaceInstallation,
-  config: Every8dGhlOAuthConfig
-): LocationTokenResponse {
+function parseCompleteLocationTokenResponse(value: unknown): CompleteLocationTokenResponse {
   const record = getRecord(value);
-  if (!record) throw new Every8dGhlTokenExchangeError("token_response_rejected");
+  if (!record) throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown");
   const accessToken = aliased(record, ["access_token", "accessToken"], nonEmptyString);
   const refreshToken = aliased(record, ["refresh_token", "refreshToken"], nonEmptyString);
   const userType = aliased(record, ["userType", "user_type"], nonEmptyString);
@@ -221,16 +226,39 @@ function validateLocationTokenResponse(
     aliased(record, ["installToFutureLocations", "install_to_future_locations"], booleanValue),
     aliased(record, ["approveAllLocations", "approve_all_locations"], booleanValue)
   ];
+  if (!accessToken || !refreshToken || !userType || !locationId || !companyId
+    || appId === null || expiresIn === null || !Number.isFinite(expiresIn)
+    || scopes === null || scopes === undefined || approvedLocations === null
+    || ownershipModes.some((flag) => flag === null)) {
+    throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown");
+  }
+  return {
+    accessToken, refreshToken, userType, locationId, companyId, expiresIn, scopes,
+    ...(appId === undefined ? {} : { appId }),
+    ...(approvedLocations === undefined ? {} : { approvedLocations }),
+    ownershipModes: ownershipModes as Array<boolean | undefined>
+  };
+}
+
+function validateLocationTokenResponse(
+  value: unknown,
+  installation: Every8dGhlMarketplaceInstallation,
+  config: Every8dGhlOAuthConfig
+): LocationTokenResponse {
+  const {
+    accessToken, refreshToken, userType, locationId, companyId, appId, expiresIn,
+    scopes, approvedLocations, ownershipModes
+  } = parseCompleteLocationTokenResponse(value);
   const expectedScopes = [...config.requiredScopes].sort();
   if (
-    !accessToken || !refreshToken || userType !== "Location"
+    userType !== "Location"
     || locationId !== installation.location_id || companyId !== installation.company_id
-    || appId === null || (appId !== undefined && appId !== config.marketplaceAppId)
-    || ownershipModes.some((flag) => flag === null || flag === true)
-    || (approvedLocations !== undefined && (approvedLocations === null
-      || approvedLocations.length !== 1 || approvedLocations[0] !== installation.location_id))
+    || (appId !== undefined && appId !== config.marketplaceAppId)
+    || ownershipModes.some((flag) => flag === true)
+    || (approvedLocations !== undefined
+      && (approvedLocations.length !== 1 || approvedLocations[0] !== installation.location_id))
     || !Number.isSafeInteger(expiresIn) || expiresIn <= 0 || expiresIn > 31 * 24 * 60 * 60
-    || !scopes || !sameStrings(scopes, expectedScopes)
+    || !sameStrings(scopes, expectedScopes)
   ) {
     throw new Every8dGhlTokenExchangeError("token_response_rejected");
   }
@@ -658,9 +686,6 @@ export async function exchangeEvery8dGhlAuthorizationCode(input: {
     });
     const responseText = await readBoundedResponse(response);
     if (!response.ok) {
-      if (response.status === 429 || response.status >= 500) {
-        throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown");
-      }
       let errorRecord: Record<string, unknown> | null;
       try { errorRecord = getRecord(JSON.parse(responseText)); }
       catch { throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown"); }
@@ -670,9 +695,13 @@ export async function exchangeEvery8dGhlAuthorizationCode(input: {
           throw new Every8dGhlTokenExchangeError("invalid_grant");
         }
       }
-      throw new Every8dGhlTokenExchangeError("token_response_rejected");
+      throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown");
     }
-    try { return JSON.parse(responseText) as unknown; }
+    try {
+      const parsed = JSON.parse(responseText) as unknown;
+      parseCompleteLocationTokenResponse(parsed);
+      return parsed;
+    }
     catch { throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown"); }
   } catch (error) {
     if (error instanceof Every8dGhlTokenExchangeError) throw error;

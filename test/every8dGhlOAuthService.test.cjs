@@ -8,7 +8,8 @@ const { getEvery8dGhlOAuthConfigFingerprint } = require("../dist/config/every8dG
 const {
   Every8dGhlOAuthError,
   Every8dGhlTokenExchangeError,
-  createEvery8dGhlOAuthRuntime
+  createEvery8dGhlOAuthRuntime,
+  exchangeEvery8dGhlAuthorizationCode
 } = require("../dist/services/every8dGhlOAuthService");
 const { createEvery8dGhlOAuthReconciler } = require("../dist/services/every8dGhlOAuthReconciler");
 const { decryptEvery8dGhlOAuthToken, parseEvery8dGhlOAuthEncryptionKeys } = require("../dist/services/every8dGhlTokenEncryption");
@@ -94,14 +95,22 @@ function harness(options = {}) {
   let persisted = null;
   let sequence = 0;
   let claimWon = false;
+  const attempts = [];
   const legacyStates = new Map();
 
   const repository = {
     async acceptCallback(input) {
       calls.accept += 1;
-      if (options.rejectInspect || bootstrap) return null;
+      if (options.rejectInspect) return null;
+      if (bootstrap) {
+        const deterministicRetry = options.modelGenerationPolicy
+          && bootstrap.status === "failed"
+          && !["exchange_outcome_unknown", "credential_persistence_failed"].includes(bootstrap.failure_class);
+        if (!deterministicRetry) return null;
+        claimWon = false;
+      }
       bootstrap = {
-        id: "20000000-0000-4000-8000-000000000098",
+        id: `20000000-0000-4000-8000-${String(attempts.length + 98).padStart(12, "0")}`,
         app_namespace: "every8d_connect",
         marketplace_version_id: input.marketplaceVersionId,
         expected_location_id: input.expectedLocationId,
@@ -121,6 +130,7 @@ function harness(options = {}) {
         terminal_at: null,
         failure_class: null
       };
+      attempts.push(bootstrap);
       return { id: bootstrap.id, status: bootstrap.status, targetInstallationGeneration: 3, expiresAt: bootstrap.expires_at };
     },
     async listRecoverable() {
@@ -140,6 +150,8 @@ function harness(options = {}) {
       failureClass = input.failureClass;
       if (bootstrap && bootstrap.status !== "succeeded") {
         bootstrap.status = "failed";
+        bootstrap.failure_class = input.failureClass;
+        bootstrap.terminal_at = new Date(NOW).toISOString();
         bootstrap.authorization_code_ciphertext = null;
         bootstrap.authorization_code_key_version = null;
       }
@@ -194,10 +206,11 @@ function harness(options = {}) {
   const runtime = createEvery8dGhlOAuthRuntime({
     config: selectedConfig,
     repository,
-    exchangeAuthorizationCode: async () => {
+    exchangeAuthorizationCode: async (input) => {
       calls.exchange += 1;
       if (options.exchangeError) throw options.exchangeError;
       if (options.exchangeGate) await options.exchangeGate;
+      if (options.exchangeAuthorizationCode) return options.exchangeAuthorizationCode(input);
       return options.token ?? token();
     },
     now: () => NOW,
@@ -222,6 +235,7 @@ function harness(options = {}) {
 
   return {
     runtime, repository, calls, startAndCallback, fingerprint,
+    get attempts() { return attempts; },
     get bootstrap() { return bootstrap; },
     get failureClass() { return failureClass; },
     get persisted() { return persisted; }
@@ -349,6 +363,78 @@ for (const [name, tokenOverride] of [
     assert.equal(h.bootstrap.authorization_code_ciphertext, null);
   });
 }
+
+test("parseable partial 2xx burns the generation and rejects a fresh callback", async () => {
+  const h = harness({
+    modelGenerationPolicy: true,
+    exchangeAuthorizationCode: ({ code, config: selectedConfig }) =>
+      exchangeEvery8dGhlAuthorizationCode({
+        code,
+        config: selectedConfig,
+        fetchImpl: async () => new Response("{}", { status: 200 })
+      })
+  });
+  await h.startAndCallback();
+  await h.runtime.reconcileOnce();
+
+  assert.equal(h.attempts[0].status, "failed");
+  assert.equal(h.attempts[0].failure_class, "exchange_outcome_unknown");
+  assert.equal(h.attempts[0].authorization_code_ciphertext, null);
+
+  const fresh = await h.runtime.start();
+  await assert.rejects(
+    () => h.runtime.acceptCallback({
+      code: "fresh-authorization-code",
+      state: new URL(fresh.authorizationUrl).searchParams.get("state"),
+      browserBinding: fresh.browserBinding
+    }),
+    (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_state_invalid"
+  );
+  assert.equal(h.attempts.length, 1);
+  assert.equal(h.calls.exchange, 1);
+});
+
+test("complete semantic Location mismatch is deterministic and permits only a fresh code", async () => {
+  const h = harness({ modelGenerationPolicy: true, token: token({ locationId: "foreign-location" }) });
+  await h.startAndCallback();
+  await h.runtime.reconcileOnce();
+  assert.equal(h.attempts[0].failure_class, "token_response_rejected");
+
+  const fresh = await h.runtime.start();
+  const accepted = await h.runtime.acceptCallback({
+    code: "fresh-location-code",
+    state: new URL(fresh.authorizationUrl).searchParams.get("state"),
+    browserBinding: fresh.browserBinding
+  });
+  assert.deepEqual(accepted, { status: "pending", ready: true });
+  assert.equal(h.attempts.length, 2);
+  assert.equal(h.attempts[0].authorization_code_ciphertext, null);
+});
+
+test("explicit invalid_grant is deterministic and permits only a fresh code", async () => {
+  const h = harness({
+    modelGenerationPolicy: true,
+    exchangeAuthorizationCode: ({ code, config: selectedConfig }) =>
+      exchangeEvery8dGhlAuthorizationCode({
+        code,
+        config: selectedConfig,
+        fetchImpl: async () => new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 })
+      })
+  });
+  await h.startAndCallback();
+  await h.runtime.reconcileOnce();
+  assert.equal(h.attempts[0].failure_class, "invalid_grant");
+
+  const fresh = await h.runtime.start();
+  const accepted = await h.runtime.acceptCallback({
+    code: "fresh-invalid-grant-code",
+    state: new URL(fresh.authorizationUrl).searchParams.get("state"),
+    browserBinding: fresh.browserBinding
+  });
+  assert.deepEqual(accepted, { status: "pending", ready: true });
+  assert.equal(h.attempts.length, 2);
+  assert.equal(h.attempts[0].authorization_code_ciphertext, null);
+});
 
 for (const failureClass of ["invalid_grant", "token_response_rejected", "exchange_outcome_unknown"]) {
   test(`${failureClass} is terminal, scrubs the code, and is never automatically replayed`, async () => {
