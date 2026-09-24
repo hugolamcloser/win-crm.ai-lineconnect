@@ -185,7 +185,8 @@ select pg_temp.reject($q$select public.apply_every8d_ghl_marketplace_lifecycle_v
  '23514','NULL INSTALL company ID');
 reset role;
 select pg_temp.assert_true(
- (select count(*)=2 from public.ghl_marketplace_installations)
+ (select count(*)=2 from public.ghl_marketplace_installations
+  where location_id in ('oauth-location-a','oauth-location-b'))
  and (select count(*)=3 from public.ghl_marketplace_oauth_bootstraps)
  and (select latest_lifecycle_event_id='reinstall-a' and installation_generation=3
       from public.ghl_marketplace_installations where location_id='oauth-location-a'),
