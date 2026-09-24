@@ -4,50 +4,50 @@
 
 This post-D3 foundation adds a public first-install OAuth bootstrap without enabling OAuth, installing the Marketplace app, activating the Conversation Provider, calling HighLevel or EVERY8D, or authorizing SMS. `EVERY8D_GHL_OAUTH_ENABLED=false` remains the first runtime gate. While disabled, the new path creates no rows, generates no random state or binding, sets no cookie, redirects nowhere, starts no reconciler timer, scans no attempts, exchanges no code, and persists no credentials.
 
-The existing shared-secret `POST /oauth/every8d-connect/initiate` route remains available for an already installed, exact signed installation. The new `POST /oauth/every8d-connect/start` route is the public first-install path and accepts only an empty JSON object.
+The existing shared-secret `POST /oauth/every8d-connect/initiate` route remains available for an already installed, exact signed installation. The new `POST /oauth/every8d-connect/start` route is the public first-install path and accepts only a genuinely empty POST with no query keys or body bytes.
 
-## Non-owning public bootstrap
+## Stateless public start
 
 The public bootstrap is deliberately ownership-free. It never accepts or stores a browser-supplied tenant, location, company, installation ID, lifecycle generation, state, browser binding, installation URL, or redirect URI. HighLevel authentication plus explicit Location installation consent is the human authorization boundary. Authoritative company/location ownership enters only through the verified Ed25519-signed INSTALL lifecycle event and exact tenant resolution.
 
-The server generates independent 32-byte state and browser-binding values. Only SHA-256 hashes are stored. The binding cookie is `Secure`, `HttpOnly`, `SameSite=Lax`, has no Domain attribute, is limited to `/oauth/every8d-connect`, and cannot outlive the bootstrap TTL. Start, callback, pending, and status responses are `no-store`, `no-cache`, `no-referrer`, and deny framing.
+The server generates independent 32-byte nonce and browser-binding values. `/start` performs no database write. It returns canonical versioned state authenticated with HMAC-SHA-256 using a key derived from the active OAuth encryption key by HKDF-SHA-256 under `wincrm/every8d/oauth-state-auth/v1`. The state binds the key version, nonce, namespace, Marketplace version, redirect URI, configuration fingerprint, server-derived expected Location, browser-binding hash, issue time, and expiry.
 
-Admission is database serialized. Expired attempts are terminalized before an atomic global cap check, and only one active attempt is permitted for the pinned app context. This intentionally conservative first version avoids ambiguous INSTALL-to-bootstrap matching. A distributed general-purpose rate limiter remains an operational enhancement, not part of this PR.
+The expected Location is parsed only from the validated SHA-pinned exact Location installation URL. It is never accepted from the browser or callback. Abandoned starts consume no durable admission capacity; traffic rate limiting remains an operational enhancement rather than a correctness boundary.
 
 ## Owner-managed Marketplace version
 
 `ghl_marketplace_app_registrations` remains unchanged and immutable. The migration adds a separate `ghl_marketplace_app_version_registrations` table. It is owner-managed, has RLS enabled, grants no browser or `service_role` table access, and rejects update/delete after insertion. The migration inserts no version value.
 
-Before rollout, a database owner must separately register the exact approved signed Marketplace version after the migration preflight. `service_role` cannot invent, change, or read that identity. Lifecycle, bootstrap creation, exchange claim, and finalization compare the exact signed/configured version to the owner registration.
+Before rollout, a database owner must separately register the exact approved signed Marketplace version after the migration preflight. `service_role` cannot invent, change, or read that identity. Lifecycle, callback acceptance, exchange claim, and finalization compare the exact signed/configured version to the owner registration.
 
 ## Durable rendezvous
 
 `ghl_marketplace_oauth_bootstraps` uses these one-way states:
 
-- `awaiting_callback`
 - `waiting_install`
 - `ready`
 - `exchanging`
 - `succeeded`
 - `failed`
 
-For callback-first ordering, the validated callback stores only encrypted code material and moves to `waiting_install`; a newly applied current INSTALL claims the exact installation/generation and moves it to `ready`. For INSTALL-first ordering, INSTALL claims the still-`awaiting_callback` attempt; the later validated callback stores the encrypted code and moves directly to `ready`. PostgreSQL row locks and compare-and-set updates serialize concurrent arrival.
+Durable evidence begins only after local authenticated-state, browser-binding, expiry, configuration, redirect, and expected-Location validation. One atomic RPC derives the target generation from current lifecycle state and inserts either `waiting_install` or `ready`. A partial uniqueness rule allows one progressing candidate per namespace, expected Location, and generation. A newer callback may atomically supersede only a `waiting_install` or `ready` candidate and scrubs its code; `exchanging` or `succeeded` blocks another exchange.
 
 The lifecycle RPC returns `applied`, `exact_replay`, or `stale_ignored`. Only `applied` may rendezvous or invalidate attempts. Exact replay cannot duplicate those side effects, stale events mutate nothing, and equal-time conflicting evidence remains rejected.
 
 ## Callback and authorization-code encryption
 
-Callback acceptance requires the exact state hash, independent browser-binding hash, configured redirect URI, immutable config fingerprint, approved version, eligible one-time status, and unexpired attempt before code storage.
+Callback acceptance verifies the exact authenticated state and independent browser binding locally before encryption or any database write. The database then enforces unique state-hash replay identity, approved registration/version, pinned expected Location, deterministic target generation, and one progressing candidate.
 
 The authorization code uses a dedicated AES-256-GCM envelope with purpose `pending_authorization_code`, separate from access/refresh token encryption. Its authenticated additional data binds:
 
 - envelope/domain version;
 - purpose;
-- bootstrap ID;
 - `every8d_connect` namespace;
 - state hash;
+- Marketplace version;
 - redirect URI; and
-- immutable config/install-context fingerprint.
+- immutable configuration fingerprint; and
+- expected Location.
 
 Wrong AAD, key version, key, tag, ciphertext, or envelope fails closed. Raw code, state, binding, tokens, provider bodies, and credentials are never logged or returned.
 
@@ -63,7 +63,7 @@ The reconciler runs only when OAuth is enabled: once after startup, opportunisti
 
 ## UNINSTALL and reinstall
 
-A newly applied UNINSTALL invalidates incomplete old attempts and scrubs stored authorization-code ciphertext. It increments the lifecycle generation where required and clears installed OAuth credentials. Finalization racing with UNINSTALL uses the same installation-then-attempt lock order: either finalization commits first and UNINSTALL clears the credentials, or UNINSTALL commits first and finalization returns false. No stale-generation credentials become usable.
+A newly applied UNINSTALL captures the pre-UNINSTALL generation and invalidates only attempts whose expected Location and target generation match it; claimed attempts must also match the exact installation and claimed generation. Cross-Location replay or stale evidence has zero attempt side effect. Finalization racing with UNINSTALL uses the same installation-then-attempt lock order: either finalization commits first and UNINSTALL clears the credentials, or UNINSTALL commits first and finalization returns false.
 
 Reinstall establishes a new lifecycle generation. Old attempt claims and ciphertext cannot move to it. An exact replay performs no second invalidation, and a stale UNINSTALL cannot revoke a newer attempt.
 
