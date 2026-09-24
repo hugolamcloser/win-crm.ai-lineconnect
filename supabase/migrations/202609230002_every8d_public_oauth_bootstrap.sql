@@ -11,11 +11,6 @@ create table public.ghl_marketplace_app_version_registrations (
   marketplace_version_id text not null
     check (char_length(marketplace_version_id) between 1 and 256
       and marketplace_version_id ~ '^[A-Za-z0-9_.-]+$'),
-  expected_location_id text not null
-    check (char_length(expected_location_id) between 1 and 256
-      and expected_location_id ~ '^[A-Za-z0-9_.-]+$'),
-  target_installation_generation integer not null
-    check (target_installation_generation > 0),
   registered_at timestamptz not null default transaction_timestamp()
 );
 
@@ -61,6 +56,11 @@ create table public.ghl_marketplace_oauth_bootstraps (
   marketplace_version_id text not null
     check (char_length(marketplace_version_id) between 1 and 256
       and marketplace_version_id ~ '^[A-Za-z0-9_.-]+$'),
+  expected_location_id text not null
+    check (char_length(expected_location_id) between 1 and 256
+      and expected_location_id ~ '^[A-Za-z0-9_.-]+$'),
+  target_installation_generation integer not null
+    check (target_installation_generation > 0),
   state_hash text not null unique check (state_hash ~ '^[0-9a-f]{64}$'),
   browser_binding_hash text not null check (browser_binding_hash ~ '^[0-9a-f]{64}$'),
   redirect_uri text not null check (
