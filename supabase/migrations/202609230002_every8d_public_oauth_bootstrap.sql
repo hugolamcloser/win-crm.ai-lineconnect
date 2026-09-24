@@ -11,6 +11,11 @@ create table public.ghl_marketplace_app_version_registrations (
   marketplace_version_id text not null
     check (char_length(marketplace_version_id) between 1 and 256
       and marketplace_version_id ~ '^[A-Za-z0-9_.-]+$'),
+  expected_location_id text not null
+    check (char_length(expected_location_id) between 1 and 256
+      and expected_location_id ~ '^[A-Za-z0-9_.-]+$'),
+  target_installation_generation integer not null
+    check (target_installation_generation > 0),
   registered_at timestamptz not null default transaction_timestamp()
 );
 
@@ -64,11 +69,11 @@ create table public.ghl_marketplace_oauth_bootstraps (
     and redirect_uri !~ '[[:space:]#@]'
   ),
   config_fingerprint text not null check (config_fingerprint ~ '^[0-9a-f]{64}$'),
-  status text not null default 'awaiting_callback'
-    check (status in ('awaiting_callback', 'waiting_install', 'ready', 'exchanging', 'succeeded', 'failed')),
+  status text not null
+    check (status in ('waiting_install', 'ready', 'exchanging', 'succeeded', 'failed')),
   created_at timestamptz not null default clock_timestamp(),
   expires_at timestamptz not null,
-  callback_received_at timestamptz,
+  callback_received_at timestamptz not null default clock_timestamp(),
   authorization_code_ciphertext bytea,
   authorization_code_key_version text,
   claimed_installation_id uuid
@@ -78,6 +83,7 @@ create table public.ghl_marketplace_oauth_bootstraps (
   terminal_at timestamptz,
   failure_class text check (failure_class in (
     'admission_rejected',
+    'callback_superseded',
     'bootstrap_expired',
     'authorization_code_invalid',
     'configuration_drift',
@@ -107,12 +113,6 @@ create table public.ghl_marketplace_oauth_bootstraps (
   ),
   constraint ghl_marketplace_oauth_bootstraps_state_check check (
     (
-      status = 'awaiting_callback'
-      and callback_received_at is null
-      and authorization_code_ciphertext is null
-      and exchange_started_at is null and terminal_at is null and failure_class is null
-    )
-    or (
       status = 'waiting_install'
       and callback_received_at is not null
       and authorization_code_ciphertext is not null
@@ -162,6 +162,10 @@ create index ghl_marketplace_oauth_bootstraps_claim_idx
   on public.ghl_marketplace_oauth_bootstraps(claimed_installation_id, claimed_installation_generation);
 create index ghl_marketplace_oauth_bootstraps_binding_idx
   on public.ghl_marketplace_oauth_bootstraps(browser_binding_hash, created_at desc);
+create unique index ghl_marketplace_oauth_bootstraps_generation_candidate_key
+  on public.ghl_marketplace_oauth_bootstraps(
+    app_namespace, expected_location_id, target_installation_generation
+  ) where status in ('waiting_install', 'ready', 'exchanging', 'succeeded');
 
 create function public.protect_ghl_marketplace_oauth_bootstrap_v1()
 returns trigger language plpgsql security definer
@@ -169,23 +173,26 @@ set search_path = pg_catalog, public
 as $$
 begin
   if tg_op = 'INSERT' then
-    if new.status <> 'awaiting_callback'
-      or new.callback_received_at is not null
-      or new.authorization_code_ciphertext is not null
-      or new.claimed_installation_id is not null
+    if new.status not in ('waiting_install', 'ready')
+      or new.callback_received_at is null
+      or new.authorization_code_ciphertext is null
+      or (new.status = 'waiting_install' and new.claimed_installation_id is not null)
+      or (new.status = 'ready' and new.claimed_installation_id is null)
       or new.exchange_started_at is not null
       or new.terminal_at is not null
       or new.failure_class is not null then
-      raise exception 'OAuth bootstrap must start awaiting callback' using errcode = '23514';
+      raise exception 'OAuth attempt must start from an accepted callback' using errcode = '23514';
     end if;
     return new;
   end if;
 
-  if row(new.id, new.app_namespace, new.marketplace_version_id, new.state_hash,
+  if row(new.id, new.app_namespace, new.marketplace_version_id,
+    new.expected_location_id, new.target_installation_generation, new.state_hash,
     new.browser_binding_hash, new.redirect_uri, new.config_fingerprint,
     new.created_at, new.expires_at)
     is distinct from
-    row(old.id, old.app_namespace, old.marketplace_version_id, old.state_hash,
+    row(old.id, old.app_namespace, old.marketplace_version_id,
+    old.expected_location_id, old.target_installation_generation, old.state_hash,
     old.browser_binding_hash, old.redirect_uri, old.config_fingerprint,
     old.created_at, old.expires_at) then
     raise exception 'OAuth bootstrap context is immutable' using errcode = '23514';
@@ -211,8 +218,7 @@ begin
   end if;
 
   if not (
-    (old.status = 'awaiting_callback' and new.status in ('awaiting_callback', 'waiting_install', 'ready', 'failed'))
-    or (old.status = 'waiting_install' and new.status in ('ready', 'failed'))
+    (old.status = 'waiting_install' and new.status in ('ready', 'failed'))
     or (old.status = 'ready' and new.status in ('exchanging', 'failed'))
     or (old.status = 'exchanging' and new.status in ('succeeded', 'failed'))
     or (old.status in ('succeeded', 'failed') and new.status = old.status)
@@ -316,31 +322,44 @@ create trigger protect_ghl_marketplace_installation
 before insert or update on public.ghl_marketplace_installations
 for each row execute function public.protect_ghl_marketplace_installation_v4();
 
-create function public.create_every8d_public_oauth_bootstrap_v1(
+create function public.accept_every8d_public_oauth_callback_v1(
   input_marketplace_app_id text,
   input_oauth_client_id text,
   input_conversation_provider_id text,
   input_marketplace_version_id text,
+  input_expected_location_id text,
   input_state_hash text,
   input_browser_binding_hash text,
   input_redirect_uri text,
   input_config_fingerprint text,
-  input_ttl_seconds integer
+  input_expires_at timestamptz,
+  input_authorization_code_ciphertext bytea,
+  input_authorization_code_key_version text
 )
-returns table(id uuid, expires_at timestamptz)
+returns jsonb
 language plpgsql security definer
 set search_path = pg_catalog, public
 as $$
 declare
   registration public.ghl_marketplace_app_registrations%rowtype;
   approved_version public.ghl_marketplace_app_version_registrations%rowtype;
+  installation public.ghl_marketplace_installations%rowtype;
+  attempt public.ghl_marketplace_oauth_bootstraps%rowtype;
   created_at_value timestamptz := clock_timestamp();
+  target_generation integer;
+  initial_status text;
 begin
   if input_state_hash !~ '^[0-9a-f]{64}$'
     or input_browser_binding_hash !~ '^[0-9a-f]{64}$'
     or input_config_fingerprint !~ '^[0-9a-f]{64}$'
-    or input_ttl_seconds is null or input_ttl_seconds < 60 or input_ttl_seconds > 900 then
-    raise exception 'OAuth bootstrap request is invalid' using errcode = '23514';
+    or input_expected_location_id !~ '^[A-Za-z0-9_.-]{1,256}$'
+    or input_expires_at is null or not isfinite(input_expires_at)
+    or input_expires_at <= created_at_value
+    or input_expires_at > created_at_value + interval '15 minutes'
+    or input_authorization_code_ciphertext is null
+    or octet_length(input_authorization_code_ciphertext) = 0
+    or input_authorization_code_key_version !~ '^[A-Za-z0-9_.-]{1,128}$' then
+    return null;
   end if;
 
   select * into registration from public.ghl_marketplace_app_registrations
@@ -353,122 +372,102 @@ begin
     or registration.conversation_provider_id <> input_conversation_provider_id
     or registration.channel <> 'sms' or registration.provider <> 'every8d'
     or approved_version.marketplace_version_id <> input_marketplace_version_id then
-    raise exception 'OAuth bootstrap registration is not approved' using errcode = '23514';
+    return null;
   end if;
 
-  perform pg_advisory_xact_lock(hashtextextended('every8d_public_oauth_bootstrap_admission_v1', 0));
+  perform pg_advisory_xact_lock(hashtextextended(
+    'every8d_public_oauth_callback_v1:' || input_expected_location_id, 0));
+
+  if input_expires_at <= clock_timestamp() then return null; end if;
+
+  if exists (select 1 from public.ghl_marketplace_oauth_bootstraps
+    where state_hash = input_state_hash) then
+    return null;
+  end if;
+
+  select * into installation from public.ghl_marketplace_installations
+  where marketplace_app_id = registration.marketplace_app_id
+    and location_id = input_expected_location_id
+  for update;
+
+  if not found then
+    target_generation := 1;
+    initial_status := 'waiting_install';
+  elsif installation.app_namespace <> registration.app_namespace
+    or installation.oauth_client_id <> registration.oauth_client_id
+    or installation.conversation_provider_id <> registration.conversation_provider_id
+    or installation.channel <> 'sms' or installation.provider <> 'every8d' then
+    return null;
+  elsif installation.status in ('pending', 'active')
+    and installation.company_id is not null
+    and installation.latest_lifecycle_event_type = 'INSTALL'
+    and installation.latest_lifecycle_version_id = approved_version.marketplace_version_id then
+    target_generation := installation.installation_generation;
+    initial_status := 'ready';
+  elsif installation.status = 'uninstalled'
+    and installation.latest_lifecycle_event_type = 'UNINSTALL'
+    and installation.latest_lifecycle_version_id = approved_version.marketplace_version_id then
+    target_generation := installation.installation_generation + 1;
+    initial_status := 'waiting_install';
+  else
+    return null;
+  end if;
 
   update public.ghl_marketplace_oauth_bootstraps b
   set status = 'failed', terminal_at = clock_timestamp(), failure_class = 'bootstrap_expired',
       authorization_code_ciphertext = null, authorization_code_key_version = null
-  where b.status in ('awaiting_callback', 'waiting_install', 'ready')
+  where b.app_namespace = 'every8d_connect'
+    and b.expected_location_id = input_expected_location_id
+    and b.status in ('waiting_install', 'ready')
     and b.expires_at <= clock_timestamp();
 
   update public.ghl_marketplace_oauth_bootstraps b
   set status = 'failed', terminal_at = clock_timestamp(), failure_class = 'exchange_outcome_unknown',
       authorization_code_ciphertext = null, authorization_code_key_version = null
-  where b.status = 'exchanging'
+  where b.app_namespace = 'every8d_connect'
+    and b.expected_location_id = input_expected_location_id
+    and b.status = 'exchanging'
     and b.exchange_started_at <= clock_timestamp() - interval '2 minutes';
 
-  if (select count(*) from public.ghl_marketplace_oauth_bootstraps
-      where status in ('awaiting_callback', 'waiting_install', 'ready', 'exchanging')) >= 32
-    or exists (
-      select 1 from public.ghl_marketplace_oauth_bootstraps
-      where app_namespace = 'every8d_connect'
-        and status in ('awaiting_callback', 'waiting_install', 'ready', 'exchanging')
-    ) then
-    raise exception 'OAuth bootstrap admission rejected' using errcode = 'P0001';
-  end if;
-
-  return query
-  insert into public.ghl_marketplace_oauth_bootstraps (
-    app_namespace, marketplace_version_id, state_hash, browser_binding_hash,
-    redirect_uri, config_fingerprint, status, created_at, expires_at
-  ) values (
-    'every8d_connect', input_marketplace_version_id, input_state_hash,
-    input_browser_binding_hash, input_redirect_uri, input_config_fingerprint,
-    'awaiting_callback', created_at_value,
-    created_at_value + make_interval(secs => input_ttl_seconds)
-  ) returning ghl_marketplace_oauth_bootstraps.id, ghl_marketplace_oauth_bootstraps.expires_at;
-end;
-$$;
-
-create function public.inspect_every8d_public_oauth_callback_v1(
-  input_state_hash text,
-  input_browser_binding_hash text,
-  input_redirect_uri text,
-  input_config_fingerprint text
-)
-returns table(
-  id uuid,
-  app_namespace text,
-  marketplace_version_id text,
-  state_hash text,
-  redirect_uri text,
-  config_fingerprint text
-)
-language sql security definer
-set search_path = pg_catalog, public
-as $$
-  select b.id, b.app_namespace, b.marketplace_version_id, b.state_hash,
-    b.redirect_uri, b.config_fingerprint
-  from public.ghl_marketplace_oauth_bootstraps b
-  join public.ghl_marketplace_app_version_registrations v
-    on v.app_namespace = b.app_namespace
-   and v.marketplace_version_id = b.marketplace_version_id
-  where b.state_hash = input_state_hash
-    and b.browser_binding_hash = input_browser_binding_hash
-    and b.redirect_uri = input_redirect_uri
-    and b.config_fingerprint = input_config_fingerprint
-    and b.status = 'awaiting_callback'
-    and b.expires_at > clock_timestamp();
-$$;
-
-create function public.accept_every8d_public_oauth_callback_v1(
-  input_bootstrap_id uuid,
-  input_state_hash text,
-  input_browser_binding_hash text,
-  input_redirect_uri text,
-  input_config_fingerprint text,
-  input_authorization_code_ciphertext bytea,
-  input_authorization_code_key_version text
-)
-returns text
-language plpgsql security definer
-set search_path = pg_catalog, public
-as $$
-declare
-  bootstrap public.ghl_marketplace_oauth_bootstraps%rowtype;
-begin
-  select * into bootstrap from public.ghl_marketplace_oauth_bootstraps
-    where id = input_bootstrap_id for update;
-  if not found or bootstrap.status <> 'awaiting_callback'
-    or bootstrap.state_hash <> input_state_hash
-    or bootstrap.browser_binding_hash <> input_browser_binding_hash
-    or bootstrap.redirect_uri <> input_redirect_uri
-    or bootstrap.config_fingerprint <> input_config_fingerprint
-    or bootstrap.expires_at <= clock_timestamp()
-    or not exists (
-      select 1 from public.ghl_marketplace_app_version_registrations v
-      where v.app_namespace = bootstrap.app_namespace
-        and v.marketplace_version_id = bootstrap.marketplace_version_id
-    ) then
-    return null;
-  end if;
-  if input_authorization_code_ciphertext is null
-    or octet_length(input_authorization_code_ciphertext) = 0
-    or input_authorization_code_key_version !~ '^[A-Za-z0-9_.-]{1,128}$' then
+  if exists (select 1 from public.ghl_marketplace_oauth_bootstraps
+    where app_namespace = 'every8d_connect'
+      and expected_location_id = input_expected_location_id
+      and target_installation_generation = target_generation
+      and status in ('exchanging', 'succeeded')) then
     return null;
   end if;
 
   update public.ghl_marketplace_oauth_bootstraps
-  set callback_received_at = clock_timestamp(),
-      authorization_code_ciphertext = input_authorization_code_ciphertext,
-      authorization_code_key_version = input_authorization_code_key_version,
-      status = case when claimed_installation_id is null then 'waiting_install' else 'ready' end
-  where id = bootstrap.id
-  returning status into bootstrap.status;
-  return bootstrap.status;
+  set status = 'failed', terminal_at = clock_timestamp(), failure_class = 'callback_superseded',
+      authorization_code_ciphertext = null, authorization_code_key_version = null
+  where app_namespace = 'every8d_connect'
+    and expected_location_id = input_expected_location_id
+    and target_installation_generation = target_generation
+    and status in ('waiting_install', 'ready');
+
+  insert into public.ghl_marketplace_oauth_bootstraps (
+    app_namespace, marketplace_version_id, expected_location_id,
+    target_installation_generation, state_hash, browser_binding_hash,
+    redirect_uri, config_fingerprint, status, created_at, expires_at,
+    callback_received_at, authorization_code_ciphertext,
+    authorization_code_key_version, claimed_installation_id,
+    claimed_installation_generation
+  ) values (
+    'every8d_connect', input_marketplace_version_id, input_expected_location_id,
+    target_generation, input_state_hash,
+    input_browser_binding_hash, input_redirect_uri, input_config_fingerprint,
+    initial_status, created_at_value, input_expires_at, created_at_value,
+    input_authorization_code_ciphertext, input_authorization_code_key_version,
+    case when initial_status = 'ready' then installation.id else null end,
+    case when initial_status = 'ready' then target_generation else null end
+  ) returning * into attempt;
+
+  return jsonb_build_object(
+    'id', attempt.id,
+    'status', attempt.status,
+    'targetInstallationGeneration', attempt.target_installation_generation,
+    'expiresAt', attempt.expires_at
+  );
 end;
 $$;
 
@@ -494,6 +493,7 @@ declare
   bound public.ghl_marketplace_installations%rowtype;
   inserted boolean := false;
   lifecycle_outcome text := 'applied';
+  invalidated_generation integer;
 begin
   if input_event_type is null or input_event_type not in ('INSTALL', 'UNINSTALL')
     or input_marketplace_app_id is null or input_marketplace_app_id !~ '^[A-Za-z0-9_-]{1,128}$'
@@ -611,6 +611,7 @@ begin
         latest_lifecycle_version_id = approved_version.marketplace_version_id
     where id = bound.id returning * into bound;
   elsif input_event_type = 'UNINSTALL' then
+    invalidated_generation := bound.installation_generation;
     update public.ghl_marketplace_installations
     set status = 'uninstalled',
         installation_generation = case
@@ -634,7 +635,9 @@ begin
       select b.id from public.ghl_marketplace_oauth_bootstraps b
       where b.app_namespace = registration.app_namespace
         and b.marketplace_version_id = approved_version.marketplace_version_id
-        and b.status in ('awaiting_callback', 'waiting_install')
+        and b.expected_location_id = input_location_id
+        and b.target_installation_generation = bound.installation_generation
+        and b.status = 'waiting_install'
         and b.claimed_installation_id is null
         and b.expires_at > clock_timestamp()
       order by b.created_at
@@ -646,8 +649,14 @@ begin
     set status = 'failed', terminal_at = clock_timestamp(), failure_class = 'lifecycle_invalidated',
         authorization_code_ciphertext = null, authorization_code_key_version = null
     where app_namespace = registration.app_namespace
-      and status in ('awaiting_callback', 'waiting_install', 'ready', 'exchanging')
-      and (claimed_installation_id is null or claimed_installation_id = bound.id);
+      and expected_location_id = input_location_id
+      and target_installation_generation = invalidated_generation
+      and status in ('waiting_install', 'ready', 'exchanging')
+      and (
+        claimed_installation_id is null
+        or (claimed_installation_id = bound.id
+          and claimed_installation_generation = invalidated_generation)
+      );
   end if;
 
   return jsonb_build_object('outcome', lifecycle_outcome, 'installation', to_jsonb(bound));
@@ -677,7 +686,7 @@ begin
   update public.ghl_marketplace_oauth_bootstraps
   set status = 'failed', terminal_at = clock_timestamp(), failure_class = 'bootstrap_expired',
       authorization_code_ciphertext = null, authorization_code_key_version = null
-  where status in ('awaiting_callback', 'waiting_install', 'ready')
+  where status in ('waiting_install', 'ready')
     and expires_at <= clock_timestamp();
 
   update public.ghl_marketplace_oauth_bootstraps
@@ -722,6 +731,8 @@ begin
     or bootstrap.config_fingerprint <> input_config_fingerprint
     or bootstrap.marketplace_version_id <> input_marketplace_version_id
     or bootstrap.expires_at <= clock_timestamp()
+    or bootstrap.expected_location_id <> installation.location_id
+    or bootstrap.target_installation_generation <> installation.installation_generation
     or bootstrap.claimed_installation_id <> installation.id
     or bootstrap.claimed_installation_generation <> installation.installation_generation
     or installation.status not in ('pending', 'active')
@@ -762,7 +773,7 @@ begin
   set status = 'failed', terminal_at = clock_timestamp(), failure_class = input_failure_class,
       authorization_code_ciphertext = null, authorization_code_key_version = null
   where id = input_bootstrap_id
-    and status in ('awaiting_callback', 'waiting_install', 'ready', 'exchanging');
+    and status in ('waiting_install', 'ready', 'exchanging');
   return found;
 end;
 $$;
@@ -798,6 +809,8 @@ begin
   if not found or bootstrap.status <> 'exchanging'
     or bootstrap.config_fingerprint <> input_config_fingerprint
     or bootstrap.marketplace_version_id <> input_marketplace_version_id
+    or bootstrap.expected_location_id <> installation.location_id
+    or bootstrap.target_installation_generation <> installation.installation_generation
     or bootstrap.claimed_installation_id <> installation.id
     or bootstrap.claimed_installation_generation <> installation.installation_generation
     or installation.status not in ('pending', 'active')
@@ -854,9 +867,7 @@ revoke execute on function public.apply_every8d_ghl_marketplace_lifecycle_v1(
 ) from service_role;
 
 revoke all on function public.protect_ghl_marketplace_installation_v4(),
-  public.create_every8d_public_oauth_bootstrap_v1(text,text,text,text,text,text,text,text,integer),
-  public.inspect_every8d_public_oauth_callback_v1(text,text,text,text),
-  public.accept_every8d_public_oauth_callback_v1(uuid,text,text,text,text,bytea,text),
+  public.accept_every8d_public_oauth_callback_v1(text,text,text,text,text,text,text,text,text,timestamptz,bytea,text),
   public.apply_every8d_ghl_marketplace_lifecycle_v2(text,text,text,uuid,text,text,text,text,timestamptz,text),
   public.list_every8d_oauth_recoverable_v1(text,text,integer),
   public.claim_every8d_oauth_exchange_v1(uuid,text,text),
@@ -866,9 +877,7 @@ revoke all on function public.protect_ghl_marketplace_installation_v4(),
 from public, anon, authenticated, service_role;
 
 grant execute on function
-  public.create_every8d_public_oauth_bootstrap_v1(text,text,text,text,text,text,text,text,integer),
-  public.inspect_every8d_public_oauth_callback_v1(text,text,text,text),
-  public.accept_every8d_public_oauth_callback_v1(uuid,text,text,text,text,bytea,text),
+  public.accept_every8d_public_oauth_callback_v1(text,text,text,text,text,text,text,text,text,timestamptz,bytea,text),
   public.apply_every8d_ghl_marketplace_lifecycle_v2(text,text,text,uuid,text,text,text,text,timestamptz,text),
   public.list_every8d_oauth_recoverable_v1(text,text,integer),
   public.claim_every8d_oauth_exchange_v1(uuid,text,text),
@@ -880,7 +889,7 @@ to service_role;
 comment on table public.ghl_marketplace_app_version_registrations is
   'Owner-only immutable approved signed HighLevel Marketplace version. The migration intentionally inserts no value.';
 comment on table public.ghl_marketplace_oauth_bootstraps is
-  'Ownership-free, hash-bound public first-install OAuth rendezvous. No browser-supplied tenant/location/company ownership.';
+  'Callback-created, authenticated-state-bound public OAuth attempts scoped to the server-pinned Location and lifecycle generation.';
 comment on column public.ghl_marketplace_installations.latest_lifecycle_version_id is
   'Exact owner-approved Marketplace version from current signed INSTALL/UNINSTALL evidence; null only for pre-feature baselines.';
 comment on function public.apply_every8d_ghl_marketplace_lifecycle_v2(text,text,text,uuid,text,text,text,text,timestamptz,text) is
