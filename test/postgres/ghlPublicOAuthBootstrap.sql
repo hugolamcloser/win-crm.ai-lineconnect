@@ -246,14 +246,6 @@ select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_rec
  null,repeat('f',64),8)),'NULL recovery version');
 select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
  'oauth-version',null,8)),'NULL recovery fingerprint');
-select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
- 'oauth-version',repeat('f',64),null)),'NULL recovery limit');
-select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
- 'oauth-version',repeat('f',64),0)),'zero recovery limit');
-select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
- 'oauth-version',repeat('f',64),-1)),'negative recovery limit');
-select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
- 'oauth-version',repeat('f',64),17)),'recovery limit above maximum');
 select pg_temp.assert_true(not public.fail_every8d_oauth_bootstrap_v1(null,'configuration_drift'),
  'NULL failure bootstrap ID');
 select pg_temp.assert_true(not public.fail_every8d_oauth_bootstrap_v1(:'gen3_id'::uuid,null),
@@ -264,7 +256,116 @@ select pg_temp.assert_true(
  and (select attempts=(select jsonb_agg(to_jsonb(b) order by b.id)
                        from public.ghl_marketplace_oauth_bootstraps b)
       from oauth_invalid_input_snapshot),
- 'invalid exchange/recovery inputs perform zero state movement or cleanup');
+ 'invalid exchange/recovery identity/failure inputs perform zero state movement or cleanup');
+
+-- Recovery-limit proof uses a truly expired progressing attempt. Create it through the
+-- production callback boundary, then reconstruct only its timestamps as the test owner;
+-- the immutable bootstrap trigger remains enabled and validates the replacement INSERT.
+set local role service_role;
+select pg_temp.assert_true((public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version','oauth-location-recovery-canary',
+ repeat('6',64),repeat('7',64),'https://oauth.example.invalid/oauth/every8d-connect/callback',
+ repeat('f',64),clock_timestamp()+interval '10 minutes',
+ convert_to('recovery-limit-canary','utf8'),'code-v1')->>'status')='waiting_install',
+ 'recovery-limit canary starts through production callback as waiting_install');
+reset role;
+select id as recovery_limit_canary_id from public.ghl_marketplace_oauth_bootstraps
+ where state_hash=repeat('6',64) \gset
+with canary as (
+ delete from public.ghl_marketplace_oauth_bootstraps
+ where id=:'recovery_limit_canary_id'::uuid
+ returning *
+)
+insert into public.ghl_marketplace_oauth_bootstraps (
+ id,app_namespace,marketplace_version_id,expected_location_id,target_installation_generation,
+ state_hash,browser_binding_hash,redirect_uri,config_fingerprint,status,created_at,expires_at,
+ callback_received_at,authorization_code_ciphertext,authorization_code_key_version,
+ claimed_installation_id,claimed_installation_generation,exchange_started_at,terminal_at,failure_class
+)
+select id,app_namespace,marketplace_version_id,expected_location_id,target_installation_generation,
+ state_hash,browser_binding_hash,redirect_uri,config_fingerprint,status,
+ clock_timestamp()-interval '10 minutes',clock_timestamp()-interval '5 minutes',
+ clock_timestamp()-interval '10 minutes',authorization_code_ciphertext,authorization_code_key_version,
+ claimed_installation_id,claimed_installation_generation,exchange_started_at,terminal_at,failure_class
+from canary;
+select pg_temp.assert_true((select status='waiting_install'
+ and expires_at <= clock_timestamp()
+ and authorization_code_ciphertext is not null
+ and authorization_code_key_version is not null
+ and exchange_started_at is null and terminal_at is null and failure_class is null
+ from public.ghl_marketplace_oauth_bootstraps where id=:'recovery_limit_canary_id'::uuid),
+ 'recovery-limit canary satisfies the production expired-progressing cleanup predicate');
+
+create temp table oauth_recovery_limit_snapshot as
+ select id,status,failure_class,authorization_code_ciphertext,authorization_code_key_version,
+        exchange_started_at,terminal_at,expires_at
+ from public.ghl_marketplace_oauth_bootstraps where id=:'recovery_limit_canary_id'::uuid;
+create temp table oauth_recovery_limit_all_attempts_snapshot as
+ select jsonb_agg(to_jsonb(b) order by b.id) as attempts
+ from public.ghl_marketplace_oauth_bootstraps b;
+create temp table oauth_recovery_limit_other_attempts_snapshot as
+ select jsonb_agg(to_jsonb(b) order by b.id) as attempts
+ from public.ghl_marketplace_oauth_bootstraps b
+ where b.id<>:'recovery_limit_canary_id'::uuid;
+create function pg_temp.assert_recovery_limit_unchanged(message text) returns void language plpgsql as $$
+begin
+ perform pg_temp.assert_true(
+  (select row(b.id,b.status,b.failure_class,b.authorization_code_ciphertext,
+              b.authorization_code_key_version,b.exchange_started_at,b.terminal_at,b.expires_at)
+          is not distinct from
+          row(s.id,s.status,s.failure_class,s.authorization_code_ciphertext,
+              s.authorization_code_key_version,s.exchange_started_at,s.terminal_at,s.expires_at)
+   from public.ghl_marketplace_oauth_bootstraps b
+   cross join pg_temp.oauth_recovery_limit_snapshot s
+   where b.id=s.id)
+  and (select s.attempts=(select jsonb_agg(to_jsonb(b) order by b.id)
+                          from public.ghl_marketplace_oauth_bootstraps b)
+       from pg_temp.oauth_recovery_limit_all_attempts_snapshot s),
+  message);
+end $$;
+
+set local role service_role;
+select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
+ 'oauth-version',repeat('f',64),null)),'NULL recovery limit');
+reset role;
+select pg_temp.assert_recovery_limit_unchanged('NULL recovery limit performs zero cleanup or unrelated mutation');
+set local role service_role;
+select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
+ 'oauth-version',repeat('f',64),0)),'zero recovery limit');
+reset role;
+select pg_temp.assert_recovery_limit_unchanged('zero recovery limit performs zero cleanup or unrelated mutation');
+set local role service_role;
+select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
+ 'oauth-version',repeat('f',64),-1)),'negative recovery limit');
+reset role;
+select pg_temp.assert_recovery_limit_unchanged('negative recovery limit performs zero cleanup or unrelated mutation');
+set local role service_role;
+select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
+ 'oauth-version',repeat('f',64),17)),'recovery limit above maximum');
+reset role;
+select pg_temp.assert_recovery_limit_unchanged('above-maximum recovery limit performs zero cleanup or unrelated mutation');
+
+-- Positive control: the same RPC with a valid limit must clean the same canary.
+set local role service_role;
+select pg_temp.assert_true((select array_agg(id order by id)=array[:'gen3_id'::uuid]
+ from public.list_every8d_oauth_recoverable_v1(
+  'oauth-version',repeat('f',64),8) as recovered(id)),
+ 'valid recovery limit returns the existing unexpired ready attempt');
+reset role;
+select pg_temp.assert_true(
+ (select b.id=s.id and b.status='failed' and b.failure_class='bootstrap_expired'
+   and b.authorization_code_ciphertext is null and b.authorization_code_key_version is null
+   and b.exchange_started_at is null and b.terminal_at is not null
+   and s.status='waiting_install' and s.failure_class is null
+   and s.authorization_code_ciphertext is not null and s.authorization_code_key_version is not null
+   and s.terminal_at is null and b.expires_at=s.expires_at
+  from public.ghl_marketplace_oauth_bootstraps b
+  cross join oauth_recovery_limit_snapshot s where b.id=s.id)
+ and (select s.attempts=(select jsonb_agg(to_jsonb(b) order by b.id)
+                         from public.ghl_marketplace_oauth_bootstraps b
+                         where b.id<>:'recovery_limit_canary_id'::uuid)
+      from oauth_recovery_limit_other_attempts_snapshot s),
+ 'valid recovery limit terminalizes and scrubs only the expired canary');
 
 -- A deterministic failure permits a fresh authenticated state/code in the same generation.
 set local role service_role;
