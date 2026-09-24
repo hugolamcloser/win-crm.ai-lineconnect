@@ -29,6 +29,7 @@ const maximumTokenResponseBytes = 64 * 1024;
 const secretLength = 32;
 const maximumAuthorizationValueLength = 4096;
 const reconcileBatchSize = 8;
+const fatalUtf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export type Every8dGhlOAuthErrorCode =
   | "oauth_disabled"
@@ -153,6 +154,50 @@ function normalizeScopes(value: unknown): string[] | null {
 
 function sameStrings(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+function persistedCredentialsAreExact(input: {
+  persisted: unknown;
+  installation: Every8dGhlMarketplaceInstallation;
+  config: Every8dGhlOAuthConfig;
+  encryptionKeyVersion: string;
+  expiresAt: string;
+  grantedScopes: string[];
+}): boolean {
+  const record = getRecord(input.persisted);
+  if (!record) return false;
+  const persistedExpiry = typeof record.token_expires_at === "string"
+    ? Date.parse(record.token_expires_at) : Number.NaN;
+  const expectedExpiry = Date.parse(input.expiresAt);
+  const persistedScopes = Array.isArray(record.granted_scopes)
+    && record.granted_scopes.every((scope) => typeof scope === "string" && scope.length > 0
+      && scope === scope.trim())
+    ? record.granted_scopes as string[] : null;
+  const expectedScopes = [...input.grantedScopes].sort();
+  return record.id === input.installation.id
+    && record.app_namespace === "every8d_connect"
+    && record.marketplace_app_id === input.config.marketplaceAppId
+    && record.oauth_client_id === input.config.oauthClientId
+    && record.tenant_id === input.installation.tenant_id
+    && record.location_id === input.installation.location_id
+    && record.company_id === input.installation.company_id
+    && record.conversation_provider_id === input.config.conversationProviderId
+    && record.channel === "sms"
+    && record.provider === "every8d"
+    && (record.status === "pending" || record.status === "active")
+    && record.installation_generation === input.installation.installation_generation
+    && record.latest_lifecycle_event_type === "INSTALL"
+    && record.latest_lifecycle_version_id === input.config.marketplaceVersionId
+    && typeof record.access_token_ciphertext === "string"
+    && record.access_token_ciphertext.length > 0
+    && typeof record.refresh_token_ciphertext === "string"
+    && record.refresh_token_ciphertext.length > 0
+    && record.encryption_key_version === input.encryptionKeyVersion
+    && Number.isFinite(expectedExpiry)
+    && Number.isFinite(persistedExpiry)
+    && persistedExpiry === expectedExpiry
+    && persistedScopes !== null
+    && sameStrings(persistedScopes, expectedScopes);
 }
 
 function validateLocationTokenResponse(
@@ -403,6 +448,7 @@ export function createEvery8dGhlOAuthRuntime(dependencies: RuntimeDependencies) 
       plaintext: parsed.refreshToken, activeKeyVersion: dependencies.config.activeKeyVersion,
       keys: dependencies.config.encryptionKeys, context: { ...context, purpose: "refresh_token" }
     });
+    const persistedExpiry = new Date(dependencies.now() + parsed.expiresIn * 1000).toISOString();
     const persisted = await dependencies.repository.persistInstalledCredentials({
       ...context,
       conversationProviderId: installation.conversation_provider_id,
@@ -410,10 +456,17 @@ export function createEvery8dGhlOAuthRuntime(dependencies: RuntimeDependencies) 
       accessTokenCiphertext: access.ciphertext,
       refreshTokenCiphertext: refresh.ciphertext,
       encryptionKeyVersion: access.keyVersion,
-      expiresAt: new Date(dependencies.now() + parsed.expiresIn * 1000).toISOString(),
+      expiresAt: persistedExpiry,
       grantedScopes: parsed.scopes
     });
-    if (!persisted) {
+    if (!persistedCredentialsAreExact({
+      persisted,
+      installation,
+      config: dependencies.config,
+      encryptionKeyVersion: access.keyVersion,
+      expiresAt: persistedExpiry,
+      grantedScopes: parsed.scopes
+    })) {
       throw oauthError("credential_persistence_failed", "HighLevel OAuth credential persistence failed");
     }
     return { status: "connected" };
@@ -571,7 +624,11 @@ async function readBoundedResponse(response: Response): Promise<string> {
     }
     chunks.push(value);
   }
-  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
+  try {
+    return fatalUtf8Decoder.decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
+  } catch {
+    throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown");
+  }
 }
 
 export async function exchangeEvery8dGhlAuthorizationCode(input: {
@@ -601,19 +658,22 @@ export async function exchangeEvery8dGhlAuthorizationCode(input: {
     });
     const responseText = await readBoundedResponse(response);
     if (!response.ok) {
+      if (response.status === 429 || response.status >= 500) {
+        throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown");
+      }
+      let errorRecord: Record<string, unknown> | null;
+      try { errorRecord = getRecord(JSON.parse(responseText)); }
+      catch { throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown"); }
+      if (!errorRecord) throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown");
       if (response.status === 400) {
-        try {
-          const record = getRecord(JSON.parse(responseText));
-          if (record?.error === "invalid_grant") throw new Every8dGhlTokenExchangeError("invalid_grant");
-        } catch (error) {
-          if (error instanceof Every8dGhlTokenExchangeError) throw error;
+        if (errorRecord.error === "invalid_grant") {
+          throw new Every8dGhlTokenExchangeError("invalid_grant");
         }
       }
-      throw new Every8dGhlTokenExchangeError(response.status === 429 || response.status >= 500
-        ? "exchange_outcome_unknown" : "token_response_rejected");
+      throw new Every8dGhlTokenExchangeError("token_response_rejected");
     }
     try { return JSON.parse(responseText) as unknown; }
-    catch { throw new Every8dGhlTokenExchangeError("token_response_rejected"); }
+    catch { throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown"); }
   } catch (error) {
     if (error instanceof Every8dGhlTokenExchangeError) throw error;
     throw new Every8dGhlTokenExchangeError("exchange_outcome_unknown");

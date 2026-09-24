@@ -164,6 +164,7 @@ const uuidSchema = z.string().uuid();
 const timestampSchema = z.string().datetime({ offset: true });
 const hashSchema = z.string().regex(/^[0-9a-f]{64}$/);
 const identifierSchema = z.string().regex(/^[A-Za-z0-9_.-]{1,256}$/);
+const byteaSchema = z.string().regex(/^\\x[0-9a-f]+$/i);
 const lifecycleOutcomeSchema = z.enum(["applied", "exact_replay", "stale_ignored"]);
 const bootstrapStatusSchema = z.enum(["waiting_install", "ready", "exchanging", "succeeded", "failed"]);
 const installationSchema = z.object({
@@ -183,11 +184,11 @@ const installationSchema = z.object({
   latest_lifecycle_event_id: z.string().min(1).nullable(),
   latest_lifecycle_event_type: z.enum(["INSTALL", "UNINSTALL", "INTERNAL_BASELINE"]).nullable(),
   latest_lifecycle_version_id: z.string().min(1).nullable(),
-  access_token_ciphertext: z.string().nullable(),
-  refresh_token_ciphertext: z.string().nullable(),
+  access_token_ciphertext: byteaSchema.nullable(),
+  refresh_token_ciphertext: byteaSchema.nullable(),
   encryption_key_version: z.string().nullable(),
   token_expires_at: timestampSchema.nullable(),
-  granted_scopes: z.array(z.string()),
+  granted_scopes: z.array(z.string().min(1).refine((scope) => scope === scope.trim())),
   created_at: timestampSchema,
   updated_at: timestampSchema
 }).strict();
@@ -423,7 +424,7 @@ export function createEvery8dGhlOAuthRepository(
         .eq("latest_lifecycle_version_id", input.marketplaceVersionId)
         .in("status", ["pending", "active"]).select("*").maybeSingle();
       if (error) throwDatabaseError(error);
-      return data as Every8dGhlMarketplaceInstallation | null;
+      return parseRpc(installationSchema.nullable(), data);
     }
   };
 }

@@ -7,6 +7,8 @@ const ivLength = 12;
 const tagLength = 16;
 const keyVersionPattern = /^[A-Za-z0-9_.-]{1,128}$/;
 const base64UrlPattern = /^[A-Za-z0-9_-]+$/;
+const envelopeKeys = ["version", "purpose", "keyVersion", "iv", "ciphertext", "tag"] as const;
+const fatalUtf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 export type Every8dAuthorizationCodeContext = {
   appNamespace: "every8d_connect";
@@ -64,23 +66,47 @@ function decode(value: string): Buffer {
 
 function parseEnvelope(value: string): Envelope {
   try {
-    const parsed = JSON.parse(decode(value).toString("utf8")) as Partial<Envelope>;
+    const decodedEnvelope = decode(value);
+    const decodedJson = fatalUtf8Decoder.decode(decodedEnvelope);
+    const parsed = JSON.parse(decodedJson) as unknown;
     if (
-      parsed.version !== envelopeVersion ||
-      parsed.purpose !== "pending_authorization_code" ||
-      typeof parsed.keyVersion !== "string" ||
-      !keyVersionPattern.test(parsed.keyVersion) ||
-      typeof parsed.iv !== "string" ||
-      typeof parsed.ciphertext !== "string" ||
-      typeof parsed.tag !== "string"
+      typeof parsed !== "object" ||
+      parsed === null ||
+      Array.isArray(parsed) ||
+      Object.getPrototypeOf(parsed) !== Object.prototype ||
+      Object.keys(parsed).length !== envelopeKeys.length ||
+      !envelopeKeys.every((key) => Object.prototype.hasOwnProperty.call(parsed, key))
     ) {
       throw encryptionError();
     }
-    if (decode(parsed.iv).length !== ivLength || decode(parsed.tag).length !== tagLength) {
+    const candidate = parsed as Partial<Envelope>;
+    if (
+      candidate.version !== envelopeVersion ||
+      candidate.purpose !== "pending_authorization_code" ||
+      typeof candidate.keyVersion !== "string" ||
+      !keyVersionPattern.test(candidate.keyVersion) ||
+      typeof candidate.iv !== "string" ||
+      typeof candidate.ciphertext !== "string" ||
+      typeof candidate.tag !== "string"
+    ) {
       throw encryptionError();
     }
-    decode(parsed.ciphertext);
-    return parsed as Envelope;
+    if (decode(candidate.iv).length !== ivLength || decode(candidate.tag).length !== tagLength) {
+      throw encryptionError();
+    }
+    decode(candidate.ciphertext);
+    const canonical: Envelope = {
+      version: envelopeVersion,
+      purpose: "pending_authorization_code",
+      keyVersion: candidate.keyVersion,
+      iv: candidate.iv,
+      ciphertext: candidate.ciphertext,
+      tag: candidate.tag
+    };
+    if (!decodedEnvelope.equals(Buffer.from(JSON.stringify(canonical), "utf8"))) {
+      throw encryptionError();
+    }
+    return canonical;
   } catch {
     throw encryptionError();
   }

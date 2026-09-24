@@ -349,16 +349,35 @@ declare
   target_generation integer;
   initial_status text;
 begin
-  if input_state_hash !~ '^[0-9a-f]{64}$'
-    or input_browser_binding_hash !~ '^[0-9a-f]{64}$'
-    or input_config_fingerprint !~ '^[0-9a-f]{64}$'
+  if input_marketplace_app_id is null
+    or input_marketplace_app_id !~ '^[A-Za-z0-9_-]{1,128}$'
+    or input_oauth_client_id is null
+    or char_length(input_oauth_client_id) not between 1 and 256
+    or input_oauth_client_id !~ '^[A-Za-z0-9_.-]+$'
+    or input_conversation_provider_id is null
+    or input_conversation_provider_id !~ '^[A-Za-z0-9_-]{1,128}$'
+    or input_marketplace_version_id is null
+    or char_length(input_marketplace_version_id) not between 1 and 256
+    or input_marketplace_version_id !~ '^[A-Za-z0-9_.-]+$'
+    or input_expected_location_id is null
     or char_length(input_expected_location_id) not between 1 and 256
     or input_expected_location_id !~ '^[A-Za-z0-9_.-]+$'
+    or input_state_hash is null
+    or input_state_hash !~ '^[0-9a-f]{64}$'
+    or input_browser_binding_hash is null
+    or input_browser_binding_hash !~ '^[0-9a-f]{64}$'
+    or input_redirect_uri is null
+    or char_length(input_redirect_uri) > 2048
+    or input_redirect_uri !~ '^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/'
+    or input_redirect_uri ~ '[[:space:]#@]'
+    or input_config_fingerprint is null
+    or input_config_fingerprint !~ '^[0-9a-f]{64}$'
     or input_expires_at is null or not isfinite(input_expires_at)
     or input_expires_at <= created_at_value
     or input_expires_at > created_at_value + interval '15 minutes'
     or input_authorization_code_ciphertext is null
     or octet_length(input_authorization_code_ciphertext) = 0
+    or input_authorization_code_key_version is null
     or input_authorization_code_key_version !~ '^[A-Za-z0-9_.-]{1,128}$' then
     return null;
   end if;
@@ -367,17 +386,20 @@ begin
     where app_namespace = 'every8d_connect';
   select * into approved_version from public.ghl_marketplace_app_version_registrations
     where app_namespace = 'every8d_connect';
-  if not found
-    or registration.marketplace_app_id <> input_marketplace_app_id
-    or registration.oauth_client_id <> input_oauth_client_id
-    or registration.conversation_provider_id <> input_conversation_provider_id
-    or registration.channel <> 'sms' or registration.provider <> 'every8d'
-    or approved_version.marketplace_version_id <> input_marketplace_version_id then
+  if registration.app_namespace is null
+    or approved_version.app_namespace is null
+    or registration.marketplace_app_id is distinct from input_marketplace_app_id
+    or registration.oauth_client_id is distinct from input_oauth_client_id
+    or registration.conversation_provider_id is distinct from input_conversation_provider_id
+    or registration.channel is distinct from 'sms'
+    or registration.provider is distinct from 'every8d'
+    or approved_version.marketplace_version_id is distinct from input_marketplace_version_id then
     return null;
   end if;
 
   perform pg_advisory_xact_lock(hashtextextended(
-    'every8d_public_oauth_callback_v1:' || input_expected_location_id, 0));
+    'ghl_marketplace_location_v1:' || registration.app_namespace || ':'
+      || input_expected_location_id, 0));
 
   if input_expires_at <= clock_timestamp() then return null; end if;
 
@@ -394,10 +416,11 @@ begin
   if not found then
     target_generation := 1;
     initial_status := 'waiting_install';
-  elsif installation.app_namespace <> registration.app_namespace
-    or installation.oauth_client_id <> registration.oauth_client_id
-    or installation.conversation_provider_id <> registration.conversation_provider_id
-    or installation.channel <> 'sms' or installation.provider <> 'every8d' then
+  elsif installation.app_namespace is distinct from registration.app_namespace
+    or installation.oauth_client_id is distinct from registration.oauth_client_id
+    or installation.conversation_provider_id is distinct from registration.conversation_provider_id
+    or installation.channel is distinct from 'sms'
+    or installation.provider is distinct from 'every8d' then
     return null;
   elsif installation.status in ('pending', 'active')
     and installation.company_id is not null
@@ -434,7 +457,12 @@ begin
     where app_namespace = 'every8d_connect'
       and expected_location_id = input_expected_location_id
       and target_installation_generation = target_generation
-      and status in ('exchanging', 'succeeded')) then
+      and (
+        status in ('exchanging', 'succeeded')
+        or (status = 'failed' and failure_class in (
+          'exchange_outcome_unknown', 'credential_persistence_failed'
+        ))
+      )) then
     return null;
   end if;
 
@@ -516,12 +544,14 @@ begin
     where app_namespace = 'every8d_connect';
   select * into approved_version from public.ghl_marketplace_app_version_registrations
     where app_namespace = 'every8d_connect';
-  if not found
-    or registration.marketplace_app_id <> input_marketplace_app_id
-    or registration.oauth_client_id <> input_oauth_client_id
-    or registration.conversation_provider_id <> input_conversation_provider_id
-    or registration.channel <> 'sms' or registration.provider <> 'every8d'
-    or approved_version.marketplace_version_id <> input_marketplace_version_id then
+  if registration.app_namespace is null
+    or approved_version.app_namespace is null
+    or registration.marketplace_app_id is distinct from input_marketplace_app_id
+    or registration.oauth_client_id is distinct from input_oauth_client_id
+    or registration.conversation_provider_id is distinct from input_conversation_provider_id
+    or registration.channel is distinct from 'sms'
+    or registration.provider is distinct from 'every8d'
+    or approved_version.marketplace_version_id is distinct from input_marketplace_version_id then
     raise exception 'marketplace lifecycle identity/version is not registered' using errcode = '23514';
   end if;
 
@@ -534,7 +564,15 @@ begin
       where t.id = input_tenant_id and t.location_id = input_location_id) then
       raise exception 'marketplace lifecycle tenant ownership is not exact' using errcode = '23503';
     end if;
+  elsif input_tenant_id is not null or input_company_id is not null then
+    raise exception 'marketplace UNINSTALL evidence must use stored ownership' using errcode = '23514';
+  end if;
 
+  perform pg_advisory_xact_lock(hashtextextended(
+    'ghl_marketplace_location_v1:' || registration.app_namespace || ':'
+      || input_location_id, 0));
+
+  if input_event_type = 'INSTALL' then
     insert into public.ghl_marketplace_installations (
       app_namespace, marketplace_app_id, oauth_client_id, tenant_id, location_id,
       company_id, conversation_provider_id, channel, provider, status,
@@ -557,18 +595,16 @@ begin
     end if;
 
     if not found
-      or bound.app_namespace <> registration.app_namespace
-      or bound.oauth_client_id <> registration.oauth_client_id
-      or bound.tenant_id <> input_tenant_id
-      or bound.conversation_provider_id <> registration.conversation_provider_id
-      or bound.channel <> registration.channel or bound.provider <> registration.provider
-      or (bound.company_id is not null and bound.company_id <> input_company_id) then
+      or bound.app_namespace is distinct from registration.app_namespace
+      or bound.oauth_client_id is distinct from registration.oauth_client_id
+      or bound.tenant_id is distinct from input_tenant_id
+      or bound.conversation_provider_id is distinct from registration.conversation_provider_id
+      or bound.channel is distinct from registration.channel
+      or bound.provider is distinct from registration.provider
+      or (bound.company_id is not null and bound.company_id is distinct from input_company_id) then
       raise exception 'marketplace lifecycle ownership conflicted' using errcode = '23514';
     end if;
   else
-    if input_tenant_id is not null or input_company_id is not null then
-      raise exception 'marketplace UNINSTALL evidence must use stored ownership' using errcode = '23514';
-    end if;
     select * into bound from public.ghl_marketplace_installations
     where app_namespace = registration.app_namespace
       and marketplace_app_id = registration.marketplace_app_id
@@ -642,7 +678,7 @@ begin
         and b.claimed_installation_id is null
         and b.expires_at > clock_timestamp()
       order by b.created_at
-      for update skip locked
+      for update
       limit 1
     );
   else
@@ -674,7 +710,11 @@ language plpgsql security definer
 set search_path = pg_catalog, public
 as $$
 begin
-  if input_config_fingerprint !~ '^[0-9a-f]{64}$'
+  if input_marketplace_version_id is null
+    or char_length(input_marketplace_version_id) not between 1 and 256
+    or input_marketplace_version_id !~ '^[A-Za-z0-9_.-]+$'
+    or input_config_fingerprint is null
+    or input_config_fingerprint !~ '^[0-9a-f]{64}$'
     or input_limit is null or input_limit < 1 or input_limit > 16
     or not exists (
       select 1 from public.ghl_marketplace_app_version_registrations v
@@ -719,6 +759,15 @@ declare
   bootstrap public.ghl_marketplace_oauth_bootstraps%rowtype;
   installation public.ghl_marketplace_installations%rowtype;
 begin
+  if input_bootstrap_id is null
+    or input_marketplace_version_id is null
+    or char_length(input_marketplace_version_id) not between 1 and 256
+    or input_marketplace_version_id !~ '^[A-Za-z0-9_.-]+$'
+    or input_config_fingerprint is null
+    or input_config_fingerprint !~ '^[0-9a-f]{64}$' then
+    return null;
+  end if;
+
   select * into bootstrap_snapshot from public.ghl_marketplace_oauth_bootstraps
     where id = input_bootstrap_id;
   if not found or bootstrap_snapshot.claimed_installation_id is null then return null; end if;
@@ -728,21 +777,35 @@ begin
   select * into bootstrap from public.ghl_marketplace_oauth_bootstraps
     where id = input_bootstrap_id for update;
 
-  if not found or bootstrap.status <> 'ready'
-    or bootstrap.config_fingerprint <> input_config_fingerprint
-    or bootstrap.marketplace_version_id <> input_marketplace_version_id
+  if not found or installation.id is null
+    or bootstrap.status is distinct from 'ready'
+    or bootstrap.config_fingerprint is distinct from input_config_fingerprint
+    or bootstrap.marketplace_version_id is distinct from input_marketplace_version_id
     or bootstrap.expires_at <= clock_timestamp()
-    or bootstrap.expected_location_id <> installation.location_id
-    or bootstrap.target_installation_generation <> installation.installation_generation
-    or bootstrap.claimed_installation_id <> installation.id
-    or bootstrap.claimed_installation_generation <> installation.installation_generation
+    or bootstrap.expected_location_id is distinct from installation.location_id
+    or bootstrap.target_installation_generation is distinct from installation.installation_generation
+    or bootstrap.claimed_installation_id is distinct from installation.id
+    or bootstrap.claimed_installation_generation is distinct from installation.installation_generation
     or installation.status not in ('pending', 'active')
-    or installation.latest_lifecycle_event_type <> 'INSTALL'
-    or installation.latest_lifecycle_version_id <> input_marketplace_version_id
+    or installation.latest_lifecycle_event_type is distinct from 'INSTALL'
+    or installation.latest_lifecycle_version_id is distinct from input_marketplace_version_id
     or not exists (
       select 1 from public.ghl_marketplace_app_version_registrations v
       where v.app_namespace = bootstrap.app_namespace
         and v.marketplace_version_id = input_marketplace_version_id
+    )
+    or exists (
+      select 1 from public.ghl_marketplace_oauth_bootstraps burned
+      where burned.id <> bootstrap.id
+        and burned.app_namespace = bootstrap.app_namespace
+        and burned.expected_location_id = bootstrap.expected_location_id
+        and burned.target_installation_generation = bootstrap.target_installation_generation
+        and (
+          burned.status in ('exchanging', 'succeeded')
+          or (burned.status = 'failed' and burned.failure_class in (
+            'exchange_outcome_unknown', 'credential_persistence_failed'
+          ))
+        )
     ) then
     return null;
   end if;
@@ -764,7 +827,8 @@ language plpgsql security definer
 set search_path = pg_catalog, public
 as $$
 begin
-  if input_failure_class not in (
+  if input_bootstrap_id is null or input_failure_class is null
+    or input_failure_class not in (
     'bootstrap_expired', 'authorization_code_invalid', 'configuration_drift',
     'lifecycle_invalidated', 'invalid_grant', 'token_response_rejected',
     'credential_persistence_failed', 'exchange_outcome_unknown'
@@ -798,6 +862,30 @@ declare
   bootstrap public.ghl_marketplace_oauth_bootstraps%rowtype;
   installation public.ghl_marketplace_installations%rowtype;
 begin
+  if input_bootstrap_id is null
+    or input_marketplace_version_id is null
+    or char_length(input_marketplace_version_id) not between 1 and 256
+    or input_marketplace_version_id !~ '^[A-Za-z0-9_.-]+$'
+    or input_config_fingerprint is null
+    or input_config_fingerprint !~ '^[0-9a-f]{64}$'
+    or input_access_token_ciphertext is null
+    or octet_length(input_access_token_ciphertext) = 0
+    or input_refresh_token_ciphertext is null
+    or octet_length(input_refresh_token_ciphertext) = 0
+    or input_encryption_key_version is null
+    or input_encryption_key_version !~ '^[A-Za-z0-9_.-]{1,128}$'
+    or input_token_expires_at is null
+    or not isfinite(input_token_expires_at)
+    or input_token_expires_at <= clock_timestamp()
+    or input_granted_scopes is null
+    or cardinality(input_granted_scopes) = 0
+    or exists (
+      select 1 from unnest(input_granted_scopes) granted_scope
+      where granted_scope is null or btrim(granted_scope) = ''
+    ) then
+    return false;
+  end if;
+
   select * into bootstrap_snapshot from public.ghl_marketplace_oauth_bootstraps
     where id = input_bootstrap_id;
   if not found or bootstrap_snapshot.claimed_installation_id is null then return false; end if;
@@ -807,26 +895,22 @@ begin
   select * into bootstrap from public.ghl_marketplace_oauth_bootstraps
     where id = input_bootstrap_id for update;
 
-  if not found or bootstrap.status <> 'exchanging'
-    or bootstrap.config_fingerprint <> input_config_fingerprint
-    or bootstrap.marketplace_version_id <> input_marketplace_version_id
-    or bootstrap.expected_location_id <> installation.location_id
-    or bootstrap.target_installation_generation <> installation.installation_generation
-    or bootstrap.claimed_installation_id <> installation.id
-    or bootstrap.claimed_installation_generation <> installation.installation_generation
+  if not found or installation.id is null
+    or bootstrap.status is distinct from 'exchanging'
+    or bootstrap.config_fingerprint is distinct from input_config_fingerprint
+    or bootstrap.marketplace_version_id is distinct from input_marketplace_version_id
+    or bootstrap.expected_location_id is distinct from installation.location_id
+    or bootstrap.target_installation_generation is distinct from installation.installation_generation
+    or bootstrap.claimed_installation_id is distinct from installation.id
+    or bootstrap.claimed_installation_generation is distinct from installation.installation_generation
     or installation.status not in ('pending', 'active')
-    or installation.latest_lifecycle_event_type <> 'INSTALL'
-    or installation.latest_lifecycle_version_id <> input_marketplace_version_id
+    or installation.latest_lifecycle_event_type is distinct from 'INSTALL'
+    or installation.latest_lifecycle_version_id is distinct from input_marketplace_version_id
     or not exists (
       select 1 from public.ghl_marketplace_app_version_registrations v
       where v.app_namespace = bootstrap.app_namespace
         and v.marketplace_version_id = input_marketplace_version_id
-    )
-    or input_access_token_ciphertext is null or octet_length(input_access_token_ciphertext) = 0
-    or input_refresh_token_ciphertext is null or octet_length(input_refresh_token_ciphertext) = 0
-    or input_encryption_key_version !~ '^[A-Za-z0-9_.-]{1,128}$'
-    or input_token_expires_at <= clock_timestamp()
-    or input_granted_scopes is null or cardinality(input_granted_scopes) = 0 then
+    ) then
     return false;
   end if;
 
