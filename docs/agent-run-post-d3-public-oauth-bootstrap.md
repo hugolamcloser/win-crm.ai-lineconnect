@@ -18,16 +18,20 @@
 - Store only state/binding hashes and authorization-code-specific AES-GCM ciphertext.
 - Put lifecycle outcome, rendezvous, invalidation, exchange claim, cleanup, and final success/credential atomicity in narrow security-definer PostgreSQL functions.
 - Burn a generation only for ambiguous exchange evidence (`exchanging`, `succeeded`, `exchange_outcome_unknown`, or post-response `credential_persistence_failed`); deterministic failure permits only a fresh authenticated state/code.
+- Require a structurally complete 2xx token object before semantic validation. Missing or malformed token, ownership, expiry, or scope fields are ambiguous; only explicit HTTP 400 `invalid_grant`, local pre-network rejection, and complete exact ownership/scope policy rejection are deterministic.
 - Require canonical authorization-code envelopes and strict post-persistence validation in the legacy reconnect path.
 - Reject required NULL SECURITY DEFINER inputs explicitly and use NULL-safe authority comparisons.
 
 ## Validation evidence
 
-- Full repair Node validation: 574 tests passed with zero failures before the final implementation commit.
-- `npm run typecheck`: passed during implementation correction loop.
-- `npm run build`: passed as part of the full test run.
+- Provider-outcome repair validation head: `d6087e40bb17066adef37a4ebf41468ff7db54d5`.
+- Full repair Node validation: 593 tests passed with zero failures or skips.
+- `npm run typecheck`: SUCCESS.
+- `npm run build`: SUCCESS.
 - Local PostgreSQL probe: client 17.11 is installed, but the host lacks server catalogs (`share/postgres.bki`), Docker, and WSL; therefore no local cluster could be created and no external database was contacted.
-- Hosted PostgreSQL 17 exact-head validation is required before this repair may be reported ready.
+- Hosted CI run: `36004813308`.
+- Hosted `validate`: SUCCESS.
+- Hosted PostgreSQL 17 `postgres-concurrency`: SUCCESS, including the full migration chain, rollback/reapply, privilege proofs, lifecycle ordering, callback/INSTALL concurrency, lifecycle-v2 required-NULL rejection, recovery-limit boundaries, generation burn, crash/recovery, and finalization/UNINSTALL.
 
 ## Safety review
 
@@ -35,7 +39,7 @@
 - The version migration inserts no owner identity.
 - Public start creates no row; callback-created attempts have server-pinned Location and target-generation evidence but no browser-supplied tenant/company ownership.
 - Disabled runtime gates RNG, database, cookies, redirects, reconciler, and network work.
-- LINE and Phase 2F regression tests remain inside the single 574-test Node suite; no LINE or Phase 2F production module is changed by this repair.
+- LINE and Phase 2F regression tests remain inside the single 593-test Node suite; no LINE or Phase 2F production module is changed by this repair.
 
 ## Rollback
 
