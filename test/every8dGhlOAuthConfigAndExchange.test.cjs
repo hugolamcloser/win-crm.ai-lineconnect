@@ -72,6 +72,7 @@ test("enabled configuration requires dedicated complete exact values", () => {
 test("enabled configuration accepts the exact approved synthetic HighLevel Location install link", () => {
   const exact = readEvery8dGhlOAuthConfig(completeEnvironment());
   assert.doesNotThrow(() => assertEvery8dGhlOAuthConfig(exact));
+  assert.equal(exact.expectedLocationId, "location-test-98");
 });
 
 for (const [name, installationUrl, approvedDigest] of [

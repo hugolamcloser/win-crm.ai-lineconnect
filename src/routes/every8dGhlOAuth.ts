@@ -5,10 +5,10 @@ import { requireSharedSecret } from "../middleware/sharedSecret";
 import { every8dGhlOAuthReconciler } from "../services/every8dGhlOAuthReconciler";
 import { Every8dGhlOAuthError, every8dGhlOAuthRuntime } from "../services/every8dGhlOAuthService";
 import type { Every8dOAuthBootstrapStatus } from "../services/every8dGhlOAuthRepository";
+import type { RawBodyRequest } from "../types/http";
 
 const bindingCookieName = "wincrm_every8d_oauth_binding";
 const cookiePath = "/oauth/every8d-connect";
-const startSchema = z.object({}).strict();
 const exactIdentifier = z.string().trim().min(1).max(256);
 const initiationSchema = z.object({
   installationId: exactIdentifier,
@@ -89,6 +89,24 @@ function statusBody(status: Every8dOAuthBootstrapStatus | null): "pending" | "co
   return "pending";
 }
 
+async function isStrictlyEmptyStartRequest(req: Parameters<RequestHandler>[0]): Promise<boolean> {
+  if (Object.keys(req.query).length !== 0) return false;
+  const contentType = req.header("content-type");
+  if (contentType && !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)) return false;
+  const rawBody = (req as RawBodyRequest).rawBody;
+  if (rawBody) return rawBody.length === 0;
+  const contentLength = req.header("content-length");
+  if (contentLength !== undefined) return contentLength === "0";
+  if (!req.readable || req.readableEnded) return req.body === undefined;
+  return await new Promise<boolean>((resolve) => {
+    let empty = true;
+    req.once("data", () => { empty = false; });
+    req.once("end", () => resolve(empty));
+    req.once("error", () => resolve(false));
+    req.resume();
+  });
+}
+
 export function createEvery8dGhlOAuthRouter(dependencies: OAuthRouteDependencies): Router {
   const router = Router();
 
@@ -106,7 +124,9 @@ export function createEvery8dGhlOAuthRouter(dependencies: OAuthRouteDependencies
       if (!dependencies.runtime.isEnabled()) {
         await dependencies.runtime.start();
       }
-      startSchema.parse(req.body ?? {});
+      if (!(await isStrictlyEmptyStartRequest(req))) {
+        throw new Every8dGhlOAuthError("oauth_request_invalid", "OAuth start request must be empty");
+      }
       const start = await dependencies.runtime.start();
       setBindingCookie(res, start.browserBinding, start.expiresAt, dependencies.now());
       res.redirect(303, start.authorizationUrl);

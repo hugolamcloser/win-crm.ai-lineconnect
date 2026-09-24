@@ -19,6 +19,10 @@ import {
   encryptEvery8dAuthorizationCode
 } from "./every8dGhlAuthorizationCodeEncryption";
 import { encryptEvery8dGhlOAuthToken } from "./every8dGhlTokenEncryption";
+import {
+  createEvery8dPublicOAuthState,
+  verifyEvery8dPublicOAuthState
+} from "./every8dGhlOAuthStateAuth";
 
 const tokenExchangeTimeoutMs = 15_000;
 const maximumTokenResponseBytes = 64 * 1024;
@@ -193,6 +197,8 @@ function claimIsExact(claim: Every8dOAuthExchangeClaim, config: Every8dGhlOAuthC
   const bootstrap = claim.bootstrap;
   return bootstrap.app_namespace === "every8d_connect"
     && bootstrap.marketplace_version_id === config.marketplaceVersionId
+    && bootstrap.expected_location_id === config.expectedLocationId
+    && bootstrap.target_installation_generation === installation.installation_generation
     && bootstrap.config_fingerprint === getEvery8dGhlOAuthConfigFingerprint(config)
     && bootstrap.status === "exchanging"
     && Boolean(bootstrap.authorization_code_ciphertext)
@@ -203,6 +209,7 @@ function claimIsExact(claim: Every8dOAuthExchangeClaim, config: Every8dGhlOAuthC
     && installation.marketplace_app_id === config.marketplaceAppId
     && installation.oauth_client_id === config.oauthClientId
     && installation.conversation_provider_id === config.conversationProviderId
+    && installation.location_id === config.expectedLocationId
     && installation.channel === "sms" && installation.provider === "every8d"
     && installation.company_id !== null
     && installation.latest_lifecycle_event_type === "INSTALL"
@@ -212,11 +219,12 @@ function claimIsExact(claim: Every8dOAuthExchangeClaim, config: Every8dGhlOAuthC
 
 function codeContext(claim: Every8dOAuthExchangeClaim) {
   return {
-    bootstrapId: claim.bootstrap.id,
     appNamespace: claim.bootstrap.app_namespace,
     stateHash: claim.bootstrap.state_hash,
+    marketplaceVersionId: claim.bootstrap.marketplace_version_id,
     redirectUri: claim.bootstrap.redirect_uri,
-    configFingerprint: claim.bootstrap.config_fingerprint
+    configFingerprint: claim.bootstrap.config_fingerprint,
+    expectedLocationId: claim.bootstrap.expected_location_id
   } as const;
 }
 
@@ -416,27 +424,22 @@ export function createEvery8dGhlOAuthRuntime(dependencies: RuntimeDependencies) 
 
     async start(): Promise<{ authorizationUrl: string; browserBinding: string; expiresAt: string }> {
       requireEnabled(dependencies.config);
-      const state = dependencies.randomBytes(secretLength).toString("base64url");
+      const nonce = dependencies.randomBytes(secretLength);
       const browserBinding = dependencies.randomBytes(secretLength).toString("base64url");
-      let created: { id: string; expires_at: string };
-      try {
-        created = await dependencies.repository.createBootstrap({
-          marketplaceAppId: dependencies.config.marketplaceAppId,
-          oauthClientId: dependencies.config.oauthClientId,
-          conversationProviderId: dependencies.config.conversationProviderId,
-          marketplaceVersionId: dependencies.config.marketplaceVersionId,
-          stateHash: sha256(state),
-          browserBindingHash: sha256(browserBinding),
-          redirectUri: dependencies.config.redirectUri,
-          configFingerprint: configFingerprint(),
-          ttlSeconds: dependencies.config.stateTtlSeconds
-        });
-      } catch {
-        throw oauthError("oauth_admission_rejected", "EVERY8D Connect OAuth start was rejected");
-      }
+      const authenticated = createEvery8dPublicOAuthState({
+        config: dependencies.config,
+        configFingerprint: configFingerprint(),
+        nonce,
+        browserBindingHash: sha256(browserBinding),
+        now: dependencies.now()
+      });
       const authorizationUrl = new URL(dependencies.config.installationUrl);
-      authorizationUrl.searchParams.set("state", state);
-      return { authorizationUrl: authorizationUrl.toString(), browserBinding, expiresAt: created.expires_at };
+      authorizationUrl.searchParams.set("state", authenticated.state);
+      return {
+        authorizationUrl: authorizationUrl.toString(),
+        browserBinding,
+        expiresAt: new Date(authenticated.payload.expiresAt * 1000).toISOString()
+      };
     },
 
     async initiate(input: { installationId: string; tenantId: string; locationId: string }): Promise<{
@@ -473,31 +476,45 @@ export function createEvery8dGhlOAuthRuntime(dependencies: RuntimeDependencies) 
       const stateHash = sha256(input.state);
       const browserBindingHash = sha256(input.browserBinding);
       const fingerprint = configFingerprint();
-      const inspected = await dependencies.repository.inspectCallback({
-        stateHash, browserBindingHash, redirectUri: dependencies.config.redirectUri,
-        configFingerprint: fingerprint
-      });
-      if (!inspected) throw oauthError("oauth_state_invalid", "EVERY8D Connect OAuth state is invalid");
+      let state;
+      try {
+        state = verifyEvery8dPublicOAuthState({
+          state: input.state,
+          browserBindingHash,
+          config: dependencies.config,
+          configFingerprint: fingerprint,
+          now: dependencies.now()
+        });
+      } catch {
+        throw oauthError("oauth_state_invalid", "EVERY8D Connect OAuth state is invalid");
+      }
       const encrypted = encryptEvery8dAuthorizationCode({
         plaintext: input.code,
         activeKeyVersion: dependencies.config.activeKeyVersion,
         keys: dependencies.config.encryptionKeys,
         context: {
-          bootstrapId: inspected.id,
-          appNamespace: inspected.app_namespace,
-          stateHash: inspected.state_hash,
-          redirectUri: inspected.redirect_uri,
-          configFingerprint: inspected.config_fingerprint
+          appNamespace: state.appNamespace,
+          stateHash,
+          marketplaceVersionId: state.marketplaceVersionId,
+          redirectUri: state.redirectUri,
+          configFingerprint: state.configFingerprint,
+          expectedLocationId: state.expectedLocationId
         }
       });
       const accepted = await dependencies.repository.acceptCallback({
-        bootstrapId: inspected.id, stateHash, browserBindingHash,
+        marketplaceAppId: dependencies.config.marketplaceAppId,
+        oauthClientId: dependencies.config.oauthClientId,
+        conversationProviderId: dependencies.config.conversationProviderId,
+        marketplaceVersionId: state.marketplaceVersionId,
+        expectedLocationId: state.expectedLocationId,
+        stateHash, browserBindingHash,
         redirectUri: dependencies.config.redirectUri, configFingerprint: fingerprint,
+        expiresAt: new Date(state.expiresAt * 1000).toISOString(),
         authorizationCodeCiphertext: encrypted.ciphertext,
         authorizationCodeKeyVersion: encrypted.keyVersion
       });
       if (!accepted) throw oauthError("oauth_state_invalid", "EVERY8D Connect OAuth state is invalid");
-      return { status: "pending", ready: accepted === "ready" };
+      return { status: "pending", ready: accepted.status === "ready" };
     },
 
     async completeCallback(input: { code: string; state: string; browserBinding: string }): Promise<{

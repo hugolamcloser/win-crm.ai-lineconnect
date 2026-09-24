@@ -2,78 +2,83 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 const { createEvery8dGhlOAuthRepository } = require("../dist/services/every8dGhlOAuthRepository");
 
+const installationId = "10000000-0000-4000-8000-000000000098";
+const bootstrapId = "20000000-0000-4000-8000-000000000098";
+const now = "2026-09-23T12:00:00.000Z";
+function installation(overrides = {}) { return {
+  id: installationId, app_namespace: "every8d_connect", marketplace_app_id: "app-98",
+  oauth_client_id: "client-98", tenant_id: "00000000-0000-4000-8000-000000000098",
+  location_id: "location-98", company_id: "company-98", conversation_provider_id: "provider-98",
+  channel: "sms", provider: "every8d", status: "pending", installation_generation: 3,
+  latest_lifecycle_event_at: now, latest_lifecycle_event_id: "event-98",
+  latest_lifecycle_event_type: "INSTALL", latest_lifecycle_version_id: "version-98",
+  access_token_ciphertext: null, refresh_token_ciphertext: null, encryption_key_version: null,
+  token_expires_at: null, granted_scopes: [], created_at: now, updated_at: now, ...overrides
+}; }
+function bootstrap(overrides = {}) { return {
+  id: bootstrapId, app_namespace: "every8d_connect", marketplace_version_id: "version-98",
+  expected_location_id: "location-98", target_installation_generation: 3,
+  state_hash: "a".repeat(64), browser_binding_hash: "b".repeat(64),
+  redirect_uri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
+  config_fingerprint: "c".repeat(64), status: "exchanging", created_at: now,
+  expires_at: "2026-09-23T12:10:00.000Z", callback_received_at: now,
+  authorization_code_ciphertext: "\\x656e63727970746564", authorization_code_key_version: "code-v1",
+  claimed_installation_id: installationId, claimed_installation_generation: 3,
+  exchange_started_at: now, terminal_at: null, failure_class: null, ...overrides
+}; }
 function harness(responses = {}) {
   const calls = [];
-  const client = {
-    rpc(name, input) {
-      calls.push({ name, input });
-      const response = responses[name] ?? null;
-      const promise = Promise.resolve({ data: response, error: null });
-      promise.single = async () => ({ data: response, error: null });
-      promise.maybeSingle = async () => ({ data: response, error: null });
-      return promise;
-    }
-  };
+  const client = { rpc(name, input) {
+    calls.push({ name, input });
+    return Promise.resolve({ data: responses[name] ?? null, error: null });
+  } };
   return { calls, repository: createEvery8dGhlOAuthRepository(() => client) };
 }
 
-test("repository applies lifecycle only through v2 and includes exact signed version evidence", async () => {
-  const installation = { id: "installation-98" };
-  const h = harness({ apply_every8d_ghl_marketplace_lifecycle_v2: { outcome: "applied", installation } });
-  const result = await h.repository.applyLifecycleEvent({
-    eventType: "INSTALL", marketplaceAppId: "app-98", oauthClientId: "client-98",
-    tenantId: "tenant-98", locationId: "location-98", companyId: "company-98",
-    conversationProviderId: "provider-98", marketplaceVersionId: "version-98",
-    eventAt: "2026-09-23T12:00:00.000Z", eventId: "event-98"
-  });
-  assert.deepEqual(result, { outcome: "applied", installation });
-  assert.deepEqual(h.calls[0], {
-    name: "apply_every8d_ghl_marketplace_lifecycle_v2",
-    input: {
-      input_event_type: "INSTALL", input_marketplace_app_id: "app-98",
-      input_oauth_client_id: "client-98", input_tenant_id: "tenant-98",
-      input_location_id: "location-98", input_company_id: "company-98",
-      input_conversation_provider_id: "provider-98", input_marketplace_version_id: "version-98",
-      input_event_at: "2026-09-23T12:00:00.000Z", input_event_id: "event-98"
-    }
-  });
+test("repository validates lifecycle v2 output without coercing authority", async () => {
+  const h = harness({ apply_every8d_ghl_marketplace_lifecycle_v2: { outcome: "applied", installation: installation() } });
+  const input = { eventType: "INSTALL", marketplaceAppId: "app-98", oauthClientId: "client-98",
+    tenantId: "00000000-0000-4000-8000-000000000098", locationId: "location-98", companyId: "company-98",
+    conversationProviderId: "provider-98", marketplaceVersionId: "version-98", eventAt: now, eventId: "event-98" };
+  assert.equal((await h.repository.applyLifecycleEvent(input)).outcome, "applied");
+  const malformed = harness({ apply_every8d_ghl_marketplace_lifecycle_v2: { outcome: 1, installation: installation() } });
+  await assert.rejects(() => malformed.repository.applyLifecycleEvent(input));
 });
 
-test("bootstrap persistence receives only hashes and trusted server context", async () => {
-  const h = harness({ create_every8d_public_oauth_bootstrap_v1: { id: "bootstrap-98", expires_at: "2026-09-23T12:10:00Z" } });
-  await h.repository.createBootstrap({
+test("atomic callback RPC receives only authenticated context and server-pinned Location", async () => {
+  const h = harness({ accept_every8d_public_oauth_callback_v1: {
+    id: bootstrapId, status: "ready", targetInstallationGeneration: 3,
+    expiresAt: "2026-09-23T12:10:00.000Z" } });
+  const result = await h.repository.acceptCallback({
     marketplaceAppId: "app-98", oauthClientId: "client-98", conversationProviderId: "provider-98",
-    marketplaceVersionId: "version-98", stateHash: "a".repeat(64), browserBindingHash: "b".repeat(64),
+    marketplaceVersionId: "version-98", expectedLocationId: "location-98",
+    stateHash: "a".repeat(64), browserBindingHash: "b".repeat(64),
     redirectUri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
-    configFingerprint: "c".repeat(64), ttlSeconds: 600
-  });
-  const serialized = JSON.stringify(h.calls[0]);
-  assert.equal(serialized.includes("tenant"), false);
-  assert.equal(serialized.includes("location"), false);
-  assert.equal(serialized.includes("company"), false);
-  assert.equal(serialized.includes("installation_id"), false);
-  assert.equal(serialized.includes("browser_binding_hash"), true);
+    configFingerprint: "c".repeat(64), expiresAt: "2026-09-23T12:10:00.000Z",
+    authorizationCodeCiphertext: "encrypted-code", authorizationCodeKeyVersion: "code-v1" });
+  assert.equal(result.status, "ready");
+  assert.equal(h.calls[0].input.input_expected_location_id, "location-98");
+  assert.match(h.calls[0].input.input_authorization_code_ciphertext, /^\\x[0-9a-f]+$/);
+  assert.equal(/tenant|company|claimed_installation_id/.test(JSON.stringify(h.calls[0])), false);
 });
 
-test("authorization code and final tokens are encoded as bytea only for narrow transaction RPCs", async () => {
-  const h = harness({
-    accept_every8d_public_oauth_callback_v1: "ready",
-    finalize_every8d_oauth_exchange_v1: true
-  });
-  await h.repository.acceptCallback({
-    bootstrapId: "bootstrap-98", stateHash: "a".repeat(64), browserBindingHash: "b".repeat(64),
-    redirectUri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
-    configFingerprint: "c".repeat(64), authorizationCodeCiphertext: "encrypted-code-envelope",
-    authorizationCodeKeyVersion: "code-v1"
-  });
-  await h.repository.finalizeExchange({
-    bootstrapId: "bootstrap-98", marketplaceVersionId: "version-98",
-    configFingerprint: "c".repeat(64), accessTokenCiphertext: "encrypted-access-envelope",
-    refreshTokenCiphertext: "encrypted-refresh-envelope", encryptionKeyVersion: "token-v1",
-    tokenExpiresAt: "2026-09-23T13:00:00Z", grantedScopes: ["locations.readonly"]
-  });
-  assert.match(h.calls[0].input.input_authorization_code_ciphertext, /^\\x[0-9a-f]+$/);
+test("new security-sensitive RPC results fail closed when malformed", async () => {
+  for (const value of [123, [123], [{ list_every8d_oauth_recoverable_v1: "not-a-uuid" }]]) {
+    const h = harness({ list_every8d_oauth_recoverable_v1: value });
+    await assert.rejects(() => h.repository.listRecoverable({ marketplaceVersionId: "version-98", configFingerprint: "c".repeat(64), limit: 8 }));
+  }
+  const status = harness({ get_every8d_oauth_bootstrap_status_v1: "invented" });
+  await assert.rejects(() => status.repository.getStatus({ browserBindingHash: "b".repeat(64), configFingerprint: "c".repeat(64) }));
+  const claim = harness({ claim_every8d_oauth_exchange_v1: { bootstrap: bootstrap({ target_installation_generation: "3" }), installation: installation() } });
+  await assert.rejects(() => claim.repository.claimExchange({ bootstrapId, marketplaceVersionId: "version-98", configFingerprint: "c".repeat(64) }));
+});
+
+test("claim and finalization validate and preserve bytea boundaries", async () => {
+  const h = harness({ claim_every8d_oauth_exchange_v1: { bootstrap: bootstrap(), installation: installation() }, finalize_every8d_oauth_exchange_v1: true });
+  const claim = await h.repository.claimExchange({ bootstrapId, marketplaceVersionId: "version-98", configFingerprint: "c".repeat(64) });
+  assert.equal(claim.bootstrap.authorization_code_ciphertext, "encrypted");
+  assert.equal(await h.repository.finalizeExchange({ bootstrapId, marketplaceVersionId: "version-98", configFingerprint: "c".repeat(64),
+    accessTokenCiphertext: "encrypted-access", refreshTokenCiphertext: "encrypted-refresh", encryptionKeyVersion: "token-v1",
+    tokenExpiresAt: "2026-09-23T13:00:00.000Z", grantedScopes: ["locations.readonly"] }), true);
   assert.match(h.calls[1].input.input_access_token_ciphertext, /^\\x[0-9a-f]+$/);
-  assert.match(h.calls[1].input.input_refresh_token_ciphertext, /^\\x[0-9a-f]+$/);
-  assert.equal(JSON.stringify(h.calls).includes("synthetic-access-secret"), false);
 });

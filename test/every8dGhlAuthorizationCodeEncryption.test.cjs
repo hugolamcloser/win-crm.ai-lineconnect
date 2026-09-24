@@ -12,11 +12,12 @@ const keys = parseEvery8dGhlOAuthEncryptionKeys(JSON.stringify({
   "code-v2": Buffer.alloc(32, 0x62).toString("base64")
 }));
 const context = {
-  bootstrapId: "20000000-0000-4000-8000-000000000098",
   appNamespace: "every8d_connect",
   stateHash: "a".repeat(64),
+  marketplaceVersionId: "version-test-98",
   redirectUri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
-  configFingerprint: "b".repeat(64)
+  configFingerprint: "b".repeat(64),
+  expectedLocationId: "location-test-98"
 };
 
 test("authorization code uses a distinct pending_authorization_code envelope and exact AAD", () => {
@@ -33,11 +34,12 @@ test("authorization code uses a distinct pending_authorization_code envelope and
 });
 
 for (const [name, change] of [
-  ["bootstrap", { bootstrapId: "foreign-bootstrap" }],
   ["app namespace", { appNamespace: "foreign" }],
   ["state hash", { stateHash: "c".repeat(64) }],
+  ["Marketplace version", { marketplaceVersionId: "foreign-version" }],
   ["redirect URI", { redirectUri: "https://oauth.example.invalid/other" }],
-  ["config fingerprint", { configFingerprint: "d".repeat(64) }]
+  ["config fingerprint", { configFingerprint: "d".repeat(64) }],
+  ["expected Location", { expectedLocationId: "foreign-location" }]
 ]) {
   test(`authorization-code decryption fails with wrong ${name} AAD`, () => {
     const encrypted = encryptEvery8dAuthorizationCode({

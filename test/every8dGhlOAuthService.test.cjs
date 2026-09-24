@@ -14,7 +14,7 @@ const { createEvery8dGhlOAuthReconciler } = require("../dist/services/every8dGhl
 const { decryptEvery8dGhlOAuthToken, parseEvery8dGhlOAuthEncryptionKeys } = require("../dist/services/every8dGhlTokenEncryption");
 
 const NOW = Date.parse("2026-09-23T12:00:00.000Z");
-const installationUrl = "https://app.gohighlevel.com/v2/location/location-test-98/integration/integration-test-98/versions/version-test-98";
+const installationUrl = "https://app.gohighlevel.com/v2/location/location-98/integration/integration-test-98/versions/version-test-98";
 const keyConfig = JSON.stringify({ "test-v1": Buffer.alloc(32, 0x51).toString("base64") });
 
 function sha256(value) { return createHash("sha256").update(value, "utf8").digest("hex"); }
@@ -29,6 +29,7 @@ function config(overrides = {}) {
     installationUrl,
     installationUrlSha256: sha256(installationUrl),
     marketplaceVersionId: "version-test-98",
+    expectedLocationId: "location-98",
     tokenUrl: "https://services.leadconnectorhq.com/oauth/token",
     conversationProviderId: "every8d-provider-98",
     requiredScopes: ["locations.readonly"],
@@ -87,7 +88,7 @@ function token(overrides = {}) {
 function harness(options = {}) {
   const selectedConfig = config(options.config);
   const fingerprint = getEvery8dGhlOAuthConfigFingerprint(selectedConfig);
-  const calls = { create: 0, inspect: 0, accept: 0, list: 0, claim: 0, fail: 0, finalize: 0, exchange: 0, random: 0 };
+  const calls = { accept: 0, list: 0, claim: 0, fail: 0, finalize: 0, exchange: 0, random: 0 };
   let bootstrap = null;
   let failureClass = null;
   let persisted = null;
@@ -96,44 +97,31 @@ function harness(options = {}) {
   const legacyStates = new Map();
 
   const repository = {
-    async createBootstrap(input) {
-      calls.create += 1;
+    async acceptCallback(input) {
+      calls.accept += 1;
+      if (options.rejectInspect || bootstrap) return null;
       bootstrap = {
         id: "20000000-0000-4000-8000-000000000098",
         app_namespace: "every8d_connect",
         marketplace_version_id: input.marketplaceVersionId,
+        expected_location_id: input.expectedLocationId,
+        target_installation_generation: 3,
         state_hash: input.stateHash,
         browser_binding_hash: input.browserBindingHash,
         redirect_uri: input.redirectUri,
         config_fingerprint: input.configFingerprint,
-        status: "awaiting_callback",
-        expires_at: new Date(NOW + input.ttlSeconds * 1000).toISOString(),
-        callback_received_at: null,
-        authorization_code_ciphertext: null,
-        authorization_code_key_version: null,
+        status: options.installFirst === false ? "waiting_install" : "ready",
+        expires_at: input.expiresAt,
+        callback_received_at: new Date(NOW).toISOString(),
+        authorization_code_ciphertext: input.authorizationCodeCiphertext,
+        authorization_code_key_version: input.authorizationCodeKeyVersion,
         claimed_installation_id: options.installFirst === false ? null : installation().id,
         claimed_installation_generation: options.installFirst === false ? null : 3,
         exchange_started_at: null,
         terminal_at: null,
         failure_class: null
       };
-      return { id: bootstrap.id, expires_at: bootstrap.expires_at };
-    },
-    async inspectCallback(input) {
-      calls.inspect += 1;
-      if (!bootstrap || bootstrap.status !== "awaiting_callback" || input.stateHash !== bootstrap.state_hash
-        || input.browserBindingHash !== bootstrap.browser_binding_hash || input.redirectUri !== bootstrap.redirect_uri
-        || input.configFingerprint !== bootstrap.config_fingerprint || options.rejectInspect) return null;
-      return bootstrap;
-    },
-    async acceptCallback(input) {
-      calls.accept += 1;
-      if (!bootstrap || bootstrap.status !== "awaiting_callback") return null;
-      bootstrap.callback_received_at = new Date(NOW).toISOString();
-      bootstrap.authorization_code_ciphertext = input.authorizationCodeCiphertext;
-      bootstrap.authorization_code_key_version = input.authorizationCodeKeyVersion;
-      bootstrap.status = bootstrap.claimed_installation_id ? "ready" : "waiting_install";
-      return bootstrap.status;
+      return { id: bootstrap.id, status: bootstrap.status, targetInstallationGeneration: 3, expiresAt: bootstrap.expires_at };
     },
     async listRecoverable() {
       calls.list += 1;
@@ -240,20 +228,34 @@ test("OAuth disabled performs zero DB, RNG, cookie-equivalent, reconciler, and n
   const stop = reconciler.start();
   stop();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(h.calls, { create: 0, inspect: 0, accept: 0, list: 0, claim: 0, fail: 0, finalize: 0, exchange: 0, random: 0 });
+  assert.deepEqual(h.calls, { accept: 0, list: 0, claim: 0, fail: 0, finalize: 0, exchange: 0, random: 0 });
 });
 
-test("public start creates independent state and binding, persists hashes only, and pins exact install URL", async () => {
+test("public start creates independent authenticated state and binding with zero persistence", async () => {
   const h = harness();
   const started = await h.runtime.start();
   const state = new URL(started.authorizationUrl).searchParams.get("state");
   assert.notEqual(state, started.browserBinding);
-  assert.equal(h.bootstrap.state_hash, sha256(state));
-  assert.equal(h.bootstrap.browser_binding_hash, sha256(started.browserBinding));
-  assert.equal(JSON.stringify(h.bootstrap).includes(state), false);
-  assert.equal(JSON.stringify(h.bootstrap).includes(started.browserBinding), false);
+  assert.equal(h.bootstrap, null);
+  assert.equal(h.calls.accept, 0);
   assert.equal(new URL(started.authorizationUrl).origin, "https://app.gohighlevel.com");
   assert.equal(h.calls.random, 2);
+});
+
+test("many abandoned public starts create no durable attempt and consume no admission slot", async () => {
+  const h = harness();
+  const states = new Set();
+  const bindings = new Set();
+  for (let index = 0; index < 40; index += 1) {
+    const started = await h.runtime.start();
+    states.add(new URL(started.authorizationUrl).searchParams.get("state"));
+    bindings.add(started.browserBinding);
+  }
+  assert.equal(states.size, 40);
+  assert.equal(bindings.size, 40);
+  assert.equal(h.bootstrap, null);
+  assert.equal(h.calls.accept, 0);
+  assert.equal((await h.runtime.start()).authorizationUrl.startsWith(installationUrl), true);
 });
 
 test("callback validates state and binding before encrypting the code and replay is rejected", async () => {
@@ -261,14 +263,16 @@ test("callback validates state and binding before encrypting the code and replay
   const { started, state, accepted } = await h.startAndCallback();
   assert.deepEqual(accepted, { status: "pending", ready: true });
   assert.equal(h.bootstrap.authorization_code_ciphertext.includes("synthetic-authorization-code"), false);
+  const originalCiphertext = h.bootstrap.authorization_code_ciphertext;
   await assert.rejects(
     () => h.runtime.acceptCallback({ code: "second-code", state, browserBinding: started.browserBinding }),
     (error) => error instanceof Every8dGhlOAuthError && error.code === "oauth_state_invalid"
   );
-  assert.equal(h.calls.accept, 1);
+  assert.equal(h.calls.accept, 2);
+  assert.equal(h.bootstrap.authorization_code_ciphertext, originalCiphertext);
 });
 
-test("wrong state, binding, redirect/config drift fail before code acceptance or exchange", async () => {
+test("wrong state, binding, and config drift fail before code acceptance or exchange", async () => {
   for (const overrides of [
     { state: "wrong-state" },
     { browserBinding: "wrong-binding" }
@@ -285,7 +289,7 @@ test("wrong state, binding, redirect/config drift fail before code acceptance or
   }
   const drift = harness({ rejectInspect: true });
   await assert.rejects(() => drift.startAndCallback(), (error) => error.code === "oauth_state_invalid");
-  assert.equal(drift.calls.accept, 0);
+  assert.equal(drift.calls.accept, 1);
 });
 
 test("ready exchange has one claimant, validates exact ownership, and atomically finalizes encrypted credentials", async () => {

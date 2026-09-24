@@ -50,7 +50,7 @@ test("public POST start accepts an empty body, returns 303, and sets the narrow 
   } }));
   t.after(() => server.close());
   const response = await fetch(`${baseUrl}/oauth/every8d-connect/start`, {
-    method: "POST", redirect: "manual", headers: { "content-type": "application/json" }, body: "{}"
+    method: "POST", redirect: "manual"
   });
   assert.equal(response.status, 303);
   assert.equal(starts, 1);
@@ -62,6 +62,28 @@ test("public POST start accepts an empty body, returns 303, and sets the narrow 
   assert.equal(response.headers.get("pragma"), "no-cache");
   assert.equal(response.headers.get("referrer-policy"), "no-referrer");
   assert.equal(response.headers.get("x-frame-options"), "DENY");
+});
+
+test("public start rejects queries, JSON objects, and every non-empty or unsupported body", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => {
+    starts += 1;
+    return { authorizationUrl: "https://example.invalid", browserBinding: "binding", expiresAt: new Date(1_600_000).toISOString() };
+  } }));
+  t.after(() => server.close());
+  const cases = [
+    [`${baseUrl}/oauth/every8d-connect/start?x=1`, {}],
+    [`${baseUrl}/oauth/every8d-connect/start`, { headers: { "content-type": "application/json" }, body: "{}" }],
+    [`${baseUrl}/oauth/every8d-connect/start`, { headers: { "content-type": "application/json" }, body: "{\"x\":1}" }],
+    [`${baseUrl}/oauth/every8d-connect/start`, { headers: { "content-type": "text/plain" }, body: "x" }],
+    [`${baseUrl}/oauth/every8d-connect/start`, { headers: { "content-type": "application/x-www-form-urlencoded" }, body: "x=1" }],
+    [`${baseUrl}/oauth/every8d-connect/start`, { headers: { "content-type": "application/octet-stream" }, body: "x" }]
+  ];
+  for (const [url, init] of cases) {
+    const response = await fetch(url, { method: "POST", redirect: "manual", ...init });
+    assert.equal(response.status, 400);
+  }
+  assert.equal(starts, 0);
 });
 
 test("public start rejects every browser-supplied ownership or redirect field before runtime start", async (t) => {

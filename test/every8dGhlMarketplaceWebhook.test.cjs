@@ -25,6 +25,7 @@ function config(overrides = {}) {
     redirectUri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
     installationUrl: observedInstallationUrl,
     installationUrlSha256: createHash("sha256").update(observedInstallationUrl).digest("hex"),
+    expectedLocationId: observedLocationId,
     marketplaceVersionId: observedVersionId,
     tokenUrl: "https://services.leadconnectorhq.com/oauth/token",
     conversationProviderId: "every8d-provider-98",

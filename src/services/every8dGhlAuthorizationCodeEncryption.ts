@@ -9,11 +9,12 @@ const keyVersionPattern = /^[A-Za-z0-9_.-]{1,128}$/;
 const base64UrlPattern = /^[A-Za-z0-9_-]+$/;
 
 export type Every8dAuthorizationCodeContext = {
-  bootstrapId: string;
   appNamespace: "every8d_connect";
   stateHash: string;
+  marketplaceVersionId: string;
   redirectUri: string;
   configFingerprint: string;
+  expectedLocationId: string;
 };
 
 type Envelope = {
@@ -31,10 +32,11 @@ function encryptionError(): Error {
 
 function aad(context: Every8dAuthorizationCodeContext): Buffer {
   if (
-    !context.bootstrapId ||
     context.appNamespace !== "every8d_connect" ||
     !/^[0-9a-f]{64}$/.test(context.stateHash) ||
-    !/^[0-9a-f]{64}$/.test(context.configFingerprint)
+    !/^[0-9a-f]{64}$/.test(context.configFingerprint) ||
+    !/^[A-Za-z0-9_.-]{1,256}$/.test(context.marketplaceVersionId) ||
+    !/^[A-Za-z0-9_.-]{1,256}$/.test(context.expectedLocationId)
   ) {
     throw encryptionError();
   }
@@ -42,11 +44,12 @@ function aad(context: Every8dAuthorizationCodeContext): Buffer {
   return Buffer.from(JSON.stringify({
     envelopeVersion,
     purpose: "pending_authorization_code",
-    bootstrapId: context.bootstrapId,
     appNamespace: context.appNamespace,
     stateHash: context.stateHash,
+    marketplaceVersionId: context.marketplaceVersionId,
     redirectUri: context.redirectUri,
-    configFingerprint: context.configFingerprint
+    configFingerprint: context.configFingerprint,
+    expectedLocationId: context.expectedLocationId
   }), "utf8");
 }
 

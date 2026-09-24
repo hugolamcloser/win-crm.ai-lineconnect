@@ -1,4 +1,5 @@
 import { getSupabase } from "../config/supabase";
+import { z } from "zod";
 
 export type Every8dLifecycleOutcome = "applied" | "exact_replay" | "stale_ignored";
 
@@ -29,13 +30,15 @@ export type Every8dGhlMarketplaceInstallation = {
 };
 
 export type Every8dOAuthBootstrapStatus =
-  | "awaiting_callback" | "waiting_install" | "ready"
+  | "waiting_install" | "ready"
   | "exchanging" | "succeeded" | "failed";
 
 export type Every8dOAuthBootstrap = {
   id: string;
   app_namespace: "every8d_connect";
   marketplace_version_id: string;
+  expected_location_id: string;
+  target_installation_generation: number;
   state_hash: string;
   browser_binding_hash?: string;
   redirect_uri: string;
@@ -84,32 +87,20 @@ export type Every8dGhlOAuthRepository = {
     eventAt: string;
     eventId: string;
   }): Promise<{ outcome: Every8dLifecycleOutcome; installation: Every8dGhlMarketplaceInstallation }>;
-  createBootstrap(input: {
+  acceptCallback(input: {
     marketplaceAppId: string;
     oauthClientId: string;
     conversationProviderId: string;
     marketplaceVersionId: string;
+    expectedLocationId: string;
     stateHash: string;
     browserBindingHash: string;
     redirectUri: string;
     configFingerprint: string;
-    ttlSeconds: number;
-  }): Promise<{ id: string; expires_at: string }>;
-  inspectCallback(input: {
-    stateHash: string;
-    browserBindingHash: string;
-    redirectUri: string;
-    configFingerprint: string;
-  }): Promise<Pick<Every8dOAuthBootstrap, "id" | "app_namespace" | "marketplace_version_id" | "state_hash" | "redirect_uri" | "config_fingerprint"> | null>;
-  acceptCallback(input: {
-    bootstrapId: string;
-    stateHash: string;
-    browserBindingHash: string;
-    redirectUri: string;
-    configFingerprint: string;
+    expiresAt: string;
     authorizationCodeCiphertext: string;
     authorizationCodeKeyVersion: string;
-  }): Promise<"waiting_install" | "ready" | null>;
+  }): Promise<{ id: string; status: "waiting_install" | "ready"; targetInstallationGeneration: number; expiresAt: string } | null>;
   listRecoverable(input: { marketplaceVersionId: string; configFingerprint: string; limit: number }): Promise<string[]>;
   claimExchange(input: { bootstrapId: string; marketplaceVersionId: string; configFingerprint: string }): Promise<Every8dOAuthExchangeClaim | null>;
   failBootstrap(input: { bootstrapId: string; failureClass: string }): Promise<boolean>;
@@ -169,6 +160,84 @@ export type Every8dGhlOAuthRepository = {
   }): Promise<Every8dGhlMarketplaceInstallation | null>;
 };
 
+const uuidSchema = z.string().uuid();
+const timestampSchema = z.string().datetime({ offset: true });
+const hashSchema = z.string().regex(/^[0-9a-f]{64}$/);
+const identifierSchema = z.string().regex(/^[A-Za-z0-9_.-]{1,256}$/);
+const lifecycleOutcomeSchema = z.enum(["applied", "exact_replay", "stale_ignored"]);
+const bootstrapStatusSchema = z.enum(["waiting_install", "ready", "exchanging", "succeeded", "failed"]);
+const installationSchema = z.object({
+  id: uuidSchema,
+  app_namespace: z.literal("every8d_connect"),
+  marketplace_app_id: z.string().min(1),
+  oauth_client_id: z.string().min(1),
+  tenant_id: uuidSchema,
+  location_id: z.string().min(1),
+  company_id: z.string().min(1).nullable(),
+  conversation_provider_id: z.string().min(1),
+  channel: z.literal("sms"),
+  provider: z.literal("every8d"),
+  status: z.enum(["pending", "active", "disabled", "uninstalled"]),
+  installation_generation: z.number().int().positive(),
+  latest_lifecycle_event_at: timestampSchema.nullable(),
+  latest_lifecycle_event_id: z.string().min(1).nullable(),
+  latest_lifecycle_event_type: z.enum(["INSTALL", "UNINSTALL", "INTERNAL_BASELINE"]).nullable(),
+  latest_lifecycle_version_id: z.string().min(1).nullable(),
+  access_token_ciphertext: z.string().nullable(),
+  refresh_token_ciphertext: z.string().nullable(),
+  encryption_key_version: z.string().nullable(),
+  token_expires_at: timestampSchema.nullable(),
+  granted_scopes: z.array(z.string()),
+  created_at: timestampSchema,
+  updated_at: timestampSchema
+}).strict();
+const bootstrapSchema = z.object({
+  id: uuidSchema,
+  app_namespace: z.literal("every8d_connect"),
+  marketplace_version_id: identifierSchema,
+  expected_location_id: identifierSchema,
+  target_installation_generation: z.number().int().positive(),
+  state_hash: hashSchema,
+  browser_binding_hash: hashSchema,
+  redirect_uri: z.string().url(),
+  config_fingerprint: hashSchema,
+  status: bootstrapStatusSchema,
+  created_at: timestampSchema,
+  expires_at: timestampSchema,
+  callback_received_at: timestampSchema,
+  authorization_code_ciphertext: z.string().nullable(),
+  authorization_code_key_version: identifierSchema.nullable(),
+  claimed_installation_id: uuidSchema.nullable(),
+  claimed_installation_generation: z.number().int().positive().nullable(),
+  exchange_started_at: timestampSchema.nullable(),
+  terminal_at: timestampSchema.nullable(),
+  failure_class: z.string().min(1).nullable()
+}).strict();
+const lifecycleResultSchema = z.object({
+  outcome: lifecycleOutcomeSchema,
+  installation: installationSchema
+}).strict();
+const callbackAcceptanceSchema = z.object({
+  id: uuidSchema,
+  status: z.enum(["waiting_install", "ready"]),
+  targetInstallationGeneration: z.number().int().positive(),
+  expiresAt: timestampSchema
+}).strict().nullable();
+const exchangeClaimSchema = z.object({
+  bootstrap: bootstrapSchema,
+  installation: installationSchema
+}).strict().nullable();
+const recoverableSchema = z.array(z.union([
+  uuidSchema,
+  z.object({ list_every8d_oauth_recoverable_v1: uuidSchema }).strict()
+]));
+
+function parseRpc<T>(schema: z.ZodType<T>, value: unknown): T {
+  const parsed = schema.safeParse(value);
+  if (!parsed.success) throwDatabaseError(null);
+  return parsed.data;
+}
+
 function throwDatabaseError(error: { message: string } | null): never {
   throw new Error(error?.message || "EVERY8D HighLevel OAuth persistence failed");
 }
@@ -208,51 +277,26 @@ export function createEvery8dGhlOAuthRepository(
         input_marketplace_version_id: input.marketplaceVersionId,
         input_event_at: input.eventAt,
         input_event_id: input.eventId
-      }) as { outcome?: unknown; installation?: unknown } | null;
-      if (!data || !["applied", "exact_replay", "stale_ignored"].includes(String(data.outcome)) || !data.installation) {
-        throwDatabaseError(null);
-      }
-      return { outcome: data.outcome as Every8dLifecycleOutcome, installation: data.installation as Every8dGhlMarketplaceInstallation };
-    },
-
-    async createBootstrap(input) {
-      const { data, error } = await getClient().rpc("create_every8d_public_oauth_bootstrap_v1", {
-        input_marketplace_app_id: input.marketplaceAppId,
-        input_oauth_client_id: input.oauthClientId,
-        input_conversation_provider_id: input.conversationProviderId,
-        input_marketplace_version_id: input.marketplaceVersionId,
-        input_state_hash: input.stateHash,
-        input_browser_binding_hash: input.browserBindingHash,
-        input_redirect_uri: input.redirectUri,
-        input_config_fingerprint: input.configFingerprint,
-        input_ttl_seconds: input.ttlSeconds
-      }).single();
-      if (error || !data) throwDatabaseError(error);
-      return data as { id: string; expires_at: string };
-    },
-
-    async inspectCallback(input) {
-      const { data, error } = await getClient().rpc("inspect_every8d_public_oauth_callback_v1", {
-        input_state_hash: input.stateHash,
-        input_browser_binding_hash: input.browserBindingHash,
-        input_redirect_uri: input.redirectUri,
-        input_config_fingerprint: input.configFingerprint
-      }).maybeSingle();
-      if (error) throwDatabaseError(error);
-      return data as Every8dOAuthBootstrap | null;
+      });
+      return parseRpc(lifecycleResultSchema, data);
     },
 
     async acceptCallback(input) {
       const data = await rpcScalar("accept_every8d_public_oauth_callback_v1", {
-        input_bootstrap_id: input.bootstrapId,
+        input_marketplace_app_id: input.marketplaceAppId,
+        input_oauth_client_id: input.oauthClientId,
+        input_conversation_provider_id: input.conversationProviderId,
+        input_marketplace_version_id: input.marketplaceVersionId,
+        input_expected_location_id: input.expectedLocationId,
         input_state_hash: input.stateHash,
         input_browser_binding_hash: input.browserBindingHash,
         input_redirect_uri: input.redirectUri,
         input_config_fingerprint: input.configFingerprint,
+        input_expires_at: input.expiresAt,
         input_authorization_code_ciphertext: encodeBytea(input.authorizationCodeCiphertext),
         input_authorization_code_key_version: input.authorizationCodeKeyVersion
       });
-      return data === "waiting_install" || data === "ready" ? data : null;
+      return parseRpc(callbackAcceptanceSchema, data);
     },
 
     async listRecoverable(input) {
@@ -261,10 +305,8 @@ export function createEvery8dGhlOAuthRepository(
         input_config_fingerprint: input.configFingerprint,
         input_limit: input.limit
       });
-      if (!Array.isArray(data)) return [];
-      return data.map((entry) => typeof entry === "string"
-        ? entry
-        : String((entry as { list_every8d_oauth_recoverable_v1?: unknown }).list_every8d_oauth_recoverable_v1));
+      return parseRpc(recoverableSchema, data).map((entry) => typeof entry === "string"
+        ? entry : entry.list_every8d_oauth_recoverable_v1);
     },
 
     async claimExchange(input) {
@@ -272,23 +314,24 @@ export function createEvery8dGhlOAuthRepository(
         input_bootstrap_id: input.bootstrapId,
         input_marketplace_version_id: input.marketplaceVersionId,
         input_config_fingerprint: input.configFingerprint
-      }) as Every8dOAuthExchangeClaim | null;
-      if (!data) return null;
-      if (data.bootstrap.authorization_code_ciphertext) {
-        data.bootstrap.authorization_code_ciphertext = decodeBytea(data.bootstrap.authorization_code_ciphertext);
+      });
+      const claim = parseRpc(exchangeClaimSchema, data);
+      if (!claim) return null;
+      if (claim.bootstrap.authorization_code_ciphertext) {
+        claim.bootstrap.authorization_code_ciphertext = decodeBytea(claim.bootstrap.authorization_code_ciphertext);
       }
-      return data;
+      return claim;
     },
 
     async failBootstrap(input) {
-      return (await rpcScalar("fail_every8d_oauth_bootstrap_v1", {
+      return parseRpc(z.boolean(), await rpcScalar("fail_every8d_oauth_bootstrap_v1", {
         input_bootstrap_id: input.bootstrapId,
         input_failure_class: input.failureClass
-      })) === true;
+      }));
     },
 
     async finalizeExchange(input) {
-      return (await rpcScalar("finalize_every8d_oauth_exchange_v1", {
+      return parseRpc(z.boolean(), await rpcScalar("finalize_every8d_oauth_exchange_v1", {
         input_bootstrap_id: input.bootstrapId,
         input_marketplace_version_id: input.marketplaceVersionId,
         input_config_fingerprint: input.configFingerprint,
@@ -297,7 +340,7 @@ export function createEvery8dGhlOAuthRepository(
         input_encryption_key_version: input.encryptionKeyVersion,
         input_token_expires_at: input.tokenExpiresAt,
         input_granted_scopes: input.grantedScopes
-      })) === true;
+      }));
     },
 
     async getStatus(input) {
@@ -305,7 +348,7 @@ export function createEvery8dGhlOAuthRepository(
         input_browser_binding_hash: input.browserBindingHash,
         input_config_fingerprint: input.configFingerprint
       });
-      return typeof data === "string" ? data as Every8dOAuthBootstrapStatus : null;
+      return parseRpc(bootstrapStatusSchema.nullable(), data);
     },
 
     async getEligibleInstallation(input) {

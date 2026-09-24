@@ -16,6 +16,7 @@ export type Every8dGhlOAuthConfig = {
   installationUrl: string;
   installationUrlSha256: string;
   marketplaceVersionId: string;
+  expectedLocationId: string;
   tokenUrl: string;
   conversationProviderId: string;
   requiredScopes: string[];
@@ -85,13 +86,22 @@ export function getEvery8dMarketplaceVersionId(installationUrl: string): string 
   }
 }
 
+export function getEvery8dExpectedLocationId(installationUrl: string): string {
+  try {
+    return locationInstallationPathPattern.exec(new URL(installationUrl).pathname)?.[1] ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export function getEvery8dGhlOAuthConfigFingerprint(config: Every8dGhlOAuthConfig): string {
   return createHash("sha256").update(JSON.stringify({
-    version: 1,
+    version: 2,
     appNamespace: "every8d_connect",
     marketplaceAppId: config.marketplaceAppId,
     oauthClientId: config.oauthClientId,
     marketplaceVersionId: config.marketplaceVersionId,
+    expectedLocationId: config.expectedLocationId,
     conversationProviderId: config.conversationProviderId,
     redirectUri: config.redirectUri,
     installationUrlSha256: config.installationUrlSha256,
@@ -129,6 +139,7 @@ export function readEvery8dGhlOAuthConfig(
     installationUrl,
     installationUrlSha256: trimmed(source.EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256),
     marketplaceVersionId: getEvery8dMarketplaceVersionId(installationUrl),
+    expectedLocationId: getEvery8dExpectedLocationId(installationUrl),
     tokenUrl: trimmed(source.EVERY8D_GHL_OAUTH_TOKEN_URL) || every8dGhlOAuthTokenUrl,
     conversationProviderId: trimmed(source.EVERY8D_GHL_CONVERSATION_PROVIDER_ID),
     requiredScopes: parseScopes(source.EVERY8D_GHL_OAUTH_REQUIRED_SCOPES),
@@ -151,6 +162,8 @@ export function assertEvery8dGhlOAuthConfig(config: Every8dGhlOAuthConfig): void
     !isExactHttpsUrl(config.redirectUri) ||
     !isApprovedInstallationUrl(config.installationUrl, config.installationUrlSha256) ||
     !exactIdentifierPattern.test(config.marketplaceVersionId) ||
+    !exactIdentifierPattern.test(config.expectedLocationId) ||
+    config.expectedLocationId !== getEvery8dExpectedLocationId(config.installationUrl) ||
     config.tokenUrl !== every8dGhlOAuthTokenUrl ||
     config.requiredScopes.length === 0 ||
     !exactIdentifierPattern.test(config.activeKeyVersion) ||
