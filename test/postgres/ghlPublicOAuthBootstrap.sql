@@ -14,9 +14,6 @@ end $$;
 insert into public.tenants(id,location_id,ghl_provider_id,line_channel_id) values
  ('00000000-0000-4000-8000-000000000201','oauth-location-a','line-a','line-channel-a'),
  ('00000000-0000-4000-8000-000000000202','oauth-location-b','line-b','line-channel-b');
-insert into public.ghl_marketplace_app_registrations(
- app_namespace,marketplace_app_id,oauth_client_id,conversation_provider_id,channel,provider
-) values ('every8d_connect','oauth-app','oauth-client','oauth-provider','sms','every8d');
 insert into public.ghl_marketplace_app_version_registrations values ('every8d_connect','oauth-version');
 
 -- Owner registration is immutable and unavailable to every runtime/browser role.

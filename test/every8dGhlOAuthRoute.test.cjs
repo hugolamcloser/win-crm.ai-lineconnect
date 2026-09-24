@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const express = require("express");
+const http = require("node:http");
 const test = require("node:test");
 
 const { Every8dGhlOAuthError } = require("../dist/services/every8dGhlOAuthService");
@@ -36,6 +37,25 @@ function runtime(overrides = {}) {
     result.completeCallback = overrides.acceptCallback;
   }
   return result;
+}
+
+async function sendChunkedBody(baseUrl, body) {
+  const target = new URL("/oauth/every8d-connect/start", baseUrl);
+  return await new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.pathname,
+      method: "POST",
+      headers: { "transfer-encoding": "chunked" }
+    }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response));
+    });
+    request.once("error", reject);
+    request.write(body);
+    request.end();
+  });
 }
 
 test("public POST start accepts an empty body, returns 303, and sets the narrow secure cookie and security headers", async (t) => {
@@ -83,6 +103,42 @@ test("public start rejects queries, JSON objects, and every non-empty or unsuppo
     const response = await fetch(url, { method: "POST", redirect: "manual", ...init });
     assert.equal(response.status, 400);
   }
+  assert.equal(starts, 0);
+});
+
+test("public start rejects malformed JSON before runtime start", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  const response = await fetch(`${baseUrl}/oauth/every8d-connect/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{"
+  });
+  assert.equal(response.status, 400);
+  assert.equal(starts, 0);
+});
+
+test("public start rejects multipart bodies without ownership fields", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  const form = new FormData();
+  form.set("harmless", "value");
+  const response = await fetch(`${baseUrl}/oauth/every8d-connect/start`, {
+    method: "POST",
+    body: form
+  });
+  assert.equal(response.status, 400);
+  assert.equal(starts, 0);
+});
+
+test("public start rejects a non-empty chunked body without Content-Length", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  const response = await sendChunkedBody(baseUrl, "x");
+  assert.equal(response.statusCode, 400);
   assert.equal(starts, 0);
 });
 
