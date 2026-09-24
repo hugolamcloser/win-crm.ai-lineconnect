@@ -27,12 +27,12 @@ insert into public.tenants(id,location_id,ghl_provider_id,line_channel_id)
 values ('00000000-0000-4000-8000-000000000299','baseline-location','baseline-line','baseline-channel');
 alter table public.ghl_marketplace_installations disable trigger protect_ghl_marketplace_installation;
 insert into public.ghl_marketplace_installations(
- app_namespace,marketplace_app_id,oauth_client_id,tenant_id,location_id,company_id,
+ id,app_namespace,marketplace_app_id,oauth_client_id,tenant_id,location_id,company_id,
  conversation_provider_id,channel,provider,status,latest_lifecycle_event_at,
  latest_lifecycle_event_id,latest_lifecycle_event_type
-) values ('every8d_connect','baseline-app','baseline-client','00000000-0000-4000-8000-000000000299',
+) values ('10000000-0000-4000-8000-000000000299','every8d_connect','baseline-app','baseline-client','00000000-0000-4000-8000-000000000299',
  'baseline-location','baseline-company','baseline-provider','sms','every8d','pending',
- '2026-09-23T00:00:00Z','baseline-event','INTERNAL_BASELINE');
+ '2026-09-23T00:00:00Z','internal_d3_baseline_10000000-0000-4000-8000-000000000299_pending_g1','INTERNAL_BASELINE');
 alter table public.ghl_marketplace_installations enable trigger protect_ghl_marketplace_installation;
 SQL
 psql_query < "$migration" >/dev/null
