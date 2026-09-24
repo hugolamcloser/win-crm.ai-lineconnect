@@ -228,11 +228,36 @@ test("token exchange rejects oversized and malformed provider responses without 
       }),
       (error) => {
         assert.equal(error instanceof Every8dGhlTokenExchangeError, true);
+        assert.equal(error.failureClass, "exchange_outcome_unknown");
         assert.equal(error.message.includes(body.slice(0, 20)), false);
         return true;
       }
     );
   }
+});
+
+test("unreadable 2xx token response is ambiguous", async () => {
+  const config = readEvery8dGhlOAuthConfig(completeEnvironment());
+  await assert.rejects(
+    () => exchangeEvery8dGhlAuthorizationCode({
+      code: "synthetic-code", config,
+      fetchImpl: async () => new Response(new Uint8Array([0xff, 0xfe, 0xfd]), { status: 200 })
+    }),
+    (error) => error instanceof Every8dGhlTokenExchangeError
+      && error.failureClass === "exchange_outcome_unknown"
+  );
+});
+
+test("complete explicit provider rejection is deterministic", async () => {
+  const config = readEvery8dGhlOAuthConfig(completeEnvironment());
+  await assert.rejects(
+    () => exchangeEvery8dGhlAuthorizationCode({
+      code: "synthetic-code", config,
+      fetchImpl: async () => new Response(JSON.stringify({ error: "invalid_client" }), { status: 400 })
+    }),
+    (error) => error instanceof Every8dGhlTokenExchangeError
+      && error.failureClass === "token_response_rejected"
+  );
 });
 
 test("invalid_grant is classified as a definitive one-time terminal exchange outcome", async () => {

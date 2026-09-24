@@ -35,6 +35,34 @@ function harness(responses = {}) {
   return { calls, repository: createEvery8dGhlOAuthRepository(() => client) };
 }
 
+function persistenceHarness(data) {
+  const query = {
+    update() { return this; },
+    eq() { return this; },
+    in() { return this; },
+    select() { return this; },
+    async maybeSingle() { return { data, error: null }; }
+  };
+  return createEvery8dGhlOAuthRepository(() => ({ from() { return query; } }));
+}
+
+const persistenceInput = {
+  installationId,
+  marketplaceAppId: "app-98",
+  oauthClientId: "client-98",
+  tenantId: "00000000-0000-4000-8000-000000000098",
+  locationId: "location-98",
+  companyId: "company-98",
+  conversationProviderId: "provider-98",
+  installationGeneration: 3,
+  marketplaceVersionId: "version-98",
+  accessTokenCiphertext: "encrypted-access",
+  refreshTokenCiphertext: "encrypted-refresh",
+  encryptionKeyVersion: "token-v1",
+  expiresAt: "2026-09-23T13:00:00.000Z",
+  grantedScopes: ["locations.readonly"]
+};
+
 test("repository validates lifecycle v2 output without coercing authority", async () => {
   const h = harness({ apply_every8d_ghl_marketplace_lifecycle_v2: { outcome: "applied", installation: installation() } });
   const input = { eventType: "INSTALL", marketplaceAppId: "app-98", oauthClientId: "client-98",
@@ -81,4 +109,24 @@ test("claim and finalization validate and preserve bytea boundaries", async () =
     accessTokenCiphertext: "encrypted-access", refreshTokenCiphertext: "encrypted-refresh", encryptionKeyVersion: "token-v1",
     tokenExpiresAt: "2026-09-23T13:00:00.000Z", grantedScopes: ["locations.readonly"] }), true);
   assert.match(h.calls[1].input.input_access_token_ciphertext, /^\\x[0-9a-f]+$/);
+});
+
+test("legacy credential persistence result uses the strict installation schema", async () => {
+  const valid = installation({
+    access_token_ciphertext: "\\x01",
+    refresh_token_ciphertext: "\\x02",
+    encryption_key_version: "token-v1",
+    token_expires_at: persistenceInput.expiresAt,
+    granted_scopes: persistenceInput.grantedScopes
+  });
+  assert.equal((await persistenceHarness(valid).persistInstalledCredentials(persistenceInput)).id, installationId);
+  assert.equal(await persistenceHarness(null).persistInstalledCredentials(persistenceInput), null);
+  for (const malformed of [
+    1,
+    { ...valid, unexpected: true },
+    { ...valid, access_token_ciphertext: "not-bytea" },
+    { ...valid, granted_scopes: [""] }
+  ]) {
+    await assert.rejects(() => persistenceHarness(malformed).persistInstalledCredentials(persistenceInput));
+  }
 });

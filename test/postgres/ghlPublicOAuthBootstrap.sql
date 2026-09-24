@@ -137,6 +137,124 @@ select pg_temp.assert_true((select status='ready' and claimed_installation_gener
  from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('3',64)),
  'reinstall rendezvous binds only generation three');
 
+-- Required NULL inputs fail closed at the SECURITY DEFINER boundary with zero mutation.
+select id as gen3_id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('3',64) \gset
+set local role service_role;
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ null,'oauth-client','oauth-provider','oauth-version','oauth-location-a',repeat('8',64),repeat('9',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',convert_to('code','utf8'),'code-v1') is null,'NULL callback app ID');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app',null,'oauth-provider','oauth-version','oauth-location-a',repeat('8',64),repeat('9',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',convert_to('code','utf8'),'code-v1') is null,'NULL callback OAuth client ID');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client',null,'oauth-version','oauth-location-a',repeat('8',64),repeat('9',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',convert_to('code','utf8'),'code-v1') is null,'NULL callback provider ID');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider',null,'oauth-location-a',repeat('8',64),repeat('9',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',convert_to('code','utf8'),'code-v1') is null,'NULL callback version');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version',null,repeat('8',64),repeat('9',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',convert_to('code','utf8'),'code-v1') is null,'NULL callback Location');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version','oauth-location-a',null,repeat('9',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',convert_to('code','utf8'),'code-v1') is null,'NULL callback state hash');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version','oauth-location-a',repeat('8',64),null,
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',convert_to('code','utf8'),'code-v1') is null,'NULL callback binding hash');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version','oauth-location-a',repeat('8',64),repeat('9',64),
+ null,repeat('f',64),clock_timestamp()+interval '10 minutes',convert_to('code','utf8'),'code-v1') is null,'NULL callback redirect URI');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version','oauth-location-a',repeat('8',64),repeat('9',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',null,clock_timestamp()+interval '10 minutes',convert_to('code','utf8'),'code-v1') is null,'NULL callback fingerprint');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version','oauth-location-a',repeat('8',64),repeat('9',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),null,convert_to('code','utf8'),'code-v1') is null,'NULL callback expiry');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version','oauth-location-a',repeat('8',64),repeat('9',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',null,'code-v1') is null,'NULL callback ciphertext');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version','oauth-location-a',repeat('8',64),repeat('9',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',convert_to('code','utf8'),null) is null,'NULL callback key version');
+reset role;
+select pg_temp.assert_true((select count(*)=3 from public.ghl_marketplace_oauth_bootstraps),
+ 'invalid callback inputs create no durable attempts');
+
+set local role service_role;
+select pg_temp.assert_true(public.claim_every8d_oauth_exchange_v1(null,'oauth-version',repeat('f',64)) is null,
+ 'NULL exchange bootstrap ID');
+select pg_temp.assert_true(public.claim_every8d_oauth_exchange_v1(
+ :'gen3_id'::uuid,null,repeat('f',64)) is null,
+ 'NULL exchange version');
+select pg_temp.assert_true(public.claim_every8d_oauth_exchange_v1(
+ :'gen3_id'::uuid,'oauth-version',null) is null,
+ 'NULL exchange fingerprint');
+select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
+ null,repeat('f',64),8)),'NULL recovery version');
+select pg_temp.assert_true((select count(*)=0 from public.list_every8d_oauth_recoverable_v1(
+ 'oauth-version',null,8)),'NULL recovery fingerprint');
+select pg_temp.assert_true(not public.fail_every8d_oauth_bootstrap_v1(null,'configuration_drift'),
+ 'NULL failure bootstrap ID');
+select pg_temp.assert_true(not public.fail_every8d_oauth_bootstrap_v1(:'gen3_id'::uuid,null),
+ 'NULL failure class');
+reset role;
+select pg_temp.assert_true((select status='ready' from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('3',64)),
+ 'invalid exchange claims perform zero state movement');
+
+-- A deterministic failure permits a fresh authenticated state/code in the same generation.
+set local role service_role;
+select pg_temp.assert_true(public.claim_every8d_oauth_exchange_v1(
+ :'gen3_id'::uuid,
+ 'oauth-version',repeat('f',64)) is not null,'deterministic fixture claimed');
+select pg_temp.assert_true(public.fail_every8d_oauth_bootstrap_v1(
+ :'gen3_id'::uuid,
+ 'invalid_grant'),'deterministic invalid_grant recorded');
+select pg_temp.assert_true((public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version','oauth-location-a',repeat('4',64),repeat('d',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',
+ convert_to('fresh-code','utf8'),'code-v1')->>'status')='ready','fresh code admitted after deterministic failure');
+reset role;
+select id as gen4_id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('4',64) \gset
+set local role service_role;
+select pg_temp.assert_true(public.claim_every8d_oauth_exchange_v1(
+ :'gen4_id'::uuid,
+ 'oauth-version',repeat('f',64)) is not null,'fresh deterministic-recovery code claimed');
+reset role;
+
+-- Invalid finalization arguments leave the exchanging attempt and installation credentials unchanged.
+set local role service_role;
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(null,'oauth-version',repeat('f',64),convert_to('a','utf8'),convert_to('r','utf8'),'token-v1',clock_timestamp()+interval '1 hour',array['locations.readonly']),'NULL finalize bootstrap ID');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,null,repeat('f',64),convert_to('a','utf8'),convert_to('r','utf8'),'token-v1',clock_timestamp()+interval '1 hour',array['locations.readonly']),'NULL finalize version');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,'oauth-version',null,convert_to('a','utf8'),convert_to('r','utf8'),'token-v1',clock_timestamp()+interval '1 hour',array['locations.readonly']),'NULL finalize fingerprint');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,'oauth-version',repeat('f',64),null,convert_to('r','utf8'),'token-v1',clock_timestamp()+interval '1 hour',array['locations.readonly']),'NULL access ciphertext');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,'oauth-version',repeat('f',64),convert_to('a','utf8'),null,'token-v1',clock_timestamp()+interval '1 hour',array['locations.readonly']),'NULL refresh ciphertext');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,'oauth-version',repeat('f',64),convert_to('a','utf8'),convert_to('r','utf8'),null,clock_timestamp()+interval '1 hour',array['locations.readonly']),'NULL encryption key version');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,'oauth-version',repeat('f',64),convert_to('a','utf8'),convert_to('r','utf8'),'token-v1',null,array['locations.readonly']),'NULL token expiry');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,'oauth-version',repeat('f',64),convert_to('a','utf8'),convert_to('r','utf8'),'token-v1','infinity'::timestamptz,array['locations.readonly']),'non-finite token expiry');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,'oauth-version',repeat('f',64),convert_to('a','utf8'),convert_to('r','utf8'),'token-v1',clock_timestamp()-interval '1 second',array['locations.readonly']),'past token expiry');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,'oauth-version',repeat('f',64),convert_to('a','utf8'),convert_to('r','utf8'),'token-v1',clock_timestamp()+interval '1 hour',null),'NULL scopes');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,'oauth-version',repeat('f',64),convert_to('a','utf8'),convert_to('r','utf8'),'token-v1',clock_timestamp()+interval '1 hour',array['locations.readonly',null]::text[]),'NULL scope member');
+select pg_temp.assert_true(not public.finalize_every8d_oauth_exchange_v1(:'gen4_id'::uuid,'oauth-version',repeat('f',64),convert_to('a','utf8'),convert_to('r','utf8'),'token-v1',clock_timestamp()+interval '1 hour',array[' ']),'blank scope member');
+reset role;
+select pg_temp.assert_true((select status='exchanging' and authorization_code_ciphertext is not null
+ from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('4',64))
+ and (select access_token_ciphertext is null and refresh_token_ciphertext is null
+ from public.ghl_marketplace_installations where location_id='oauth-location-a'),
+ 'invalid finalization performs zero credential or attempt mutation');
+
+-- Ambiguous exchange evidence burns the generation and rejects a fresh callback.
+set local role service_role;
+select pg_temp.assert_true(public.fail_every8d_oauth_bootstrap_v1(
+ :'gen4_id'::uuid,
+ 'exchange_outcome_unknown'),'ambiguous outcome recorded');
+select pg_temp.assert_true(public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','oauth-version','oauth-location-a',repeat('5',64),repeat('e',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('f',64),clock_timestamp()+interval '10 minutes',
+ convert_to('must-not-admit','utf8'),'code-v1') is null,'ambiguous generation rejects fresh callback');
+reset role;
+select pg_temp.assert_true(not exists(select 1 from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('5',64)),
+ 'ambiguous generation rejection creates no attempt');
+
 select pg_temp.assert_true(not has_table_privilege('service_role','public.ghl_marketplace_oauth_bootstraps','SELECT')
  and not has_table_privilege('service_role','public.ghl_marketplace_oauth_bootstraps','INSERT')
  and not has_table_privilege('service_role','public.ghl_marketplace_oauth_bootstraps','UPDATE')

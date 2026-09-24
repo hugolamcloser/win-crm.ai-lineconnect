@@ -20,6 +20,26 @@ const context = {
   expectedLocationId: "location-test-98"
 };
 
+function encryptedFixture() {
+  return encryptEvery8dAuthorizationCode({
+    plaintext: "authorization-code-sensitive", activeKeyVersion: "code-v1", keys, context
+  });
+}
+
+function decodeEnvelope(ciphertext) {
+  return JSON.parse(Buffer.from(ciphertext, "base64url").toString("utf8"));
+}
+
+function encodeRawEnvelope(value) {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function rejectCiphertext(ciphertext, expectedKeyVersion = "code-v1") {
+  assert.throws(() => decryptEvery8dAuthorizationCode({
+    ciphertext, expectedKeyVersion, keys, context
+  }));
+}
+
 test("authorization code uses a distinct pending_authorization_code envelope and exact AAD", () => {
   const encrypted = encryptEvery8dAuthorizationCode({
     plaintext: "authorization-code-sensitive", activeKeyVersion: "code-v1", keys, context
@@ -66,3 +86,45 @@ test("authorization-code decryption rejects wrong key version and tampering", ()
     ciphertext: tampered, expectedKeyVersion: "code-v1", keys, context
   }));
 });
+
+const canonical = encryptedFixture();
+const canonicalEnvelope = decodeEnvelope(canonical.ciphertext);
+const canonicalJson = JSON.stringify(canonicalEnvelope);
+
+for (const [name, ciphertext] of [
+  ["unknown field", encodeRawEnvelope(JSON.stringify({ ...canonicalEnvelope, unknown: true }))],
+  ["missing field", encodeRawEnvelope(JSON.stringify({
+    version: canonicalEnvelope.version,
+    purpose: canonicalEnvelope.purpose,
+    keyVersion: canonicalEnvelope.keyVersion,
+    iv: canonicalEnvelope.iv,
+    ciphertext: canonicalEnvelope.ciphertext
+  }))],
+  ["duplicate field", encodeRawEnvelope(`${canonicalJson.slice(0, -1)},\"version\":1}`)],
+  ["whitespace variant", encodeRawEnvelope(` ${canonicalJson}`)],
+  ["changed property ordering", encodeRawEnvelope(JSON.stringify({
+    purpose: canonicalEnvelope.purpose,
+    version: canonicalEnvelope.version,
+    keyVersion: canonicalEnvelope.keyVersion,
+    iv: canonicalEnvelope.iv,
+    ciphertext: canonicalEnvelope.ciphertext,
+    tag: canonicalEnvelope.tag
+  }))],
+  ["noncanonical outer base64url", `${canonical.ciphertext}=`],
+  ["noncanonical inner base64url", encodeRawEnvelope(JSON.stringify({
+    ...canonicalEnvelope, iv: `${canonicalEnvelope.iv}=`
+  }))],
+  ["invalid UTF-8", Buffer.from([0xff, 0xfe, 0xfd]).toString("base64url")],
+  ["wrong purpose", encodeRawEnvelope(JSON.stringify({
+    ...canonicalEnvelope, purpose: "access_token"
+  }))],
+  ["wrong key version", encodeRawEnvelope(JSON.stringify({
+    ...canonicalEnvelope, keyVersion: "code-v2"
+  }))],
+  ["tampered tag", encodeRawEnvelope(JSON.stringify({
+    ...canonicalEnvelope,
+    tag: `${canonicalEnvelope.tag.slice(0, -1)}${canonicalEnvelope.tag.endsWith("A") ? "B" : "A"}`
+  }))]
+]) {
+  test(`authorization-code decryption rejects ${name}`, () => rejectCiphertext(ciphertext));
+}

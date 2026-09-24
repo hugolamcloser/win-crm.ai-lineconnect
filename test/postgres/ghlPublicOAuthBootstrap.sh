@@ -7,7 +7,26 @@ readonly rollback=supabase/rollback/202609230002_every8d_public_oauth_bootstrap.
 tmp_dir=$(mktemp -d)
 trap 'rm -rf "$tmp_dir"' EXIT
 psql_query() { docker exec -i "$POSTGRES_CONTAINER_ID" psql -X -v ON_ERROR_STOP=1 -v VERBOSITY=terse -U postgres -d "$database" "$@"; }
+psql_app() {
+  local app_name=$1
+  shift
+  docker exec -e PGAPPNAME="$app_name" -i "$POSTGRES_CONTAINER_ID" \
+    psql -X -v ON_ERROR_STOP=1 -v VERBOSITY=terse -U postgres -d "$database" "$@"
+}
 assert_query() { [[ "$(psql_query -Atqc "$1" | tr -d '\r')" == t ]] || { echo "FAIL: $2" >&2; exit 1; }; }
+wait_for_activity() {
+  local app_name=$1
+  local wait_kind=$2
+  local message=$3
+  for _ in {1..80}; do
+    if [[ "$(psql_query -Atqc "select exists(select 1 from pg_stat_activity where application_name='$app_name' and wait_event_type='$wait_kind')" | tr -d '\r')" == t ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "FAIL: $message" >&2
+  exit 1
+}
 expect_rollback_refusal() {
   local expected=$1
   set +e
@@ -79,8 +98,124 @@ echo 'Forward, guarded rollback, reapply, privilege, generation, and cross-locat
 psql_query -q <<'SQL'
 insert into public.ghl_marketplace_app_version_registrations values ('every8d_connect','race-version');
 insert into public.tenants(id,location_id,ghl_provider_id,line_channel_id)
-values ('00000000-0000-4000-8000-000000000211','race-location','race-line','race-channel');
+values
+ ('00000000-0000-4000-8000-000000000211','race-location','race-line','race-channel'),
+ ('00000000-0000-4000-8000-000000000212','callback-first-location','callback-first-line','callback-first-channel'),
+ ('00000000-0000-4000-8000-000000000213','install-first-location','install-first-line','install-first-channel'),
+ ('00000000-0000-4000-8000-000000000214','recovery-wait-location','recovery-wait-line','recovery-wait-channel'),
+ ('00000000-0000-4000-8000-000000000215','recovery-ready-location','recovery-ready-line','recovery-ready-channel'),
+ ('00000000-0000-4000-8000-000000000216','recovery-stale-location','recovery-stale-line','recovery-stale-channel'),
+ ('00000000-0000-4000-8000-000000000217','claim-burn-location','claim-burn-line','claim-burn-channel');
 SQL
+
+# True first-install race: callback owns the shared Location lock and INSTALL blocks.
+psql_app callback_first_holder -Atq <<'SQL' >"$tmp_dir/callback-first-holder.out" &
+begin; set local role service_role;
+select public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','race-version','callback-first-location',repeat('1',64),repeat('2',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('3',64),clock_timestamp()+interval '10 minutes',
+ convert_to('callback-first-code','utf8'),'code-v1');
+select pg_sleep(8); commit;
+SQL
+callback_first_holder_pid=$!
+wait_for_activity callback_first_holder Timeout 'callback-first holder did not reach controlled pg_sleep barrier'
+psql_app callback_first_waiter -Atq -c "set role service_role; select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000212','callback-first-location','callback-first-company','oauth-provider','race-version','2026-09-23T14:00:00Z','callback-first-install');" >"$tmp_dir/callback-first-waiter.out" &
+callback_first_waiter_pid=$!
+wait_for_activity callback_first_waiter Lock 'callback-first INSTALL did not block on the shared Location lock'
+wait "$callback_first_holder_pid"
+wait "$callback_first_waiter_pid"
+assert_query "select count(*)=1 and bool_and(i.installation_generation=1 and b.status='ready'
+ and b.target_installation_generation=1 and b.claimed_installation_id=i.id)
+ from public.ghl_marketplace_installations i join public.ghl_marketplace_oauth_bootstraps b
+ on b.expected_location_id=i.location_id where i.location_id='callback-first-location'" \
+  'callback-first concurrent order commits generation one ready without stranded waiting_install'
+
+# True first-install race: INSTALL owns the same Location lock and callback blocks.
+psql_app install_first_holder -Atq <<'SQL' >"$tmp_dir/install-first-holder.out" &
+begin; set local role service_role;
+select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000213','install-first-location',
+ 'install-first-company','oauth-provider','race-version','2026-09-23T14:10:00Z','install-first-install');
+select pg_sleep(8); commit;
+SQL
+install_first_holder_pid=$!
+wait_for_activity install_first_holder Timeout 'install-first holder did not reach controlled pg_sleep barrier'
+psql_app install_first_waiter -Atq -c "set role service_role; select public.accept_every8d_public_oauth_callback_v1('oauth-app','oauth-client','oauth-provider','race-version','install-first-location',repeat('4',64),repeat('5',64),'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('3',64),clock_timestamp()+interval '10 minutes',convert_to('install-first-code','utf8'),'code-v1');" >"$tmp_dir/install-first-waiter.out" &
+install_first_waiter_pid=$!
+wait_for_activity install_first_waiter Lock 'install-first callback did not block on the shared Location lock'
+wait "$install_first_holder_pid"
+wait "$install_first_waiter_pid"
+assert_query "select count(*)=1 and bool_and(i.installation_generation=1 and b.status='ready'
+ and b.target_installation_generation=1 and b.claimed_installation_id=i.id)
+ from public.ghl_marketplace_installations i join public.ghl_marketplace_oauth_bootstraps b
+ on b.expected_location_id=i.location_id where i.location_id='install-first-location'" \
+  'install-first concurrent order admits callback directly ready for generation one'
+
+# Real committed crash/recovery fixtures use fresh psql processes for every step.
+psql_app recovery_wait_callback -Atq -c "set role service_role; select public.accept_every8d_public_oauth_callback_v1('oauth-app','oauth-client','oauth-provider','race-version','recovery-wait-location',repeat('6',64),repeat('7',64),'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('3',64),clock_timestamp()+interval '10 minutes',convert_to('recovery-wait-code','utf8'),'code-v1');" >/dev/null
+assert_query "select status='waiting_install' from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('6',64)" \
+  'committed callback survives session exit as waiting_install'
+psql_app recovery_wait_install -Atq -c "set role service_role; select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000214','recovery-wait-location','recovery-wait-company','oauth-provider','race-version','2026-09-23T14:20:00Z','recovery-wait-install');" >/dev/null
+assert_query "select status='ready' and claimed_installation_generation=1 from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('6',64)" \
+  'later INSTALL promotes committed waiting_install evidence to exact-generation ready'
+
+psql_app recovery_ready_install -Atq -c "set role service_role; select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000215','recovery-ready-location','recovery-ready-company','oauth-provider','race-version','2026-09-23T14:30:00Z','recovery-ready-install');" >/dev/null
+psql_app recovery_ready_callback -Atq -c "set role service_role; select public.accept_every8d_public_oauth_callback_v1('oauth-app','oauth-client','oauth-provider','race-version','recovery-ready-location',repeat('8',64),repeat('9',64),'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('3',64),clock_timestamp()+interval '10 minutes',convert_to('recovery-ready-code','utf8'),'code-v1');" >/dev/null
+recovery_ready_id=$(psql_query -Atqc "select id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('8',64)" | tr -d '\r')
+psql_app recovery_ready_list -Atq -c "set role service_role; select public.list_every8d_oauth_recoverable_v1('race-version',repeat('3',64),16);" >"$tmp_dir/recovery-ready-list.out"
+grep -q "$recovery_ready_id" "$tmp_dir/recovery-ready-list.out" || { echo 'FAIL: fresh recovery session did not list committed ready attempt' >&2; exit 1; }
+psql_app recovery_ready_claim -Atq -c "set role service_role; select public.claim_every8d_oauth_exchange_v1('$recovery_ready_id','race-version',repeat('3',64));" >/dev/null
+assert_query "select status='exchanging' from public.ghl_marketplace_oauth_bootstraps where id='$recovery_ready_id'" \
+  'fresh recovery session claims committed ready attempt exactly once'
+
+psql_app recovery_stale_install -Atq -c "set role service_role; select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000216','recovery-stale-location','recovery-stale-company','oauth-provider','race-version','2026-09-23T14:40:00Z','recovery-stale-install');" >/dev/null
+psql_query -q <<'SQL'
+alter table public.ghl_marketplace_oauth_bootstraps disable trigger protect_ghl_marketplace_oauth_bootstrap;
+insert into public.ghl_marketplace_oauth_bootstraps(
+ app_namespace,marketplace_version_id,expected_location_id,target_installation_generation,
+ state_hash,browser_binding_hash,redirect_uri,config_fingerprint,status,created_at,expires_at,
+ callback_received_at,authorization_code_ciphertext,authorization_code_key_version,
+ claimed_installation_id,claimed_installation_generation,exchange_started_at
+) select 'every8d_connect','race-version','recovery-stale-location',1,repeat('a',64),repeat('b',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('3',64),'exchanging',
+ clock_timestamp()-interval '5 minutes',clock_timestamp()+interval '5 minutes',
+ clock_timestamp()-interval '5 minutes',convert_to('stale-code','utf8'),'code-v1',id,1,
+ clock_timestamp()-interval '3 minutes'
+ from public.ghl_marketplace_installations where location_id='recovery-stale-location';
+alter table public.ghl_marketplace_oauth_bootstraps enable trigger protect_ghl_marketplace_oauth_bootstrap;
+SQL
+recovery_stale_id=$(psql_query -Atqc "select id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('a',64)" | tr -d '\r')
+psql_app recovery_stale_scan -Atq -c "set role service_role; select public.list_every8d_oauth_recoverable_v1('race-version',repeat('3',64),16);" >/dev/null
+assert_query "select status='failed' and failure_class='exchange_outcome_unknown'
+ and authorization_code_ciphertext is null and authorization_code_key_version is null
+ from public.ghl_marketplace_oauth_bootstraps where id='$recovery_stale_id'" \
+  'stale exchanging recovery burns generation and scrubs code envelope'
+psql_app recovery_stale_rescan -Atq -c "set role service_role; select public.list_every8d_oauth_recoverable_v1('race-version',repeat('3',64),16);" >"$tmp_dir/recovery-stale-list.out"
+! grep -q "$recovery_stale_id" "$tmp_dir/recovery-stale-list.out" || { echo 'FAIL: failed stale exchange remained recoverable' >&2; exit 1; }
+[[ "$(psql_app recovery_stale_claim -Atq -c "set role service_role; select public.claim_every8d_oauth_exchange_v1('$recovery_stale_id','race-version',repeat('3',64)) is null;" | tr -d '\r')" == t ]] || { echo 'FAIL: stale exchanged code was claimable again' >&2; exit 1; }
+
+# The claim RPC independently rechecks generation-burn evidence before ready -> exchanging.
+psql_app claim_burn_install -Atq -c "set role service_role; select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000217','claim-burn-location','claim-burn-company','oauth-provider','race-version','2026-09-23T14:50:00Z','claim-burn-install');" >/dev/null
+psql_app claim_burn_callback -Atq -c "set role service_role; select public.accept_every8d_public_oauth_callback_v1('oauth-app','oauth-client','oauth-provider','race-version','claim-burn-location',repeat('e',64),repeat('f',64),'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('3',64),clock_timestamp()+interval '10 minutes',convert_to('claim-burn-code','utf8'),'code-v1');" >/dev/null
+claim_burn_ready_id=$(psql_query -Atqc "select id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('e',64)" | tr -d '\r')
+psql_query -q <<'SQL'
+alter table public.ghl_marketplace_oauth_bootstraps disable trigger protect_ghl_marketplace_oauth_bootstrap;
+insert into public.ghl_marketplace_oauth_bootstraps(
+ app_namespace,marketplace_version_id,expected_location_id,target_installation_generation,
+ state_hash,browser_binding_hash,redirect_uri,config_fingerprint,status,created_at,expires_at,
+ callback_received_at,claimed_installation_id,claimed_installation_generation,
+ exchange_started_at,terminal_at,failure_class
+) select 'every8d_connect','race-version','claim-burn-location',1,repeat('f',64),repeat('0',64),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('3',64),'failed',
+ clock_timestamp()-interval '1 minute',clock_timestamp()+interval '9 minutes',
+ clock_timestamp()-interval '1 minute',id,1,clock_timestamp()-interval '30 seconds',
+ clock_timestamp(),'credential_persistence_failed'
+ from public.ghl_marketplace_installations where location_id='claim-burn-location';
+alter table public.ghl_marketplace_oauth_bootstraps enable trigger protect_ghl_marketplace_oauth_bootstrap;
+SQL
+[[ "$(psql_app claim_burn_attempt -Atq -c "set role service_role; select public.claim_every8d_oauth_exchange_v1('$claim_burn_ready_id','race-version',repeat('3',64)) is null;" | tr -d '\r')" == t ]] || { echo 'FAIL: exchange claim ignored generation-burn evidence' >&2; exit 1; }
+assert_query "select status='ready' and authorization_code_ciphertext is not null from public.ghl_marketplace_oauth_bootstraps where id='$claim_burn_ready_id'" \
+  'generation-burn claim rejection performs zero state movement'
 
 # Same authenticated-state callback replay: exactly one durable winner and immutable ciphertext.
 for suffix in a b; do

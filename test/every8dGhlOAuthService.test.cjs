@@ -174,7 +174,21 @@ function harness(options = {}) {
       state.consumed_at = new Date(NOW).toISOString();
       return state;
     },
-    async persistInstalledCredentials(input) { persisted = input; return installation(); }
+    async persistInstalledCredentials(input) {
+      persisted = input;
+      const validResult = installation({
+        access_token_ciphertext: "\\x01",
+        refresh_token_ciphertext: "\\x02",
+        encryption_key_version: input.encryptionKeyVersion,
+        token_expires_at: input.expiresAt,
+        granted_scopes: input.grantedScopes
+      });
+      if (Object.prototype.hasOwnProperty.call(options, "persistenceResult")) {
+        return typeof options.persistenceResult === "function"
+          ? options.persistenceResult(validResult, input) : options.persistenceResult;
+      }
+      return validResult;
+    }
   };
 
   const runtime = createEvery8dGhlOAuthRuntime({
@@ -392,6 +406,53 @@ test("installed shared-secret flow remains installation-bound and requires curre
   );
   assert.equal(wrongVersion.calls.exchange, 0);
 });
+
+for (const [name, persistenceResult] of [
+  ["null", null],
+  ["scalar", 7],
+  ["malformed object", {}],
+  ["wrong installation", (value) => ({ ...value, id: "10000000-0000-4000-8000-000000000099" })],
+  ["wrong app", (value) => ({ ...value, marketplace_app_id: "foreign-app" })],
+  ["wrong client", (value) => ({ ...value, oauth_client_id: "foreign-client" })],
+  ["wrong tenant", (value) => ({ ...value, tenant_id: "00000000-0000-4000-8000-000000000099" })],
+  ["wrong Location", (value) => ({ ...value, location_id: "foreign-location" })],
+  ["wrong company", (value) => ({ ...value, company_id: "foreign-company" })],
+  ["wrong Conversation Provider", (value) => ({ ...value, conversation_provider_id: "foreign-provider" })],
+  ["wrong channel", (value) => ({ ...value, channel: "line" })],
+  ["wrong provider", (value) => ({ ...value, provider: "foreign" })],
+  ["ineligible status", (value) => ({ ...value, status: "uninstalled" })],
+  ["wrong lifecycle type", (value) => ({ ...value, latest_lifecycle_event_type: "UNINSTALL" })],
+  ["wrong version", (value) => ({ ...value, latest_lifecycle_version_id: "foreign-version" })],
+  ["wrong generation", (value) => ({ ...value, installation_generation: 4 })],
+  ["missing access ciphertext", (value) => ({ ...value, access_token_ciphertext: null })],
+  ["missing refresh ciphertext", (value) => ({ ...value, refresh_token_ciphertext: null })],
+  ["wrong key version", (value) => ({ ...value, encryption_key_version: "foreign-key" })],
+  ["invalid expiry", (value) => ({ ...value, token_expires_at: "not-a-time" })],
+  ["mismatched expiry", (value) => ({ ...value, token_expires_at: "2026-09-23T14:00:00.000Z" })],
+  ["malformed scopes", (value) => ({ ...value, granted_scopes: [""] })],
+  ["nonnormalized scopes", (value) => ({ ...value, granted_scopes: [" locations.readonly "] })],
+  ["duplicate scopes", (value) => ({ ...value, granted_scopes: ["locations.readonly", "locations.readonly"] })],
+  ["different scopes", (value) => ({ ...value, granted_scopes: ["locations.write"] })]
+]) {
+  test(`installed shared-secret flow rejects ${name} persistence output`, async () => {
+    const h = harness({ persistenceResult });
+    const started = await h.runtime.initiate({
+      installationId: installation().id,
+      tenantId: installation().tenant_id,
+      locationId: installation().location_id
+    });
+    await assert.rejects(
+      () => h.runtime.completeCallback({
+        code: "installed-authorization-code",
+        state: new URL(started.authorizationUrl).searchParams.get("state"),
+        browserBinding: started.browserBinding
+      }),
+      (error) => error instanceof Every8dGhlOAuthError
+        && error.code === "credential_persistence_failed",
+      name
+    );
+  });
+}
 
 test("EVERY8D OAuth source remains isolated from LINE, SMS dispatch, and EVERY8D transport modules", () => {
   const source = fs.readFileSync(path.join(__dirname, "../src/services/every8dGhlOAuthService.ts"), "utf8");
