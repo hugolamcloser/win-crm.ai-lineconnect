@@ -6,6 +6,9 @@ const test = require("node:test");
 const { Every8dGhlOAuthError } = require("../dist/services/every8dGhlOAuthService");
 const { createEvery8dGhlOAuthRouter } = require("../dist/routes/every8dGhlOAuth");
 
+const launcherPath = "/oauth/every8d-connect/launch";
+const launcherOrigin = "https://win-crm.up.railway.app";
+
 async function startRouter(runtime, triggerReconcile = () => undefined, initiationGuard = (_req, _res, next) => next()) {
   const app = express();
   app.use(express.json());
@@ -39,6 +42,47 @@ function runtime(overrides = {}) {
   return result;
 }
 
+function launcherHeaders(overrides = {}) {
+  return {
+    origin: launcherOrigin,
+    "content-type": "application/x-www-form-urlencoded",
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "navigate",
+    "sec-fetch-dest": "document",
+    ...overrides
+  };
+}
+
+async function sendRawLauncher(baseUrl, { path = launcherPath, headers = {}, body } = {}) {
+  const target = new URL(baseUrl);
+  const requestHeaders = launcherHeaders();
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined) delete requestHeaders[name];
+    else requestHeaders[name] = value;
+  }
+  return await new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path,
+      method: "POST",
+      headers: requestHeaders
+    }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response));
+    });
+    request.once("error", reject);
+    if (body !== undefined) request.write(body);
+    request.end();
+  });
+}
+
+function assertRawLauncherRejected(response, label) {
+  assert.equal(response.statusCode, 400, label);
+  assert.equal(response.headers["set-cookie"], undefined, label);
+  assert.equal(response.headers.location, undefined, label);
+}
+
 async function sendChunkedBody(baseUrl, body) {
   const target = new URL("/oauth/every8d-connect/start", baseUrl);
   return await new Promise((resolve, reject) => {
@@ -57,6 +101,243 @@ async function sendChunkedBody(baseUrl, body) {
     request.end();
   });
 }
+
+test("disabled launcher GET is static, unavailable, and has no OAuth side effects", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({
+    isEnabled: () => false,
+    start: async () => { starts += 1; }
+  }));
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}${launcherPath}`, { redirect: "manual" });
+  const body = await response.text();
+  assert.equal(response.status, 503);
+  assert.match(response.headers.get("content-type"), /^text\/html/i);
+  assert.match(body, /EVERY8D connection is unavailable/);
+  assert.doesNotMatch(body, /<form\b/i);
+  assert.doesNotMatch(body, /<button\b/i);
+  assert.equal(starts, 0);
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.equal(response.headers.get("location"), null);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("pragma"), "no-cache");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.match(response.headers.get("content-security-policy"), /default-src 'none'/);
+  assert.match(response.headers.get("content-security-policy"), /frame-ancestors 'none'/);
+  assert.match(response.headers.get("content-security-policy"), /base-uri 'none'/);
+});
+
+test("enabled launcher GET exposes only one native POST form with launcher security headers", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({
+    start: async () => { starts += 1; }
+  }));
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}${launcherPath}`, { redirect: "manual" });
+  const body = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get("content-type"), /^text\/html/i);
+  assert.equal(starts, 0);
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.equal(response.headers.get("location"), null);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("pragma"), "no-cache");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+  assert.equal(response.headers.get("referrer-policy"), "same-origin");
+  const csp = response.headers.get("content-security-policy");
+  assert.match(csp, /default-src 'none'/);
+  assert.match(csp, /frame-ancestors 'none'/);
+  assert.match(csp, /base-uri 'none'/);
+  assert.match(csp, /form-action 'self'/);
+  assert.equal((body.match(/<form\b/gi) ?? []).length, 1);
+  assert.match(body, /<form method="post" action="\/oauth\/every8d-connect\/launch">/i);
+  assert.match(body, /<button type="submit">Connect EVERY8D to HighLevel<\/button>/i);
+  assert.doesNotMatch(body, /<input\b/i);
+  assert.doesNotMatch(body, /<button[^>]+(?:name|value)=/i);
+  assert.doesNotMatch(body, /<(?:script|style|link|img|iframe)\b/i);
+  for (const forbidden of ["tenant", "company", "appId", "version", "providerId", "installationUrl", "redirectUri", "state", "binding", "secret", "http://", "https://"]) {
+    assert.equal(body.toLowerCase().includes(forbidden.toLowerCase()), false, forbidden);
+  }
+});
+
+test("disabled launcher POST returns before every launcher validation and side effect", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({
+    isEnabled: () => false,
+    start: async () => { starts += 1; }
+  }));
+  t.after(() => server.close());
+
+  const response = await fetch(`${baseUrl}${launcherPath}?tenantId=untrusted`, {
+    method: "POST",
+    redirect: "manual",
+    headers: { "content-type": "text/plain", origin: "null" },
+    body: "not-empty"
+  });
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { ok: false, error: "oauth_disabled" });
+  assert.equal(starts, 0);
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.equal(response.headers.get("location"), null);
+});
+
+test("valid launcher POST starts OAuth once, sets only the narrow binding cookie, and redirects exactly", async (t) => {
+  let starts = 0;
+  const authorizationUrl = "https://app.gohighlevel.com/install?state=synthetic-state";
+  const { server, baseUrl } = await startRouter(runtime({
+    start: async () => {
+      starts += 1;
+      return {
+        authorizationUrl,
+        browserBinding: "synthetic-binding",
+        expiresAt: new Date(1_600_000).toISOString()
+      };
+    }
+  }));
+  t.after(() => server.close());
+
+  const response = await sendRawLauncher(baseUrl);
+  assert.equal(response.statusCode, 303);
+  assert.equal(starts, 1);
+  assert.equal(response.headers.location, authorizationUrl);
+  const cookie = response.headers["set-cookie"][0];
+  assert.match(cookie, /^wincrm_every8d_oauth_binding=synthetic-binding;/i);
+  assert.match(cookie, /Path=\/oauth\/every8d-connect/i);
+  assert.match(cookie, /Max-Age=600/i);
+  assert.match(cookie, /HttpOnly/i);
+  assert.match(cookie, /SameSite=Lax/i);
+  assert.match(cookie, /Secure/i);
+  assert.doesNotMatch(cookie, /Domain=/i);
+});
+
+test("launcher rejects every invalid Origin before runtime start", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  const cases = [
+    ["missing", undefined],
+    ["null", "null"],
+    ["wrong scheme", "http://win-crm.up.railway.app"],
+    ["wrong host", "https://example.com"],
+    ["wrong port", "https://win-crm.up.railway.app:443"],
+    ["trailing slash", "https://win-crm.up.railway.app/"],
+    ["suffix match", "https://win-crm.up.railway.app.attacker.example"],
+    ["subdomain", "https://sub.win-crm.up.railway.app"],
+    ["same-site different origin", "https://other.up.railway.app"],
+    ["multiple values", `${launcherOrigin}, ${launcherOrigin}`],
+    ["multiple header fields", [launcherOrigin, launcherOrigin]]
+  ];
+  for (const [label, origin] of cases) {
+    const response = await sendRawLauncher(baseUrl, { headers: { origin } });
+    assertRawLauncherRejected(response, label);
+    assert.equal(starts, 0, label);
+  }
+  assert.equal(starts, 0);
+});
+
+test("launcher rejects missing or different Fetch Metadata before runtime start", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  const cases = [
+    ["missing site", "sec-fetch-site", undefined],
+    ["cross-site", "sec-fetch-site", "cross-site"],
+    ["same-site", "sec-fetch-site", "same-site"],
+    ["missing mode", "sec-fetch-mode", undefined],
+    ["cors", "sec-fetch-mode", "cors"],
+    ["missing destination", "sec-fetch-dest", undefined],
+    ["empty destination", "sec-fetch-dest", "empty"],
+    ["iframe", "sec-fetch-dest", "iframe"]
+  ];
+  for (const [label, header, value] of cases) {
+    const response = await sendRawLauncher(baseUrl, { headers: { [header]: value } });
+    assertRawLauncherRejected(response, label);
+    assert.equal(starts, 0, label);
+  }
+  assert.equal(starts, 0);
+});
+
+test("launcher rejects every query, including a bare query delimiter, before runtime start", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  for (const query of ["?x=1", "?tenantId=untrusted", "?redirectUri=https%3A%2F%2Fexample.com"]) {
+    const response = await sendRawLauncher(baseUrl, { path: `${launcherPath}${query}` });
+    assertRawLauncherRejected(response, query);
+    assert.equal(starts, 0, query);
+  }
+  const bareQuery = await sendRawLauncher(baseUrl, { path: `${launcherPath}?`, headers: { "content-length": "0" } });
+  assertRawLauncherRejected(bareQuery, "bare query delimiter");
+  assert.equal(starts, 0);
+});
+
+test("launcher requires the exact parameter-free form Content-Type before runtime start", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  const cases = [
+    ["missing", undefined, undefined],
+    ["JSON", "application/json", undefined],
+    ["empty JSON object", "application/json", "{}"],
+    ["text", "text/plain", undefined],
+    ["multipart", "multipart/form-data; boundary=test", undefined],
+    ["octet stream", "application/octet-stream", undefined],
+    ["charset parameter", "application/x-www-form-urlencoded; charset=UTF-8", undefined],
+    ["unsupported", "text/html", undefined]
+  ];
+  for (const [label, contentType, body] of cases) {
+    const response = await sendRawLauncher(baseUrl, {
+      headers: { "content-type": contentType },
+      ...(body === undefined ? {} : { body })
+    });
+    assertRawLauncherRejected(response, label);
+    assert.equal(starts, 0, label);
+  }
+  assert.equal(starts, 0);
+});
+
+test("launcher rejects every body byte and noncanonical Content-Length before runtime start", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  for (const body of ["x=1", "x=", "=", " ", "x", "tenantId=untrusted", "redirectUri=https%3A%2F%2Fexample.com"]) {
+    const response = await sendRawLauncher(baseUrl, { body });
+    assertRawLauncherRejected(response, JSON.stringify(body));
+    assert.equal(starts, 0, JSON.stringify(body));
+  }
+  const noncanonicalLength = await sendRawLauncher(baseUrl, { headers: { "content-length": "00" } });
+  assertRawLauncherRejected(noncanonicalLength, "noncanonical Content-Length");
+  const chunked = await sendRawLauncher(baseUrl, {
+    headers: { "transfer-encoding": "chunked" },
+    body: "x=1"
+  });
+  assertRawLauncherRejected(chunked, "chunked non-empty body");
+  assert.equal(starts, 0);
+});
+
+test("duplicate launcher POSTs create independent starts and overwrite only the same binding cookie", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({
+    start: async () => {
+      starts += 1;
+      return {
+        authorizationUrl: `https://app.gohighlevel.com/install?state=state-${starts}`,
+        browserBinding: `binding-${starts}`,
+        expiresAt: new Date(1_600_000).toISOString()
+      };
+    }
+  }));
+  t.after(() => server.close());
+  const first = await sendRawLauncher(baseUrl);
+  const second = await sendRawLauncher(baseUrl);
+  assert.equal(starts, 2);
+  assert.match(first.headers["set-cookie"][0], /^wincrm_every8d_oauth_binding=binding-1;/);
+  assert.match(second.headers["set-cookie"][0], /^wincrm_every8d_oauth_binding=binding-2;/);
+  assert.notEqual(first.headers.location, second.headers.location);
+});
 
 test("public POST start accepts an empty body, returns 303, and sets the narrow secure cookie and security headers", async (t) => {
   let starts = 0;
