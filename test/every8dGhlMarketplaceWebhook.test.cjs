@@ -25,6 +25,8 @@ function config(overrides = {}) {
     redirectUri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
     installationUrl: observedInstallationUrl,
     installationUrlSha256: createHash("sha256").update(observedInstallationUrl).digest("hex"),
+    expectedLocationId: observedLocationId,
+    marketplaceVersionId: observedVersionId,
     tokenUrl: "https://services.leadconnectorhq.com/oauth/token",
     conversationProviderId: "every8d-provider-98",
     requiredScopes: ["locations.readonly"],
@@ -88,6 +90,7 @@ function exactInstallation(overrides = {}) {
     latest_lifecycle_event_at: null,
     latest_lifecycle_event_id: null,
     latest_lifecycle_event_type: null,
+    latest_lifecycle_version_id: null,
     access_token_ciphertext: null,
     refresh_token_ciphertext: null,
     encryption_key_version: null,
@@ -105,6 +108,7 @@ function createHarness(options = {}) {
   let uninstalls = 0;
   let provisionInput = null;
   let uninstallInput = null;
+  let rendezvousNotifications = 0;
   let installation = options.installation === undefined ? exactInstallation() : options.installation;
   const serviceConfig = config(options.config);
 
@@ -157,7 +161,9 @@ function createHarness(options = {}) {
       const storedAt = installation.latest_lifecycle_event_at === null
         ? null
         : Date.parse(installation.latest_lifecycle_event_at);
-      if (storedAt !== null && incomingAt < storedAt) return { ...installation };
+      if (storedAt !== null && incomingAt < storedAt) {
+        return { outcome: "stale_ignored", installation: { ...installation } };
+      }
       if (storedAt !== null && incomingAt === storedAt) {
         if (
           installation.latest_lifecycle_event_id !== input.eventId ||
@@ -165,7 +171,7 @@ function createHarness(options = {}) {
         ) {
           throw new Error("synthetic equal-time lifecycle ambiguity");
         }
-        return { ...installation };
+        return { outcome: "exact_replay", installation: { ...installation } };
       }
 
       const transition = input.eventType === "INSTALL"
@@ -179,10 +185,12 @@ function createHarness(options = {}) {
         installation_generation: installation.installation_generation + (transition ? 1 : 0),
         latest_lifecycle_event_at: input.eventAt,
         latest_lifecycle_event_id: input.eventId,
-        latest_lifecycle_event_type: input.eventType
+        latest_lifecycle_event_type: input.eventType,
+        latest_lifecycle_version_id: input.marketplaceVersionId
       };
-      return { ...installation };
-    }
+      return { outcome: "applied", installation: { ...installation } };
+    },
+    notifyRendezvous: () => { rendezvousNotifications += 1; }
   });
 
   return {
@@ -193,7 +201,8 @@ function createHarness(options = {}) {
     get provisionInput() { return provisionInput; },
     get uninstallInput() { return uninstallInput; },
     get installation() { return installation; },
-    get installationRows() { return installation ? 1 : 0; }
+    get installationRows() { return installation ? 1 : 0; },
+    get rendezvousNotifications() { return rendezvousNotifications; }
   };
 }
 
@@ -230,7 +239,8 @@ test("signed observed Location INSTALL provisions exact immutable company owners
   assert.deepEqual(result, {
     status: "pending",
     installationId: "10000000-0000-4000-8000-000000000098",
-    installationGeneration: 1
+    installationGeneration: 1,
+    outcome: "applied"
   });
   assert.equal(harness.tenantReads, 1);
   assert.equal(harness.provisions, 1);
@@ -243,6 +253,7 @@ test("signed observed Location INSTALL provisions exact immutable company owners
     locationId: observedLocationId,
     companyId: observedCompanyId,
     conversationProviderId: "every8d-provider-98",
+    marketplaceVersionId: observedVersionId,
     eventAt: "2026-09-22T14:20:53.728Z",
     eventId: "ab2bccb7-9c5c-4f49-b40d-9bbd665c024a"
   });
@@ -293,7 +304,8 @@ test("UNINSTALL without companyId or installType succeeds only against exact sto
   assert.deepEqual(result, {
     status: "uninstalled",
     installationId: "10000000-0000-4000-8000-000000000098",
-    installationGeneration: 8
+    installationGeneration: 8,
+    outcome: "applied"
   });
   assert.equal(harness.tenantReads, 0);
   assert.equal(harness.provisions, 0);
@@ -306,6 +318,7 @@ test("UNINSTALL without companyId or installType succeeds only against exact sto
     locationId: observedLocationId,
     companyId: null,
     conversationProviderId: "every8d-provider-98",
+    marketplaceVersionId: observedVersionId,
     eventAt: "2026-09-22T14:35:55.549Z",
     eventId: "31c72437-bcc2-4c9e-bf0d-55910b229dc0"
   });
@@ -338,7 +351,9 @@ test("repeated INSTALL with the same webhookId converges without duplicate rows 
   const first = await harness.service.handle(payload);
   const second = await harness.service.handle(payload);
 
-  assert.deepEqual(second, first);
+  assert.equal(first.outcome, "applied");
+  assert.equal(second.outcome, "exact_replay");
+  assert.equal(second.installationGeneration, first.installationGeneration);
   assert.equal(harness.provisions, 2);
   assert.equal(harness.installationRows, 1);
   assert.equal(harness.installation.installation_generation, 1);
@@ -350,7 +365,9 @@ test("repeated UNINSTALL with the same webhookId converges on one terminal gener
   const first = await harness.service.handle(payload);
   const second = await harness.service.handle(payload);
 
-  assert.deepEqual(second, first);
+  assert.equal(first.outcome, "applied");
+  assert.equal(second.outcome, "exact_replay");
+  assert.equal(second.installationGeneration, first.installationGeneration);
   assert.equal(harness.uninstalls, 2);
   assert.equal(harness.installationRows, 1);
   assert.equal(harness.installation.installation_generation, 8);

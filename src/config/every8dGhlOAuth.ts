@@ -15,6 +15,8 @@ export type Every8dGhlOAuthConfig = {
   redirectUri: string;
   installationUrl: string;
   installationUrlSha256: string;
+  marketplaceVersionId: string;
+  expectedLocationId: string;
   tokenUrl: string;
   conversationProviderId: string;
   requiredScopes: string[];
@@ -76,6 +78,42 @@ function isApprovedInstallationUrl(value: string, approvedSha256: string): boole
   return createHash("sha256").update(value, "utf8").digest("hex") === approvedSha256;
 }
 
+export function getEvery8dMarketplaceVersionId(installationUrl: string): string {
+  try {
+    return locationInstallationPathPattern.exec(new URL(installationUrl).pathname)?.[3] ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function getEvery8dExpectedLocationId(installationUrl: string): string {
+  try {
+    return locationInstallationPathPattern.exec(new URL(installationUrl).pathname)?.[1] ?? "";
+  } catch {
+    return "";
+  }
+}
+
+export function getEvery8dGhlOAuthConfigFingerprint(config: Every8dGhlOAuthConfig): string {
+  return createHash("sha256").update(JSON.stringify({
+    version: 2,
+    appNamespace: "every8d_connect",
+    marketplaceAppId: config.marketplaceAppId,
+    oauthClientId: config.oauthClientId,
+    marketplaceVersionId: config.marketplaceVersionId,
+    expectedLocationId: config.expectedLocationId,
+    conversationProviderId: config.conversationProviderId,
+    redirectUri: config.redirectUri,
+    installationUrlSha256: config.installationUrlSha256,
+    tokenUrl: config.tokenUrl,
+    requiredScopes: [...config.requiredScopes].sort(),
+    activeKeyVersion: config.activeKeyVersion,
+    installMode: "Location",
+    channel: "sms",
+    provider: "every8d"
+  }), "utf8").digest("hex");
+}
+
 export function readEvery8dGhlOAuthConfig(
   source: NodeJS.ProcessEnv = process.env
 ): Every8dGhlOAuthConfig {
@@ -91,14 +129,17 @@ export function readEvery8dGhlOAuthConfig(
     }
   }
 
+  const installationUrl = trimmed(source.EVERY8D_GHL_OAUTH_INSTALLATION_URL);
   return {
     enabled,
     marketplaceAppId: trimmed(source.EVERY8D_GHL_MARKETPLACE_APP_ID),
     oauthClientId: trimmed(source.EVERY8D_GHL_OAUTH_CLIENT_ID),
     oauthClientSecret: source.EVERY8D_GHL_OAUTH_CLIENT_SECRET ?? "",
     redirectUri: trimmed(source.EVERY8D_GHL_OAUTH_REDIRECT_URI),
-    installationUrl: trimmed(source.EVERY8D_GHL_OAUTH_INSTALLATION_URL),
+    installationUrl,
     installationUrlSha256: trimmed(source.EVERY8D_GHL_OAUTH_INSTALLATION_URL_SHA256),
+    marketplaceVersionId: getEvery8dMarketplaceVersionId(installationUrl),
+    expectedLocationId: getEvery8dExpectedLocationId(installationUrl),
     tokenUrl: trimmed(source.EVERY8D_GHL_OAUTH_TOKEN_URL) || every8dGhlOAuthTokenUrl,
     conversationProviderId: trimmed(source.EVERY8D_GHL_CONVERSATION_PROVIDER_ID),
     requiredScopes: parseScopes(source.EVERY8D_GHL_OAUTH_REQUIRED_SCOPES),
@@ -120,6 +161,9 @@ export function assertEvery8dGhlOAuthConfig(config: Every8dGhlOAuthConfig): void
     !exactIdentifierPattern.test(config.conversationProviderId) ||
     !isExactHttpsUrl(config.redirectUri) ||
     !isApprovedInstallationUrl(config.installationUrl, config.installationUrlSha256) ||
+    !exactIdentifierPattern.test(config.marketplaceVersionId) ||
+    !exactIdentifierPattern.test(config.expectedLocationId) ||
+    config.expectedLocationId !== getEvery8dExpectedLocationId(config.installationUrl) ||
     config.tokenUrl !== every8dGhlOAuthTokenUrl ||
     config.requiredScopes.length === 0 ||
     !exactIdentifierPattern.test(config.activeKeyVersion) ||

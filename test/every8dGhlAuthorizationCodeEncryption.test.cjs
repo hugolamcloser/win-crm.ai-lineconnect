@@ -1,0 +1,130 @@
+const assert = require("node:assert/strict");
+const test = require("node:test");
+
+const {
+  decryptEvery8dAuthorizationCode,
+  encryptEvery8dAuthorizationCode
+} = require("../dist/services/every8dGhlAuthorizationCodeEncryption");
+const { parseEvery8dGhlOAuthEncryptionKeys } = require("../dist/services/every8dGhlTokenEncryption");
+
+const keys = parseEvery8dGhlOAuthEncryptionKeys(JSON.stringify({
+  "code-v1": Buffer.alloc(32, 0x61).toString("base64"),
+  "code-v2": Buffer.alloc(32, 0x62).toString("base64")
+}));
+const context = {
+  appNamespace: "every8d_connect",
+  stateHash: "a".repeat(64),
+  marketplaceVersionId: "version-test-98",
+  redirectUri: "https://oauth.example.invalid/oauth/every8d-connect/callback",
+  configFingerprint: "b".repeat(64),
+  expectedLocationId: "location-test-98"
+};
+
+function encryptedFixture() {
+  return encryptEvery8dAuthorizationCode({
+    plaintext: "authorization-code-sensitive", activeKeyVersion: "code-v1", keys, context
+  });
+}
+
+function decodeEnvelope(ciphertext) {
+  return JSON.parse(Buffer.from(ciphertext, "base64url").toString("utf8"));
+}
+
+function encodeRawEnvelope(value) {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function rejectCiphertext(ciphertext, expectedKeyVersion = "code-v1") {
+  assert.throws(() => decryptEvery8dAuthorizationCode({
+    ciphertext, expectedKeyVersion, keys, context
+  }));
+}
+
+test("authorization code uses a distinct pending_authorization_code envelope and exact AAD", () => {
+  const encrypted = encryptEvery8dAuthorizationCode({
+    plaintext: "authorization-code-sensitive", activeKeyVersion: "code-v1", keys, context
+  });
+  assert.equal(encrypted.ciphertext.includes("authorization-code-sensitive"), false);
+  const envelope = JSON.parse(Buffer.from(encrypted.ciphertext, "base64url").toString("utf8"));
+  assert.equal(envelope.purpose, "pending_authorization_code");
+  assert.equal(envelope.version, 1);
+  assert.equal(decryptEvery8dAuthorizationCode({
+    ciphertext: encrypted.ciphertext, expectedKeyVersion: "code-v1", keys, context
+  }), "authorization-code-sensitive");
+});
+
+for (const [name, change] of [
+  ["app namespace", { appNamespace: "foreign" }],
+  ["state hash", { stateHash: "c".repeat(64) }],
+  ["Marketplace version", { marketplaceVersionId: "foreign-version" }],
+  ["redirect URI", { redirectUri: "https://oauth.example.invalid/other" }],
+  ["config fingerprint", { configFingerprint: "d".repeat(64) }],
+  ["expected Location", { expectedLocationId: "foreign-location" }]
+]) {
+  test(`authorization-code decryption fails with wrong ${name} AAD`, () => {
+    const encrypted = encryptEvery8dAuthorizationCode({
+      plaintext: "authorization-code-sensitive", activeKeyVersion: "code-v1", keys, context
+    });
+    assert.throws(() => decryptEvery8dAuthorizationCode({
+      ciphertext: encrypted.ciphertext, expectedKeyVersion: "code-v1", keys,
+      context: { ...context, ...change }
+    }), /decryption|encryption failed/);
+  });
+}
+
+test("authorization-code decryption rejects wrong key version and tampering", () => {
+  const encrypted = encryptEvery8dAuthorizationCode({
+    plaintext: "authorization-code-sensitive", activeKeyVersion: "code-v1", keys, context
+  });
+  assert.throws(() => decryptEvery8dAuthorizationCode({
+    ciphertext: encrypted.ciphertext, expectedKeyVersion: "code-v2", keys, context
+  }));
+  const envelope = JSON.parse(Buffer.from(encrypted.ciphertext, "base64url").toString("utf8"));
+  envelope.ciphertext = `${envelope.ciphertext.slice(0, -1)}${envelope.ciphertext.endsWith("A") ? "B" : "A"}`;
+  const tampered = Buffer.from(JSON.stringify(envelope), "utf8").toString("base64url");
+  assert.throws(() => decryptEvery8dAuthorizationCode({
+    ciphertext: tampered, expectedKeyVersion: "code-v1", keys, context
+  }));
+});
+
+const canonical = encryptedFixture();
+const canonicalEnvelope = decodeEnvelope(canonical.ciphertext);
+const canonicalJson = JSON.stringify(canonicalEnvelope);
+
+for (const [name, ciphertext] of [
+  ["unknown field", encodeRawEnvelope(JSON.stringify({ ...canonicalEnvelope, unknown: true }))],
+  ["missing field", encodeRawEnvelope(JSON.stringify({
+    version: canonicalEnvelope.version,
+    purpose: canonicalEnvelope.purpose,
+    keyVersion: canonicalEnvelope.keyVersion,
+    iv: canonicalEnvelope.iv,
+    ciphertext: canonicalEnvelope.ciphertext
+  }))],
+  ["duplicate field", encodeRawEnvelope(`${canonicalJson.slice(0, -1)},\"version\":1}`)],
+  ["whitespace variant", encodeRawEnvelope(` ${canonicalJson}`)],
+  ["changed property ordering", encodeRawEnvelope(JSON.stringify({
+    purpose: canonicalEnvelope.purpose,
+    version: canonicalEnvelope.version,
+    keyVersion: canonicalEnvelope.keyVersion,
+    iv: canonicalEnvelope.iv,
+    ciphertext: canonicalEnvelope.ciphertext,
+    tag: canonicalEnvelope.tag
+  }))],
+  ["noncanonical outer base64url", `${canonical.ciphertext}=`],
+  ["noncanonical inner base64url", encodeRawEnvelope(JSON.stringify({
+    ...canonicalEnvelope, iv: `${canonicalEnvelope.iv}=`
+  }))],
+  ["invalid UTF-8", Buffer.from([0xff, 0xfe, 0xfd]).toString("base64url")],
+  ["wrong purpose", encodeRawEnvelope(JSON.stringify({
+    ...canonicalEnvelope, purpose: "access_token"
+  }))],
+  ["wrong key version", encodeRawEnvelope(JSON.stringify({
+    ...canonicalEnvelope, keyVersion: "code-v2"
+  }))],
+  ["tampered tag", encodeRawEnvelope(JSON.stringify({
+    ...canonicalEnvelope,
+    tag: `${canonicalEnvelope.tag.slice(0, -1)}${canonicalEnvelope.tag.endsWith("A") ? "B" : "A"}`
+  }))]
+]) {
+  test(`authorization-code decryption rejects ${name}`, () => rejectCiphertext(ciphertext));
+}

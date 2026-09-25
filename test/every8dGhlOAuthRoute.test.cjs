@@ -1,185 +1,256 @@
 const assert = require("node:assert/strict");
 const express = require("express");
+const http = require("node:http");
 const test = require("node:test");
 
 const { Every8dGhlOAuthError } = require("../dist/services/every8dGhlOAuthService");
 const { createEvery8dGhlOAuthRouter } = require("../dist/routes/every8dGhlOAuth");
 
-async function startRouter(options = {}) {
+async function startRouter(runtime, triggerReconcile = () => undefined, initiationGuard = (_req, _res, next) => next()) {
   const app = express();
   app.use(express.json());
-  app.use(createEvery8dGhlOAuthRouter({
-    runtime: options.runtime,
-    initiationGuard: options.initiationGuard ?? ((_req, _res, next) => next()),
-    secureCookies: options.secureCookies ?? true
-  }));
+  app.use(createEvery8dGhlOAuthRouter({ runtime, triggerReconcile, now: () => 1_000_000, initiationGuard }));
   const server = app.listen(0, "127.0.0.1");
   await new Promise((resolve) => server.once("listening", resolve));
   return { server, baseUrl: `http://127.0.0.1:${server.address().port}` };
 }
 
-test("initiation uses exact server-authorized ownership and sets a narrow secure binding cookie", async (t) => {
+function runtime(overrides = {}) {
+  const result = {
+    isEnabled: () => true,
+    start: async () => ({
+      authorizationUrl: "https://app.gohighlevel.com/install?state=synthetic-state",
+      browserBinding: "synthetic-binding",
+      expiresAt: new Date(1_600_000).toISOString()
+    }),
+    initiate: async () => ({
+      authorizationUrl: "https://app.gohighlevel.com/install?state=installed-state",
+      browserBinding: "installed-binding",
+      expiresAt: new Date(1_600_000).toISOString()
+    }),
+    acceptCallback: async () => ({ status: "pending", ready: false }),
+    completeCallback: async () => ({ status: "pending", ready: false }),
+    getStatus: async () => "waiting_install",
+    ...overrides
+  };
+  if (!overrides.completeCallback && overrides.acceptCallback) {
+    result.completeCallback = overrides.acceptCallback;
+  }
+  return result;
+}
+
+async function sendChunkedBody(baseUrl, body) {
+  const target = new URL("/oauth/every8d-connect/start", baseUrl);
+  return await new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.pathname,
+      method: "POST",
+      headers: { "transfer-encoding": "chunked" }
+    }, (response) => {
+      response.resume();
+      response.once("end", () => resolve(response));
+    });
+    request.once("error", reject);
+    request.write(body);
+    request.end();
+  });
+}
+
+test("public POST start accepts an empty body, returns 303, and sets the narrow secure cookie and security headers", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => {
+    starts += 1;
+    return {
+      authorizationUrl: "https://app.gohighlevel.com/install?state=synthetic-state",
+      browserBinding: "synthetic-binding",
+      expiresAt: new Date(1_600_000).toISOString()
+    };
+  } }));
+  t.after(() => server.close());
+  const response = await fetch(`${baseUrl}/oauth/every8d-connect/start`, {
+    method: "POST", redirect: "manual"
+  });
+  assert.equal(response.status, 303);
+  assert.equal(starts, 1);
+  assert.match(response.headers.get("set-cookie"), /HttpOnly; SameSite=Lax; Secure/i);
+  assert.match(response.headers.get("set-cookie"), /Path=\/oauth\/every8d-connect/i);
+  assert.doesNotMatch(response.headers.get("set-cookie"), /Domain=/i);
+  assert.match(response.headers.get("set-cookie"), /Max-Age=600/i);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("pragma"), "no-cache");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(response.headers.get("x-frame-options"), "DENY");
+});
+
+test("public start rejects queries, JSON objects, and every non-empty or unsupported body", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => {
+    starts += 1;
+    return { authorizationUrl: "https://example.invalid", browserBinding: "binding", expiresAt: new Date(1_600_000).toISOString() };
+  } }));
+  t.after(() => server.close());
+  const cases = [
+    [`${baseUrl}/oauth/every8d-connect/start?x=1`, {}],
+    [`${baseUrl}/oauth/every8d-connect/start`, { headers: { "content-type": "application/json" }, body: "{}" }],
+    [`${baseUrl}/oauth/every8d-connect/start`, { headers: { "content-type": "application/json" }, body: "{\"x\":1}" }],
+    [`${baseUrl}/oauth/every8d-connect/start`, { headers: { "content-type": "text/plain" }, body: "x" }],
+    [`${baseUrl}/oauth/every8d-connect/start`, { headers: { "content-type": "application/x-www-form-urlencoded" }, body: "x=1" }],
+    [`${baseUrl}/oauth/every8d-connect/start`, { headers: { "content-type": "application/octet-stream" }, body: "x" }]
+  ];
+  for (const [url, init] of cases) {
+    const response = await fetch(url, { method: "POST", redirect: "manual", ...init });
+    assert.equal(response.status, 400);
+  }
+  assert.equal(starts, 0);
+});
+
+test("public start rejects malformed JSON before runtime start", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  const response = await fetch(`${baseUrl}/oauth/every8d-connect/start`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{"
+  });
+  assert.equal(response.status, 400);
+  assert.equal(starts, 0);
+});
+
+test("public start rejects multipart bodies without ownership fields", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  const form = new FormData();
+  form.set("harmless", "value");
+  const response = await fetch(`${baseUrl}/oauth/every8d-connect/start`, {
+    method: "POST",
+    body: form
+  });
+  assert.equal(response.status, 400);
+  assert.equal(starts, 0);
+});
+
+test("public start rejects a non-empty chunked body without Content-Length", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  const response = await sendChunkedBody(baseUrl, "x");
+  assert.equal(response.statusCode, 400);
+  assert.equal(starts, 0);
+});
+
+test("public start rejects every browser-supplied ownership or redirect field before runtime start", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({ start: async () => { starts += 1; } }));
+  t.after(() => server.close());
+  for (const key of ["tenantId", "locationId", "companyId", "installationId", "generation", "state", "browserBinding", "installationUrl", "redirectUri"]) {
+    const response = await fetch(`${baseUrl}/oauth/every8d-connect/start`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ [key]: "attacker-input" })
+    });
+    assert.equal(response.status, 400, key);
+  }
+  assert.equal(starts, 0);
+});
+
+test("disabled start returns before body validation with zero cookie and redirect activity", async (t) => {
+  let calls = 0;
+  const disabled = runtime({
+    isEnabled: () => false,
+    start: async () => { calls += 1; throw new Every8dGhlOAuthError("oauth_disabled", "disabled"); }
+  });
+  const { server, baseUrl } = await startRouter(disabled);
+  t.after(() => server.close());
+  const response = await fetch(`${baseUrl}/oauth/every8d-connect/start`, {
+    method: "POST", redirect: "manual", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tenantId: "untrusted" })
+  });
+  assert.equal(response.status, 503);
+  assert.equal(calls, 1);
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.equal(response.headers.get("location"), null);
+});
+
+test("callback requires state and binding, accepts no ownership fields, and redirects cleanly to pending", async (t) => {
+  let callbackInput = null;
+  let triggers = 0;
+  const { server, baseUrl } = await startRouter(runtime({
+    acceptCallback: async (input) => { callbackInput = input; return { status: "pending", ready: true }; }
+  }), () => { triggers += 1; });
+  t.after(() => server.close());
+  const response = await fetch(`${baseUrl}/oauth/every8d-connect/callback?code=secret-code&state=secret-state`, {
+    redirect: "manual", headers: { cookie: "wincrm_every8d_oauth_binding=secret-binding" }
+  });
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "/oauth/every8d-connect/pending");
+  assert.equal(response.headers.get("location").includes("secret"), false);
+  assert.deepEqual(callbackInput, { code: "secret-code", state: "secret-state", browserBinding: "secret-binding" });
+  assert.equal(triggers, 1);
+});
+
+test("callback replay or validation failure is generic and leaks no code, state, binding, or diagnostic", async (t) => {
+  const { server, baseUrl } = await startRouter(runtime({
+    acceptCallback: async () => { throw new Every8dGhlOAuthError("oauth_state_invalid", "sensitive diagnostic"); }
+  }));
+  t.after(() => server.close());
+  const response = await fetch(`${baseUrl}/oauth/every8d-connect/callback?code=secret-code&state=secret-state`, {
+    headers: { cookie: "wincrm_every8d_oauth_binding=secret-binding" }
+  });
+  const body = await response.text();
+  assert.equal(response.status, 400);
+  assert.deepEqual(JSON.parse(body), { ok: false, error: "oauth_state_invalid" });
+  for (const value of ["secret-code", "secret-state", "secret-binding", "sensitive diagnostic"]) {
+    assert.equal(body.includes(value), false);
+  }
+  assert.match(response.headers.get("set-cookie"), /Max-Age=0/i);
+});
+
+test("pending and status expose no OAuth or ownership identifiers", async (t) => {
+  const { server, baseUrl } = await startRouter(runtime({ getStatus: async () => "succeeded" }));
+  t.after(() => server.close());
+  const pending = await fetch(`${baseUrl}/oauth/every8d-connect/pending`);
+  const pendingBody = await pending.text();
+  assert.equal(pending.status, 200);
+  assert.equal(pendingBody.includes("code="), false);
+  const status = await fetch(`${baseUrl}/oauth/every8d-connect/status`, {
+    headers: { cookie: "wincrm_every8d_oauth_binding=secret-binding" }
+  });
+  assert.deepEqual(await status.json(), { ok: true, status: "connected" });
+  assert.match(status.headers.get("set-cookie"), /Max-Age=0/i);
+  assert.equal(status.headers.get("cache-control"), "no-store");
+});
+
+test("shared-secret installed initiation remains available with exact ownership input and legacy connected callback", async (t) => {
   let initiationInput = null;
-  const runtime = {
+  let callbackInput = null;
+  const r = runtime({
     initiate: async (input) => {
       initiationInput = input;
       return {
-        authorizationUrl: "https://marketplace.example.invalid/install/app?state=synthetic-state",
-        browserBinding: "synthetic-browser-binding",
-        expiresAt: new Date(Date.now() + 600_000).toISOString()
+        authorizationUrl: "https://app.gohighlevel.com/install?state=installed-state",
+        browserBinding: "installed-binding",
+        expiresAt: new Date(1_600_000).toISOString()
       };
     },
-    completeCallback: async () => ({ status: "connected" })
-  };
-  const { server, baseUrl } = await startRouter({ runtime });
-  t.after(() => server.close());
-
-  const response = await fetch(`${baseUrl}/oauth/every8d-connect/initiate`, {
-    method: "POST",
-    redirect: "manual",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      installationId: "10000000-0000-4000-8000-000000000098",
-      tenantId: "00000000-0000-4000-8000-000000000098",
-      locationId: "location-98"
-    })
-  });
-
-  assert.equal(response.status, 302);
-  assert.equal(response.headers.get("location"), "https://marketplace.example.invalid/install/app?state=synthetic-state");
-  assert.match(response.headers.get("set-cookie"), /HttpOnly/i);
-  assert.match(response.headers.get("set-cookie"), /Secure/i);
-  assert.match(response.headers.get("set-cookie"), /SameSite=Lax/i);
-  assert.match(response.headers.get("set-cookie"), /Path=\/oauth\/every8d-connect/i);
-  assert.match(response.headers.get("set-cookie"), /Max-Age=600/i);
-  assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.deepEqual(initiationInput, {
-    installationId: "10000000-0000-4000-8000-000000000098",
-    tenantId: "00000000-0000-4000-8000-000000000098",
-    locationId: "location-98"
-  });
-});
-
-test("callback passes only code, state, and HttpOnly binding and returns generic no-store success", async (t) => {
-  let callbackInput = null;
-  const runtime = {
-    initiate: async () => { throw new Error("not expected"); },
     completeCallback: async (input) => {
       callbackInput = input;
-      return { status: "connected" };
+      return { status: "connected", ready: false };
     }
-  };
-  const { server, baseUrl } = await startRouter({ runtime });
+  });
+  const { server, baseUrl } = await startRouter(r);
   t.after(() => server.close());
-
-  const response = await fetch(`${baseUrl}/oauth/every8d-connect/callback?code=synthetic-code&state=synthetic-state`, {
-    headers: { cookie: "wincrm_every8d_oauth_binding=synthetic-browser-binding" }
+  const initiated = await fetch(`${baseUrl}/oauth/every8d-connect/initiate`, {
+    method: "POST", redirect: "manual", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ installationId: "installation-98", tenantId: "tenant-98", locationId: "location-98" })
   });
-  const body = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.deepEqual(body, { ok: true, status: "connected" });
-  assert.deepEqual(callbackInput, {
-    code: "synthetic-code",
-    state: "synthetic-state",
-    browserBinding: "synthetic-browser-binding"
+  assert.equal(initiated.status, 302);
+  assert.deepEqual(initiationInput, { installationId: "installation-98", tenantId: "tenant-98", locationId: "location-98" });
+  const callback = await fetch(`${baseUrl}/oauth/every8d-connect/callback?code=code&state=state`, {
+    headers: { cookie: "wincrm_every8d_oauth_binding=binding" }
   });
-  assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.match(response.headers.get("set-cookie"), /Max-Age=0/i);
-  assert.equal(JSON.stringify(body).includes("synthetic"), false);
-});
-
-test("callback failure response never exposes OAuth inputs or provider diagnostics", async (t) => {
-  const runtime = {
-    initiate: async () => { throw new Error("not expected"); },
-    completeCallback: async () => {
-      throw new Every8dGhlOAuthError("token_exchange_failed", "safe failure");
-    }
-  };
-  const { server, baseUrl } = await startRouter({ runtime });
-  t.after(() => server.close());
-
-  const response = await fetch(`${baseUrl}/oauth/every8d-connect/callback?code=authorization-code-sensitive&state=state-sensitive`, {
-    headers: { cookie: "wincrm_every8d_oauth_binding=binding-sensitive" }
-  });
-  const bodyText = await response.text();
-
-  assert.equal(response.status, 502);
-  assert.deepEqual(JSON.parse(bodyText), { ok: false, error: "token_exchange_failed" });
-  for (const secret of ["authorization-code-sensitive", "state-sensitive", "binding-sensitive", "safe failure"]) {
-    assert.equal(bodyText.includes(secret), false);
-  }
-  assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.match(response.headers.get("set-cookie"), /Max-Age=0/i);
-});
-
-test("observed code-only Marketplace callback remains rejected without state or token exchange", async (t) => {
-  let callbackCalls = 0;
-  const runtime = {
-    initiate: async () => { throw new Error("not expected"); },
-    completeCallback: async () => {
-      callbackCalls += 1;
-      throw new Error("not expected");
-    }
-  };
-  const { server, baseUrl } = await startRouter({ runtime });
-  t.after(() => server.close());
-
-  const response = await fetch(
-    `${baseUrl}/oauth/every8d-connect/callback?code=authorization-code-sensitive`,
-    { headers: { cookie: "wincrm_every8d_oauth_binding=synthetic-browser-binding" } }
-  );
-  const bodyText = await response.text();
-
-  assert.equal(response.status, 400);
-  assert.deepEqual(JSON.parse(bodyText), { ok: false, error: "oauth_request_invalid" });
-  assert.equal(callbackCalls, 0);
-  assert.equal(bodyText.includes("authorization-code-sensitive"), false);
-  assert.equal(response.headers.get("cache-control"), "no-store");
-  assert.match(response.headers.get("set-cookie"), /Max-Age=0/i);
-});
-
-test("initiation guard rejects before OAuth runtime activity", async (t) => {
-  let runtimeCalls = 0;
-  const runtime = {
-    initiate: async () => { runtimeCalls += 1; },
-    completeCallback: async () => { runtimeCalls += 1; }
-  };
-  const { server, baseUrl } = await startRouter({
-    runtime,
-    initiationGuard: (_req, res) => res.status(401).json({ error: "unauthorized" })
-  });
-  t.after(() => server.close());
-
-  const response = await fetch(`${baseUrl}/oauth/every8d-connect/initiate`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ installationId: "x", tenantId: "y", locationId: "z" })
-  });
-  assert.equal(response.status, 401);
-  assert.equal(runtimeCalls, 0);
-});
-
-test("browser-supplied company ownership is rejected before OAuth runtime activity", async (t) => {
-  let runtimeCalls = 0;
-  const runtime = {
-    initiate: async () => { runtimeCalls += 1; },
-    completeCallback: async () => { runtimeCalls += 1; }
-  };
-  const { server, baseUrl } = await startRouter({ runtime });
-  t.after(() => server.close());
-
-  const response = await fetch(`${baseUrl}/oauth/every8d-connect/initiate`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      installationId: "10000000-0000-4000-8000-000000000098",
-      tenantId: "00000000-0000-4000-8000-000000000098",
-      locationId: "location-98",
-      companyId: "browser-company"
-    })
-  });
-
-  assert.equal(response.status, 400);
-  assert.equal(runtimeCalls, 0);
+  assert.equal(callback.status, 200);
+  assert.deepEqual(await callback.json(), { ok: true, status: "connected" });
+  assert.deepEqual(callbackInput, { code: "code", state: "state", browserBinding: "binding" });
 });
