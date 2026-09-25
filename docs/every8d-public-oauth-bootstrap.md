@@ -6,6 +6,28 @@ This post-D3 foundation adds a public first-install OAuth bootstrap without enab
 
 The existing shared-secret `POST /oauth/every8d-connect/initiate` route remains available for an already installed, exact signed installation. The new `POST /oauth/every8d-connect/start` route is the public first-install path and accepts only a genuinely empty POST with no query keys or body bytes.
 
+## Human browser launcher
+
+`GET /oauth/every8d-connect/launch` and `POST /oauth/every8d-connect/launch` are a narrow human-browser adapter around the unchanged public `/start` runtime operation. They let the operator begin from the same browser profile in which HighLevel is authenticated without weakening or expanding the `/start` contract.
+
+The launcher GET has zero OAuth side effects. It never calls the OAuth start operation, generates state or a browser binding, uses randomness, writes a bootstrap row, sets the binding cookie, redirects, triggers the reconciler, or calls an external service. When OAuth is disabled it returns a static HTTP 503 unavailable page with no form, button, JavaScript, or external asset. When enabled it returns one input-free native POST form. The enabled page alone uses `Referrer-Policy: same-origin`, which permits Chromium to supply the exact same-origin `Origin` value on the form navigation. Both pages remain non-cacheable, deny framing, and use a restrictive CSP; the enabled page additionally pins `form-action 'self'`.
+
+The launcher POST checks the default-off runtime gate before all request validation. An enabled request is accepted only when all of these conditions hold:
+
+- there is no query delimiter or query input;
+- `Origin` is exactly `https://win-crm.up.railway.app`, without deriving trust from `Host`, forwarded headers, or environment input;
+- Fetch Metadata is exactly `Sec-Fetch-Site: same-origin`, `Sec-Fetch-Mode: navigate`, and `Sec-Fetch-Dest: document`;
+- `Content-Type` is exactly `application/x-www-form-urlencoded`, with no parameter; and
+- the native form body contains exactly zero bytes. A present `Content-Length` must be the canonical value `0`, but the route also verifies the actual request stream and rejects non-empty chunked bodies.
+
+An accepted POST calls the existing start operation once, reuses the narrow `wincrm_every8d_oauth_binding` cookie (`Secure`, `HttpOnly`, `SameSite=Lax`, and `Path=/oauth/every8d-connect`, with no `Domain`), and returns an HTTP 200 continuation page. This committed 200 response ends the native form navigation before any cross-origin navigation: Chromium applies CSP `form-action` across a form-submission redirect chain, so the launcher does not redirect directly to HighLevel. The initial GET keeps `form-action 'self'`; the success page instead uses `form-action 'none'`, `Referrer-Policy: no-referrer`, and one ordinary same-tab hyperlink with `rel="noreferrer"`. There is no automatic redirect, JavaScript, or meta refresh.
+
+The hyperlink `href` comes only from `runtime.start().authorizationUrl`. It is HTML-attribute escaped for `&`, double and single quotes, `<`, and `>` without parsing or changing the authorization URL. No request input can influence the destination, and the route accepts no tenant, company, application, provider, installation, redirect, state, or binding input.
+
+There is intentionally no launcher nonce or durable launcher admission state. Each accepted click creates a fresh independent OAuth start, and no durable database resource exists before callback acceptance. A later launcher POST replaces the same narrow browser binding cookie. An older callback then fails browser-binding validation without clearing the current cookie, so the latest flow remains usable. A successful terminal `connected` callback clears its proven binding, and terminal `/status` cleanup also clears the binding. Otherwise, the cookie's finite `Max-Age`, tied to the OAuth expiry, provides cleanup.
+
+The operator workflow is therefore: authenticate to HighLevel in the intended browser profile, open the launcher in that same profile, submit its single form, and explicitly select **Continue to HighLevel** on the continuation page. The ten-minute state TTL starts when the form POST calls the runtime. The user must continue in the same browser/profile: copying the authorization link to another browser does not copy the host-only binding cookie, so callback binding validation fails there. The existing `SameSite=Lax` behavior still permits the binding cookie on HighLevel's top-level callback navigation. OAuth remains default-off. Before any rollout, the external HighLevel application/version, redirect, lifecycle, installation, ownership, and provider checks described below still require their separately approved verification; the launcher does not enable OAuth, install the Marketplace app, or activate the Conversation Provider.
+
 ## Stateless public start
 
 The public bootstrap is deliberately ownership-free. It never accepts or stores a browser-supplied tenant, location, company, installation ID, lifecycle generation, state, browser binding, installation URL, or redirect URI. HighLevel authentication plus explicit Location installation consent is the human authorization boundary. Authoritative company/location ownership enters only through the verified Ed25519-signed INSTALL lifecycle event and exact tenant resolution.
