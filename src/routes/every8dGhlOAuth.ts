@@ -306,7 +306,6 @@ export function createEvery8dGhlOAuthRouter(dependencies: OAuthRouteDependencies
       }
       res.redirect(303, `${cookiePath}/pending`);
     } catch (error) {
-      clearBindingCookie(res);
       if (error instanceof Every8dGhlOAuthError) {
         logger.warn({ oauthErrorCode: error.code }, "Rejected EVERY8D Connect OAuth callback");
         res.status(errorStatus(error)).json({ ok: false, error: error.code });

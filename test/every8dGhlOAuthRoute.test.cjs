@@ -411,6 +411,69 @@ test("duplicate launcher POSTs create independent starts and overwrite only the 
   assert.notEqual(oneLauncherHref(first.body), oneLauncherHref(second.body));
 });
 
+test("stale callback preserves the latest browser binding and the latest connected callback clears it", async (t) => {
+  let starts = 0;
+  let triggers = 0;
+  const callbackInputs = [];
+  const { server, baseUrl } = await startRouter(runtime({
+    start: async () => {
+      starts += 1;
+      return {
+        authorizationUrl: `https://app.gohighlevel.com/install?state=state-${starts}`,
+        browserBinding: `binding-${starts}`,
+        expiresAt: new Date(1_600_000).toISOString()
+      };
+    },
+    completeCallback: async (input) => {
+      callbackInputs.push(input);
+      if (input.state === "state-1" && input.browserBinding === "binding-2") {
+        throw new Every8dGhlOAuthError("oauth_state_invalid", "stale callback binding mismatch");
+      }
+      if (input.state === "state-2" && input.browserBinding === "binding-2") {
+        return { status: "connected", ready: false };
+      }
+      assert.fail(`unexpected callback pairing: ${JSON.stringify(input)}`);
+    }
+  }), () => { triggers += 1; });
+  t.after(() => server.close());
+
+  const first = await sendRawLauncher(baseUrl);
+  const second = await sendRawLauncher(baseUrl);
+  const firstCookie = first.headers["set-cookie"][0].split(";", 1)[0];
+  const secondCookie = second.headers["set-cookie"][0].split(";", 1)[0];
+  const firstState = new URL(oneLauncherHref(first.body)).searchParams.get("state");
+  const secondState = new URL(oneLauncherHref(second.body)).searchParams.get("state");
+  assert.equal(firstCookie, "wincrm_every8d_oauth_binding=binding-1");
+  assert.equal(secondCookie, "wincrm_every8d_oauth_binding=binding-2");
+  assert.equal(firstState, "state-1");
+  assert.equal(secondState, "state-2");
+
+  const stale = await fetch(`${baseUrl}/oauth/every8d-connect/callback?code=stale-secret-code&state=${firstState}`, {
+    headers: { cookie: secondCookie }
+  });
+  const staleBody = await stale.text();
+  assert.equal(stale.status, 400);
+  assert.deepEqual(JSON.parse(staleBody), { ok: false, error: "oauth_state_invalid" });
+  assert.equal(stale.headers.get("set-cookie"), null);
+  for (const value of ["stale-secret-code", "state-1", "binding-1", "binding-2", "stale callback binding mismatch"]) {
+    assert.equal(staleBody.includes(value), false);
+  }
+  assert.equal(triggers, 0);
+
+  const latest = await fetch(`${baseUrl}/oauth/every8d-connect/callback?code=latest-secret-code&state=${secondState}`, {
+    headers: { cookie: secondCookie }
+  });
+  assert.equal(latest.status, 200);
+  assert.deepEqual(await latest.json(), { ok: true, status: "connected" });
+  assert.match(latest.headers.get("set-cookie"), /^wincrm_every8d_oauth_binding=;/);
+  assert.match(latest.headers.get("set-cookie"), /Max-Age=0/i);
+  assert.equal(triggers, 0);
+  assert.deepEqual(callbackInputs, [
+    { code: "stale-secret-code", state: "state-1", browserBinding: "binding-2" },
+    { code: "latest-secret-code", state: "state-2", browserBinding: "binding-2" }
+  ]);
+});
+
 test("public POST start accepts an empty body, returns 303, and sets the narrow secure cookie and security headers", async (t) => {
   let starts = 0;
   const { server, baseUrl } = await startRouter(runtime({ start: async () => {
@@ -557,7 +620,14 @@ test("callback replay or validation failure is generic and leaks no code, state,
   for (const value of ["secret-code", "secret-state", "secret-binding", "sensitive diagnostic"]) {
     assert.equal(body.includes(value), false);
   }
-  assert.match(response.headers.get("set-cookie"), /Max-Age=0/i);
+  assert.equal(response.headers.get("set-cookie"), null);
+
+  const malformed = await fetch(`${baseUrl}/oauth/every8d-connect/callback?code=secret-code`, {
+    headers: { cookie: "wincrm_every8d_oauth_binding=secret-binding" }
+  });
+  assert.equal(malformed.status, 400);
+  assert.deepEqual(await malformed.json(), { ok: false, error: "oauth_request_invalid" });
+  assert.equal(malformed.headers.get("set-cookie"), null);
 });
 
 test("pending and status expose no OAuth or ownership identifiers", async (t) => {
