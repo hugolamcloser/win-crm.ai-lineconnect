@@ -68,13 +68,37 @@ async function sendRawLauncher(baseUrl, { path = launcherPath, headers = {}, bod
       method: "POST",
       headers: requestHeaders
     }, (response) => {
-      response.resume();
-      response.once("end", () => resolve(response));
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.once("end", () => {
+        response.body = Buffer.concat(chunks).toString("utf8");
+        resolve(response);
+      });
     });
     request.once("error", reject);
     if (body !== undefined) request.write(body);
     request.end();
   });
+}
+
+function decodeHtmlAttribute(value) {
+  return value
+    .replaceAll("&quot;", "\"")
+    .replaceAll("&#39;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+function oneLauncherHref(body) {
+  const anchors = [...body.matchAll(/<a\b([^>]*)>([^<]*)<\/a>/gi)];
+  assert.equal(anchors.length, 1);
+  assert.equal(anchors[0][2], "Continue to HighLevel");
+  const href = anchors[0][1].match(/\bhref="([^"]*)"/i);
+  assert.ok(href);
+  assert.match(anchors[0][1], /\brel="noreferrer"/i);
+  assert.doesNotMatch(anchors[0][1], /\btarget=/i);
+  return decodeHtmlAttribute(href[1]);
 }
 
 function assertRawLauncherRejected(response, label) {
@@ -184,9 +208,9 @@ test("disabled launcher POST returns before every launcher validation and side e
   assert.equal(response.headers.get("location"), null);
 });
 
-test("valid launcher POST starts OAuth once, sets only the narrow binding cookie, and redirects exactly", async (t) => {
+test("valid launcher POST starts OAuth once and returns one safe continuation link with the narrow binding cookie", async (t) => {
   let starts = 0;
-  const authorizationUrl = "https://app.gohighlevel.com/install?state=synthetic-state";
+  const authorizationUrl = "https://app.gohighlevel.com/install?state=a&next=\"quote\"'single'<tag>";
   const { server, baseUrl } = await startRouter(runtime({
     start: async () => {
       starts += 1;
@@ -200,17 +224,58 @@ test("valid launcher POST starts OAuth once, sets only the narrow binding cookie
   t.after(() => server.close());
 
   const response = await sendRawLauncher(baseUrl);
-  assert.equal(response.statusCode, 303);
+  assert.equal(response.statusCode, 200);
+  assert.match(response.headers["content-type"], /^text\/html/i);
   assert.equal(starts, 1);
-  assert.equal(response.headers.location, authorizationUrl);
+  assert.equal(response.headers.location, undefined);
+  assert.equal((response.body.match(/<a\b/gi) ?? []).length, 1);
+  assert.equal(oneLauncherHref(response.body), authorizationUrl);
+  assert.match(
+    response.body,
+    /<a href="https:\/\/app\.gohighlevel\.com\/install\?state=a&amp;next=&quot;quote&quot;&#39;single&#39;&lt;tag&gt;" rel="noreferrer">Continue to HighLevel<\/a>/
+  );
+  assert.equal(response.body.includes(authorizationUrl), false);
+  assert.doesNotMatch(response.body, /<form\b/i);
+  assert.doesNotMatch(response.body, /<(?:script|style|link|img|iframe)\b/i);
+  assert.doesNotMatch(response.body, /<meta[^>]+http-equiv=["']?refresh/i);
+  for (const requestValue of [launcherOrigin, "application/x-www-form-urlencoded", "same-origin", "navigate", "document"]) {
+    assert.equal(response.body.includes(requestValue), false, requestValue);
+  }
+  assert.equal(response.headers["cache-control"], "no-store");
+  assert.equal(response.headers.pragma, "no-cache");
+  assert.equal(response.headers["referrer-policy"], "no-referrer");
+  assert.equal(response.headers["x-frame-options"], "DENY");
+  assert.equal(
+    response.headers["content-security-policy"],
+    "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+  );
+  assert.doesNotMatch(response.headers["content-security-policy"], /form-action 'self'/);
   const cookie = response.headers["set-cookie"][0];
-  assert.match(cookie, /^wincrm_every8d_oauth_binding=synthetic-binding;/i);
-  assert.match(cookie, /Path=\/oauth\/every8d-connect/i);
-  assert.match(cookie, /Max-Age=600/i);
-  assert.match(cookie, /HttpOnly/i);
-  assert.match(cookie, /SameSite=Lax/i);
-  assert.match(cookie, /Secure/i);
-  assert.doesNotMatch(cookie, /Domain=/i);
+  assert.equal(
+    cookie,
+    "wincrm_every8d_oauth_binding=synthetic-binding; Path=/oauth/every8d-connect; Max-Age=600; HttpOnly; SameSite=Lax; Secure"
+  );
+});
+
+test("launcher accepts an empty chunked body as exactly zero bytes", async (t) => {
+  let starts = 0;
+  const { server, baseUrl } = await startRouter(runtime({
+    start: async () => {
+      starts += 1;
+      return {
+        authorizationUrl: "https://app.gohighlevel.com/install?state=empty-chunked",
+        browserBinding: "empty-chunked-binding",
+        expiresAt: new Date(1_600_000).toISOString()
+      };
+    }
+  }));
+  t.after(() => server.close());
+
+  const response = await sendRawLauncher(baseUrl, { headers: { "transfer-encoding": "chunked" } });
+  assert.equal(response.statusCode, 200);
+  assert.equal(starts, 1);
+  assert.equal(response.headers.location, undefined);
+  assert.equal(oneLauncherHref(response.body), "https://app.gohighlevel.com/install?state=empty-chunked");
 });
 
 test("launcher rejects every invalid Origin before runtime start", async (t) => {
@@ -334,9 +399,16 @@ test("duplicate launcher POSTs create independent starts and overwrite only the 
   const first = await sendRawLauncher(baseUrl);
   const second = await sendRawLauncher(baseUrl);
   assert.equal(starts, 2);
+  assert.equal(first.statusCode, 200);
+  assert.equal(second.statusCode, 200);
   assert.match(first.headers["set-cookie"][0], /^wincrm_every8d_oauth_binding=binding-1;/);
   assert.match(second.headers["set-cookie"][0], /^wincrm_every8d_oauth_binding=binding-2;/);
-  assert.notEqual(first.headers.location, second.headers.location);
+  assert.notEqual(first.headers["set-cookie"][0], second.headers["set-cookie"][0]);
+  assert.equal(first.headers.location, undefined);
+  assert.equal(second.headers.location, undefined);
+  assert.equal(oneLauncherHref(first.body), "https://app.gohighlevel.com/install?state=state-1");
+  assert.equal(oneLauncherHref(second.body), "https://app.gohighlevel.com/install?state=state-2");
+  assert.notEqual(oneLauncherHref(first.body), oneLauncherHref(second.body));
 });
 
 test("public POST start accepts an empty body, returns 303, and sets the narrow secure cookie and security headers", async (t) => {

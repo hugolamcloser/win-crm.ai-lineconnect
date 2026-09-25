@@ -12,6 +12,7 @@ const cookiePath = "/oauth/every8d-connect";
 const launcherOrigin = "https://win-crm.up.railway.app";
 const launcherContentType = "application/x-www-form-urlencoded";
 const launcherCsp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+const launcherSuccessCsp = "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 const launcherEnabledHtml =
   "<!doctype html><html><head><meta charset=\"utf-8\"><title>Connect EVERY8D to HighLevel</title></head>" +
   "<body><main><form method=\"post\" action=\"/oauth/every8d-connect/launch\">" +
@@ -19,6 +20,23 @@ const launcherEnabledHtml =
 const launcherDisabledHtml =
   "<!doctype html><html><head><meta charset=\"utf-8\"><title>EVERY8D connection unavailable</title></head>" +
   "<body><main><h1>EVERY8D connection is unavailable</h1></main></body></html>";
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
+function launcherSuccessHtml(authorizationUrl: string): string {
+  return "<!doctype html><html><head><meta charset=\"utf-8\"><title>Ready to connect EVERY8D</title></head>" +
+    "<body><main><h1>Ready to connect EVERY8D</h1>" +
+    "<p>Continue now to HighLevel to finish connecting.</p><p>Continue in this browser.</p>" +
+    `<a href="${escapeHtmlAttribute(authorizationUrl)}" rel="noreferrer">Continue to HighLevel</a>` +
+    "</main></body></html>";
+}
 const exactIdentifier = z.string().trim().min(1).max(256);
 const initiationSchema = z.object({
   installationId: exactIdentifier,
@@ -225,7 +243,8 @@ export function createEvery8dGhlOAuthRouter(dependencies: OAuthRouteDependencies
     try {
       const start = await dependencies.runtime.start();
       setBindingCookie(res, start.browserBinding, start.expiresAt, dependencies.now());
-      res.redirect(303, start.authorizationUrl);
+      res.setHeader("Content-Security-Policy", launcherSuccessCsp);
+      res.status(200).type("html").send(launcherSuccessHtml(start.authorizationUrl));
     } catch (error) {
       if (error instanceof Every8dGhlOAuthError) {
         logger.warn({ oauthErrorCode: error.code }, "Rejected EVERY8D Connect OAuth launcher");
