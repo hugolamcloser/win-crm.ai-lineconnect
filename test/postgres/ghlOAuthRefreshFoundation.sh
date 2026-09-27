@@ -324,11 +324,11 @@ assert_query "select status='uninstalled' and installation_generation=2 and cred
 psql_query -q <<'SQL' >/dev/null
 set role service_role;
 select public.accept_every8d_public_oauth_callback_v1(
- 'oauth-app','oauth-client','oauth-provider','race-version','refresh-auth-finalize',repeat('1',64),repeat('2',64),
+ 'oauth-app','oauth-client','oauth-provider','race-version','refresh-auth-finalize',repeat('ab',32),repeat('cd',32),
  'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('3',64),clock_timestamp()+interval '10 minutes',
  convert_to('synthetic-auth-code','utf8'),'synthetic-code-v1');
 SQL
-auth_bootstrap=$(psql_query -Atqc "select id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('1',64)" | tr -d '\r')
+auth_bootstrap=$(psql_query -Atqc "select id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('ab',32)" | tr -d '\r')
 psql_query -q -c "set role service_role; select public.claim_every8d_oauth_exchange_v1(
  '$auth_bootstrap','race-version',repeat('3',64));" >/dev/null
 assert_query "select (set_config('role','service_role',true) is not null)
