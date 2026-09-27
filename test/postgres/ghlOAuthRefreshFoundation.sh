@@ -125,7 +125,9 @@ assert_query "select to_regprocedure('public.claim_every8d_ghl_oauth_refresh_v1(
  and (select p.proname='protect_ghl_marketplace_installation_v4'
    from pg_trigger t join pg_proc p on p.oid=t.tgfoid
    where t.tgrelid='public.ghl_marketplace_installations'::regclass
-     and t.tgname='protect_ghl_marketplace_installation')" \
+     and t.tgname='protect_ghl_marketplace_installation')
+ and position('credential_revision' in pg_get_functiondef(
+   'public.finalize_every8d_oauth_exchange_v1(uuid,text,text,bytea,bytea,text,timestamptz,text[])'::regprocedure))=0" \
   'clean rollback restores pre-C1a function behavior and preserves ciphertext'
 psql_query < "$migration" >/dev/null
 
