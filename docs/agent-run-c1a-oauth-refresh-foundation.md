@@ -36,7 +36,8 @@ Railway workers from replaying one rotating refresh token.
 | `origin/main` is `4981878fd448d70e1a6d2d239ab6a2f8a238a69d` | Mandatory drift gate | Implementation branch created directly from the authoritative remote commit. |
 | Local `main` was stale and worktree/index were clean | Git inspection | Stale local branch was not used. |
 | Existing credential constraint permits complete token fields with empty scopes | Schema inspection | C1a preflight explicitly rejects this partial authorization tuple. |
-| Existing service role has only legacy credential-column DML | Grant inspection | New refresh columns add no direct DML; refresh transitions are RPC-only. |
+| Existing service role had a table-level installation UPDATE grant | Grant inspection | Additive refresh columns would inherit direct DML, so C1a narrows UPDATE to the five deployed credential columns and restores the historical grant only on safe rollback. |
+| The refresh test reused a globally unique OAuth state from the preceding suite | PostgreSQL 17 CI evidence plus fixture search | The target callback was correctly rejected; a distinct synthetic state/binding pair isolates the C1a authorization-finalization proof. |
 
 ## Commands executed and results
 
@@ -48,15 +49,15 @@ Railway workers from replaying one rotating refresh token.
 | `npm run typecheck` | Mandatory static validation | Passed | No TypeScript errors. |
 | `npm test` | Mandatory Node validation | Passed | 605/605 tests passed. |
 | `npm run build` | Mandatory build validation | Passed | TypeScript build completed. |
-| Draft PR CI run `36311203401` | First PostgreSQL 17 execution | Failed in test transport | Host migration path was incorrectly passed to container-local `psql -f`; corrected to stdin streaming. |
-| Draft PR CI run `36311355457` | Second PostgreSQL 17 execution | Failed in stale-lease fixture | Protection trigger correctly rejected owner fixture timestamp backdating; fixture now disables/re-enables only that trigger around synthetic clock setup. |
-| Draft PR CI run `36311489324` | Final permitted PostgreSQL 17 execution | Failed after most C1a proofs | Authorization-code finalize returned success, but the following usable-revision-one assertion failed. The disposable database was destroyed before the resulting row could be inspected. |
+| Draft PR CI run `36321629096` | Verify stale lease and grant correction | Failed at authorization compatibility | All proofs through stale lease and both UNINSTALL orders passed; isolated the remaining authorization fixture issue. |
+| Draft PR CI run `36321910760` | Verify explicit authorization metadata finalization | Failed at the same target-row assertion | Confirmed the finalizer was not the cause; fixture inspection found collision with an earlier globally unique OAuth state. |
+| Draft PR CI run `36322112626` | Final PostgreSQL 17 and Node validation | Passed | All PostgreSQL concurrency/invariant/rollback suites and Node validation passed. |
 
 ## Approaches attempted
 
 | Approach | Outcome | New evidence |
 | --- | --- | --- |
-| Extend existing lifecycle/finalize writes through trigger v5 | Implemented | Preserves both deployed function signatures and atomic transactions. |
+| Extend existing lifecycle writes through trigger v5 and explicitly replace authorization finalization | Implemented | Preserves deployed signatures/checks, initializes metadata deterministically, and lets reauthorization invalidate an older refresh lease atomically. |
 | Fixed five-minute due window and lease | Implemented | No caller-controlled refresh horizon. |
 
 ## Rejected approaches and reasons
@@ -75,27 +76,47 @@ See the final task report; validation evidence is updated after all checks run.
 
 | Check | Result | Notes |
 | --- | --- | --- |
-| `npm run typecheck` | Passed | |
-| `npm test` | Passed | 605/605. |
-| `npm run build` | Passed | |
-| PostgreSQL 17 suite | Failed | Final failure: first authorization finalization metadata assertion; prior backfill, rollback/reapply, concurrency, CAS, failure-burn, stale-lease, and UNINSTALL proofs reached/passed. |
+| `npm run typecheck` | Passed | Local and CI. |
+| `npm test` | Passed | 605/605 locally and in CI. |
+| `npm run build` | Passed | Local and CI. |
+| PostgreSQL 17 suite | Passed | Full migration chain plus backfill, rollback/reapply, two-session claim, CAS, terminal failure, stale lease, authorization compatibility, UNINSTALL races, RLS/grants, and rollback guard. |
 
 ## Budget and stop-rule status
 
 - Active coding tasks: 1
-- Implementation correction loops used: 2
-- Reviewer correction loops used: 0
-- Repeated errors or failed approaches: three distinct PostgreSQL harness/assertion failures
-- Stop rule triggered: yes; two correction loops exhausted
+- Implementation correction loops used in the authorized continuation: 2
+- Reviewer correction loops used: 1
+- Repeated errors or failed approaches: authorization target-row assertion repeated until the globally unique state collision was identified from materially new CI evidence
+- Stop rule triggered: no; the final correction was evidence-driven and the full suite passed
 
 ## Unresolved decisions
 
-The exact post-finalization credential metadata row must be captured and the
-failed authorization-finalization compatibility assertion diagnosed in a newly
-approved follow-up. C1b runtime, rollout, provider activation, and production
+None for C1a review. C1b runtime, rollout, provider activation, and production
 migration remain separately gated work.
 
 ## Recommended next action
 
-Keep Draft PR #105 unmerged. Review the final PostgreSQL failure and authorize a
-follow-up correction only if desired; do not apply the migration or begin C1b.
+Review Draft PR #105. Keep it unmerged; do not apply the migration or begin C1b.
+
+## Security self-review
+
+- Rotating-token replay/two workers: one row lock, one lease, one revision; the
+  second claim receives no work.
+- Expired or ambiguous leases: terminal `reauth_required`, sanitized
+  `refresh_outcome_unknown`, credential scrub, no replay.
+- `invalid_grant`: terminal credential scrub; reauthorization is required.
+- Late finalize/stale generation: exact generation, revision, and lease CAS;
+  UNINSTALL or reauthorization invalidates the prior claim.
+- UNINSTALL/reinstallation: both race orders proved; accepted UNINSTALL leaves
+  no credentials or lease, and a new generation inherits no authorization.
+- Ownership/version/tenant: exact app, client, tenant, Location, company,
+  provider, signed version, lifecycle, and generation are revalidated under the
+  row lock.
+- Direct DML/RLS: browser roles have no access; `service_role` cannot update
+  refresh columns directly and uses only the three narrow refresh RPCs.
+- Secret handling: SQL never decrypts or returns plaintext; tests use synthetic
+  ciphertext and do not print credential values.
+- Rollback: refuses revisions above baseline, lease/refreshing evidence,
+  reauthorization-required state, success timestamps, and failure evidence.
+- Isolation: no LINE, provider activation, EVERY8D API, SMS, Railway, flag, or
+  production database path changed.

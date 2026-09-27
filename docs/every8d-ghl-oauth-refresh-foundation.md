@@ -36,12 +36,18 @@ Existing credential-free rows backfill to `none`, revision `0`. Existing rows
 with non-empty encrypted access and refresh tokens, a valid key version, finite
 expiry, and non-empty non-blank scopes backfill to `usable`, revision `1`,
 without modifying ciphertext. Any partial tuple makes the migration fail before
-schema mutation.
+schema mutation. A pre-C1a row that retained credentials despite accepted
+`UNINSTALL` evidence also fails preflight instead of being classified usable.
 
-The unchanged authorization-code finalization and legacy credential-persistence
-signatures remain compatible: their successful complete credential update is
-atomically classified as `usable` and advances the revision. This also supports
-future reauthorization from `reauth_required` without replaying a burned token.
+The authorization-code finalization signature and all of its existing
+eligibility checks remain unchanged. Its SQL definition is replaced only to
+advance the credential revision, classify the new pair as `usable`, and clear
+any older refresh lease atomically with credential persistence. The guarded
+rollback restores the exact pre-C1a definition. The legacy direct
+credential-persistence signature remains compatible through the installation
+protection trigger. Both paths support future reauthorization from
+`reauth_required` without replaying a burned token; reauthorization during an
+older refresh claim advances the revision and invalidates that lease.
 
 ## Claim and due rule
 
@@ -111,8 +117,11 @@ cannot finalize or be claimed by it.
 
 RLS stays enabled. `anon` and `authenticated` receive neither table nor RPC
 access. `service_role` receives EXECUTE only on the three narrow refresh RPCs;
-no direct update grant is added for refresh columns. Functions are
-`SECURITY DEFINER` with a fixed `pg_catalog, public` search path.
+no direct update grant exists for refresh columns. Because the historical
+table-level installation UPDATE grant would automatically cover additive
+columns, C1a narrows it to the five existing authorization-code credential
+columns. Functions are `SECURITY DEFINER` with a fixed `pg_catalog, public`
+search path.
 
 The guarded rollback restores the pre-C1a v4 installation trigger and removes
 only C1a objects. It refuses if any revision advanced beyond the migration
@@ -120,6 +129,8 @@ baseline, any lease evidence exists (active or expired), state is `refreshing`
 or `reauth_required`, a successful refresh time exists, or refresh failure
 evidence exists. It therefore cannot silently discard real refresh-runtime
 history.
+On a safe rollback, the historical pre-C1a table-level UPDATE grant is restored
+only after the evidence guard passes.
 
 Migration: `supabase/migrations/202609270001_every8d_ghl_oauth_refresh_foundation.sql`
 
