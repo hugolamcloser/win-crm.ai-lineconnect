@@ -34,6 +34,31 @@ assert_query "select to_regprocedure('public.finalize_every8d_oauth_exchange_v1(
    and table_name='ghl_marketplace_installations' and column_name='credential_state')" \
   'requires public OAuth bootstrap and a pre-C1a schema'
 
+base_installation_acl=$(psql_query -Atqc "select coalesce(string_agg(
+ scope||':'||object_name||':'||privilege_type||':'||is_grantable, ','
+ order by scope,object_name,privilege_type,is_grantable),'')
+ from (
+   select 'table' scope,table_name object_name,privilege_type,is_grantable
+   from information_schema.role_table_grants
+   where grantee='service_role' and table_schema='public'
+     and table_name='ghl_marketplace_installations'
+   union all
+   select 'column',column_name,privilege_type,is_grantable
+   from information_schema.role_column_grants
+   where grantee='service_role' and table_schema='public'
+     and table_name='ghl_marketplace_installations'
+ ) acl" | tr -d '\r')
+psql_query -Atqc "select pg_get_functiondef(
+ 'public.finalize_every8d_oauth_exchange_v1(uuid,text,text,bytea,bytea,text,timestamptz,text[])'::regprocedure)" \
+  | tr -d '\r' >"$tmp_dir/base-finalizer.sql"
+psql_query -Atqc "select pg_get_functiondef(
+ 'public.protect_ghl_marketplace_installation_v4()'::regprocedure)" \
+  | tr -d '\r' >"$tmp_dir/base-trigger-function.sql"
+psql_query -Atqc "select pg_get_triggerdef(oid,false) from pg_trigger
+ where tgrelid='public.ghl_marketplace_installations'::regclass
+   and tgname='protect_ghl_marketplace_installation'" \
+  | tr -d '\r' >"$tmp_dir/base-trigger.sql"
+
 # Synthetic pre-C1a fixtures prove deterministic complete/empty backfill and
 # fail-closed partial-tuple preflight. No real ciphertext is used or printed.
 psql_query -q <<'SQL' >/dev/null
@@ -129,6 +154,57 @@ assert_query "select to_regprocedure('public.claim_every8d_ghl_oauth_refresh_v1(
  and position('credential_revision' in pg_get_functiondef(
    'public.finalize_every8d_oauth_exchange_v1(uuid,text,text,bytea,bytea,text,timestamptz,text[])'::regprocedure))=0" \
   'clean rollback restores pre-C1a function behavior and preserves ciphertext'
+assert_query "select not has_table_privilege(
+ 'service_role','public.ghl_marketplace_installations','UPDATE')
+ and has_column_privilege('service_role','public.ghl_marketplace_installations','access_token_ciphertext','UPDATE')
+ and has_column_privilege('service_role','public.ghl_marketplace_installations','refresh_token_ciphertext','UPDATE')
+ and has_column_privilege('service_role','public.ghl_marketplace_installations','encryption_key_version','UPDATE')
+ and has_column_privilege('service_role','public.ghl_marketplace_installations','token_expires_at','UPDATE')
+ and has_column_privilege('service_role','public.ghl_marketplace_installations','granted_scopes','UPDATE')
+ and not has_column_privilege('service_role','public.ghl_marketplace_installations','status','UPDATE')
+ and not has_column_privilege('service_role','public.ghl_marketplace_installations','company_id','UPDATE')
+ and not has_column_privilege('service_role','public.ghl_marketplace_installations','installation_generation','UPDATE')
+ and not has_column_privilege('service_role','public.ghl_marketplace_installations','latest_lifecycle_event_type','UPDATE')
+ and not has_column_privilege('service_role','public.ghl_marketplace_installations','latest_lifecycle_event_id','UPDATE')
+ and not has_column_privilege('service_role','public.ghl_marketplace_installations','latest_lifecycle_event_at','UPDATE')
+ and not has_column_privilege('service_role','public.ghl_marketplace_installations','latest_lifecycle_version_id','UPDATE')" \
+  'clean rollback restores only the five base credential UPDATE grants'
+rollback_installation_acl=$(psql_query -Atqc "select coalesce(string_agg(
+ scope||':'||object_name||':'||privilege_type||':'||is_grantable, ','
+ order by scope,object_name,privilege_type,is_grantable),'')
+ from (
+   select 'table' scope,table_name object_name,privilege_type,is_grantable
+   from information_schema.role_table_grants
+   where grantee='service_role' and table_schema='public'
+     and table_name='ghl_marketplace_installations'
+   union all
+   select 'column',column_name,privilege_type,is_grantable
+   from information_schema.role_column_grants
+   where grantee='service_role' and table_schema='public'
+     and table_name='ghl_marketplace_installations'
+ ) acl" | tr -d '\r')
+[[ "$rollback_installation_acl" == "$base_installation_acl" ]] || {
+  echo 'FAIL: rollback installation ACL differs from pre-C1a baseline' >&2; exit 1;
+}
+psql_query -Atqc "select pg_get_functiondef(
+ 'public.finalize_every8d_oauth_exchange_v1(uuid,text,text,bytea,bytea,text,timestamptz,text[])'::regprocedure)" \
+  | tr -d '\r' >"$tmp_dir/rollback-finalizer.sql"
+psql_query -Atqc "select pg_get_functiondef(
+ 'public.protect_ghl_marketplace_installation_v4()'::regprocedure)" \
+  | tr -d '\r' >"$tmp_dir/rollback-trigger-function.sql"
+psql_query -Atqc "select pg_get_triggerdef(oid,false) from pg_trigger
+ where tgrelid='public.ghl_marketplace_installations'::regclass
+   and tgname='protect_ghl_marketplace_installation'" \
+  | tr -d '\r' >"$tmp_dir/rollback-trigger.sql"
+cmp -s "$tmp_dir/base-finalizer.sql" "$tmp_dir/rollback-finalizer.sql" || {
+  echo 'FAIL: rollback authorization finalizer definition differs from pre-C1a' >&2; exit 1;
+}
+cmp -s "$tmp_dir/base-trigger-function.sql" "$tmp_dir/rollback-trigger-function.sql" || {
+  echo 'FAIL: rollback v4 trigger function definition differs from pre-C1a' >&2; exit 1;
+}
+cmp -s "$tmp_dir/base-trigger.sql" "$tmp_dir/rollback-trigger.sql" || {
+  echo 'FAIL: rollback installation trigger definition differs from pre-C1a' >&2; exit 1;
+}
 psql_query < "$migration" >/dev/null
 
 # Create independent due credentials through the unchanged lifecycle RPC and
@@ -141,7 +217,12 @@ insert into public.tenants(id,location_id,ghl_provider_id,line_channel_id) value
  ('00000000-0000-4000-8000-000000000307','refresh-uninstall-first','line-307','line-channel-307'),
  ('00000000-0000-4000-8000-000000000308','refresh-uninstall-last','line-308','line-channel-308'),
  ('00000000-0000-4000-8000-000000000309','refresh-stale','line-309','line-channel-309'),
- ('00000000-0000-4000-8000-000000000310','refresh-auth-finalize','line-310','line-channel-310');
+ ('00000000-0000-4000-8000-000000000310','refresh-auth-finalize','line-310','line-channel-310'),
+ ('00000000-0000-4000-8000-000000000312','refresh-expired-fail-invalid','line-312','line-channel-312'),
+ ('00000000-0000-4000-8000-000000000313','refresh-expired-fail-persist','line-313','line-channel-313'),
+ ('00000000-0000-4000-8000-000000000314','refresh-expired-finalize','line-314','line-channel-314'),
+ ('00000000-0000-4000-8000-000000000315','refresh-rejected','line-315','line-channel-315'),
+ ('00000000-0000-4000-8000-000000000316','refresh-persistence-failed','line-316','line-channel-316');
 set role service_role;
 select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client',
  '00000000-0000-4000-8000-000000000304','refresh-cas','refresh-company','oauth-provider',
@@ -164,19 +245,38 @@ select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','
 select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client',
  '00000000-0000-4000-8000-000000000310','refresh-auth-finalize','refresh-company','oauth-provider',
  'race-version','2026-09-27T02:10:00Z','refresh-auth-finalize-install');
+select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client',
+ '00000000-0000-4000-8000-000000000312','refresh-expired-fail-invalid','refresh-company','oauth-provider',
+ 'race-version','2026-09-27T02:12:00Z','refresh-expired-fail-invalid-install');
+select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client',
+ '00000000-0000-4000-8000-000000000313','refresh-expired-fail-persist','refresh-company','oauth-provider',
+ 'race-version','2026-09-27T02:13:00Z','refresh-expired-fail-persist-install');
+select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client',
+ '00000000-0000-4000-8000-000000000314','refresh-expired-finalize','refresh-company','oauth-provider',
+ 'race-version','2026-09-27T02:14:00Z','refresh-expired-finalize-install');
+select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client',
+ '00000000-0000-4000-8000-000000000315','refresh-rejected','refresh-company','oauth-provider',
+ 'race-version','2026-09-27T02:15:00Z','refresh-rejected-install');
+select public.apply_every8d_ghl_marketplace_lifecycle_v2('INSTALL','oauth-app','oauth-client',
+ '00000000-0000-4000-8000-000000000316','refresh-persistence-failed','refresh-company','oauth-provider',
+ 'race-version','2026-09-27T02:16:00Z','refresh-persistence-failed-install');
 update public.ghl_marketplace_installations
 set access_token_ciphertext=convert_to('synthetic-access-'||location_id,'utf8'),
     refresh_token_ciphertext=convert_to('synthetic-refresh-'||location_id,'utf8'),
     encryption_key_version='synthetic-v1', token_expires_at=clock_timestamp()+interval '1 minute',
     granted_scopes=array['locations.readonly']
 where location_id in ('refresh-cas','refresh-invalid','refresh-unknown',
-  'refresh-uninstall-first','refresh-uninstall-last','refresh-stale');
+  'refresh-uninstall-first','refresh-uninstall-last','refresh-stale',
+  'refresh-expired-fail-invalid','refresh-expired-fail-persist','refresh-expired-finalize',
+  'refresh-rejected','refresh-persistence-failed');
 reset role;
 SQL
-assert_query "select count(*)=6 and min(credential_revision)=1 and max(credential_revision)=1
+assert_query "select count(*)=11 and min(credential_revision)=1 and max(credential_revision)=1
  and bool_and(credential_state='usable') from public.ghl_marketplace_installations
  where location_id like 'refresh-%' and location_id in ('refresh-cas','refresh-invalid','refresh-unknown',
-  'refresh-uninstall-first','refresh-uninstall-last','refresh-stale')" \
+  'refresh-uninstall-first','refresh-uninstall-last','refresh-stale',
+  'refresh-expired-fail-invalid','refresh-expired-fail-persist','refresh-expired-finalize',
+  'refresh-rejected','refresh-persistence-failed')" \
   'existing authorization persistence initializes usable revision metadata'
 
 cas_id=$(psql_query -Atqc "select id from public.ghl_marketplace_installations where location_id='refresh-cas'" | tr -d '\r')
@@ -248,20 +348,79 @@ claim_and_fail() {
 }
 claim_and_fail refresh-invalid 00000000-0000-4000-8000-000000000305 invalid_grant
 claim_and_fail refresh-unknown 00000000-0000-4000-8000-000000000306 refresh_outcome_unknown
+claim_and_fail refresh-rejected 00000000-0000-4000-8000-000000000315 token_response_rejected
+claim_and_fail refresh-persistence-failed 00000000-0000-4000-8000-000000000316 credential_persistence_failed
+
+expire_lease() {
+  local installation=$1
+  psql_query -q -c "alter table public.ghl_marketplace_installations
+   disable trigger protect_ghl_marketplace_installation;
+   with base as (select statement_timestamp() as ts)
+   update public.ghl_marketplace_installations
+   set refresh_started_at=base.ts-interval '6 minutes',
+       refresh_lease_expires_at=base.ts-interval '2 minutes'
+   from base where id='$installation';
+   alter table public.ghl_marketplace_installations
+   enable trigger protect_ghl_marketplace_installation;"
+  assert_query "select refresh_lease_expires_at-refresh_started_at=interval '4 minutes'
+   and refresh_lease_expires_at < statement_timestamp()
+   from public.ghl_marketplace_installations where id='$installation'" \
+    'expired lease fixture is deterministically four minutes long'
+}
+
+claim_expire_and_fail() {
+  local location=$1 tenant=$2 failure=$3
+  local installation lease
+  installation=$(psql_query -Atqc "select id from public.ghl_marketplace_installations where location_id='$location'" | tr -d '\r')
+  psql_query -q -c "set role service_role; select public.claim_every8d_ghl_oauth_refresh_v1(
+   '$installation','oauth-app','oauth-client','$tenant','$location','refresh-company','oauth-provider','race-version',1);" >/dev/null
+  lease=$(psql_query -Atqc "select refresh_lease_id from public.ghl_marketplace_installations where id='$installation'" | tr -d '\r')
+  expire_lease "$installation"
+  assert_query "select (set_config('role','service_role',true) is not null)
+   and public.fail_every8d_ghl_oauth_refresh_v1('$installation','oauth-app','oauth-client',
+   '$tenant','$location','refresh-company','oauth-provider','race-version',1,1,'$lease','$failure')" \
+    "expired lease accepts and terminalizes $failure"
+  assert_query "select credential_state='reauth_required' and credential_revision=1
+   and access_token_ciphertext is null and refresh_token_ciphertext is null
+   and encryption_key_version is null and token_expires_at is null and cardinality(granted_scopes)=0
+   and refresh_lease_id is null and refresh_started_at is null and refresh_lease_expires_at is null
+   and refresh_failure_class='refresh_outcome_unknown' and refresh_failed_at is not null
+   from public.ghl_marketplace_installations where id='$installation'" \
+    "expired $failure canonicalizes to refresh_outcome_unknown and scrubs credentials"
+  assert_query "select (set_config('role','service_role',true) is not null)
+   and public.claim_every8d_ghl_oauth_refresh_v1('$installation','oauth-app','oauth-client',
+   '$tenant','$location','refresh-company','oauth-provider','race-version',1) is null" \
+    "expired $failure cannot reclaim the same token"
+}
+claim_expire_and_fail refresh-expired-fail-invalid 00000000-0000-4000-8000-000000000312 invalid_grant
+claim_expire_and_fail refresh-expired-fail-persist 00000000-0000-4000-8000-000000000313 credential_persistence_failed
+
+expired_finalize_id=$(psql_query -Atqc "select id from public.ghl_marketplace_installations where location_id='refresh-expired-finalize'" | tr -d '\r')
+psql_query -q -c "set role service_role; select public.claim_every8d_ghl_oauth_refresh_v1(
+ '$expired_finalize_id','oauth-app','oauth-client','00000000-0000-4000-8000-000000000314',
+ 'refresh-expired-finalize','refresh-company','oauth-provider','race-version',1);" >/dev/null
+expired_finalize_lease=$(psql_query -Atqc "select refresh_lease_id from public.ghl_marketplace_installations where id='$expired_finalize_id'" | tr -d '\r')
+expire_lease "$expired_finalize_id"
+assert_query "select (set_config('role','service_role',true) is not null)
+ and not public.finalize_every8d_ghl_oauth_refresh_v1('$expired_finalize_id','oauth-app','oauth-client',
+ '00000000-0000-4000-8000-000000000314','refresh-expired-finalize','refresh-company','oauth-provider',
+ 'race-version',1,1,'$expired_finalize_lease',convert_to('expired-new-access','utf8'),
+ convert_to('expired-new-refresh','utf8'),'synthetic-v2',clock_timestamp()+interval '1 hour',
+ array['locations.readonly'])" 'expired exact lease cannot finalize'
+assert_query "select credential_state='reauth_required' and credential_revision=1
+ and access_token_ciphertext is null and refresh_token_ciphertext is null
+ and encryption_key_version is null and token_expires_at is null and cardinality(granted_scopes)=0
+ and refresh_lease_id is null and refresh_started_at is null and refresh_lease_expires_at is null
+ and refresh_failure_class='refresh_outcome_unknown' and refresh_failed_at is not null
+ from public.ghl_marketplace_installations where id='$expired_finalize_id'" \
+ 'expired finalize burns the old pair without persisting rotation'
 
 # Expiry is terminalized lazily by the next exact claim and never recycled.
 stale_id=$(psql_query -Atqc "select id from public.ghl_marketplace_installations where location_id='refresh-stale'" | tr -d '\r')
 psql_query -q -c "set role service_role; select public.claim_every8d_ghl_oauth_refresh_v1(
  '$stale_id','oauth-app','oauth-client','00000000-0000-4000-8000-000000000309','refresh-stale',
  'refresh-company','oauth-provider','race-version',1);" >/dev/null
-psql_query -q -c "alter table public.ghl_marketplace_installations
- disable trigger protect_ghl_marketplace_installation;
- update public.ghl_marketplace_installations
- set refresh_started_at=statement_timestamp()-interval '6 minutes',
-     refresh_lease_expires_at=statement_timestamp()-interval '1 minute'
- where id='$stale_id';
- alter table public.ghl_marketplace_installations
- enable trigger protect_ghl_marketplace_installation;"
+expire_lease "$stale_id"
 assert_query "select (set_config('role','service_role',true) is not null)
  and public.claim_every8d_ghl_oauth_refresh_v1('$stale_id','oauth-app','oauth-client',
  '00000000-0000-4000-8000-000000000309','refresh-stale','refresh-company','oauth-provider',
@@ -340,6 +499,46 @@ assert_query "select credential_state='usable' and credential_revision=1
  and refresh_lease_id is null and refresh_failure_class is null
  from public.ghl_marketplace_installations where location_id='refresh-auth-finalize'" \
  'first authorization finalization initializes refresh metadata'
+
+# A fresh authorization code is the only path from reauth_required back to
+# usable. It advances the revision once and clears terminal refresh evidence.
+reauth_start_revision=$(psql_query -Atqc "select credential_revision
+ from public.ghl_marketplace_installations where location_id='refresh-invalid'" | tr -d '\r')
+[[ "$reauth_start_revision" == 1 ]] || { echo 'FAIL: reauthorization must start at revision one' >&2; exit 1; }
+assert_query "select credential_state='reauth_required'
+ and access_token_ciphertext is null and refresh_token_ciphertext is null
+ and refresh_failure_class='invalid_grant' and refresh_failed_at is not null
+ from public.ghl_marketplace_installations where location_id='refresh-invalid'" \
+ 'reauthorization starts from scrubbed terminal failure state'
+psql_query -q <<'SQL' >/dev/null
+set role service_role;
+select public.accept_every8d_public_oauth_callback_v1(
+ 'oauth-app','oauth-client','oauth-provider','race-version','refresh-invalid',repeat('ef',32),repeat('12',32),
+ 'https://oauth.example.invalid/oauth/every8d-connect/callback',repeat('4',64),clock_timestamp()+interval '10 minutes',
+ convert_to('synthetic-reauth-code','utf8'),'synthetic-code-v2');
+SQL
+reauth_bootstrap=$(psql_query -Atqc "select id from public.ghl_marketplace_oauth_bootstraps where state_hash=repeat('ef',32)" | tr -d '\r')
+psql_query -q -c "set role service_role; select public.claim_every8d_oauth_exchange_v1(
+ '$reauth_bootstrap','race-version',repeat('4',64));" >/dev/null
+assert_query "select (set_config('role','service_role',true) is not null)
+ and public.finalize_every8d_oauth_exchange_v1('$reauth_bootstrap','race-version',repeat('4',64),
+ convert_to('reauth-new-access','utf8'),convert_to('reauth-new-refresh','utf8'),'synthetic-v2',
+ clock_timestamp()+interval '1 hour',array['locations.readonly'])" \
+ 'authorization code reauthorizes a terminal credential'
+reauth_end_revision=$((reauth_start_revision + 1))
+assert_query "select credential_state='usable' and credential_revision=$reauth_end_revision
+ and convert_from(access_token_ciphertext,'utf8')='reauth-new-access'
+ and convert_from(refresh_token_ciphertext,'utf8')='reauth-new-refresh'
+ and convert_from(refresh_token_ciphertext,'utf8')<>'synthetic-refresh-refresh-invalid'
+ and refresh_lease_id is null and refresh_started_at is null and refresh_lease_expires_at is null
+ and refresh_failure_class is null and refresh_failed_at is null and last_refreshed_at is null
+ from public.ghl_marketplace_installations where location_id='refresh-invalid'" \
+ 'reauthorization advances once, installs the new pair, and clears stale failure metadata'
+assert_query "select (set_config('role','service_role',true) is not null)
+ and not public.finalize_every8d_oauth_exchange_v1('$reauth_bootstrap','race-version',repeat('4',64),
+ convert_to('reauth-replay-access','utf8'),convert_to('reauth-replay-refresh','utf8'),'synthetic-v2',
+ clock_timestamp()+interval '1 hour',array['locations.readonly'])" \
+ 'authorization finalizer cannot advance the revision twice'
 
 # RLS and grants: browsers have neither table nor RPC access; service_role may
 # execute only the narrow RPCs and has no direct update privilege on new columns.

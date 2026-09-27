@@ -36,8 +36,10 @@ Railway workers from replaying one rotating refresh token.
 | `origin/main` is `4981878fd448d70e1a6d2d239ab6a2f8a238a69d` | Mandatory drift gate | Implementation branch created directly from the authoritative remote commit. |
 | Local `main` was stale and worktree/index were clean | Git inspection | Stale local branch was not used. |
 | Existing credential constraint permits complete token fields with empty scopes | Schema inspection | C1a preflight explicitly rejects this partial authorization tuple. |
-| Existing service role had a table-level installation UPDATE grant | Grant inspection | Additive refresh columns would inherit direct DML, so C1a narrows UPDATE to the five deployed credential columns and restores the historical grant only on safe rollback. |
+| Pre-C1a service role has no table-wide installation UPDATE; it has column UPDATE on exactly five credential columns | Authoritative migration-chain and normalized ACL inspection | C1a and its rollback must preserve that exact least-privilege state. |
 | The refresh test reused a globally unique OAuth state from the preceding suite | PostgreSQL 17 CI evidence plus fixture search | The target callback was correctly rejected; a distinct synthetic state/binding pair isolates the C1a authorization-finalization proof. |
+| Strict post-C1a-only parsing creates a deploy-order deadlock | Repository schema and Gate-B write-path inspection | The application parser now accepts exact complete pre-C1a or post-C1a rows while rejecting partial and unknown shapes. |
+| Caller-supplied failure class survived an already-expired exact lease | Failure RPC inspection | Expired failure now always persists `refresh_outcome_unknown`; unexpired failures preserve the enumerated input. |
 
 ## Commands executed and results
 
@@ -52,6 +54,12 @@ Railway workers from replaying one rotating refresh token.
 | Draft PR CI run `36321629096` | Verify stale lease and grant correction | Failed at authorization compatibility | All proofs through stale lease and both UNINSTALL orders passed; isolated the remaining authorization fixture issue. |
 | Draft PR CI run `36321910760` | Verify explicit authorization metadata finalization | Failed at the same target-row assertion | Confirmed the finalizer was not the cause; fixture inspection found collision with an earlier globally unique OAuth state. |
 | Draft PR CI run `36322112626` | Final PostgreSQL 17 and Node validation | Passed | All PostgreSQL concurrency/invariant/rollback suites and Node validation passed. |
+| `git fetch origin` plus exact branch/PR/worktree checks | Final blocker repair drift gate | Passed | Base `4981878...`, prior head `5669b1c...`, Draft/Open/Unmerged PR #105, authorized branch, clean worktree. |
+| `npm run typecheck` | Final blocker repair static validation | Passed | Dual-shape model compiles without callers assuming C1a fields. |
+| `npm test` | Final blocker repair Node validation | Passed | 607/607 tests passed, including exact pre/post and malformed/partial parser cases. |
+| `npm run build` | Final blocker repair build validation | Passed | TypeScript build completed. |
+| `bash -n test/postgres/ghlOAuthRefreshFoundation.sh` | Shell syntax validation | Passed | The strengthened PostgreSQL proof script parses cleanly. |
+| Exact-head GitHub PostgreSQL 17 CI | Authoritative database execution environment | Required before handoff | Final run ID and step/job results are reported in the PR repair handoff without changing the verified head. |
 
 ## Approaches attempted
 
@@ -70,16 +78,24 @@ Railway workers from replaying one rotating refresh token.
 
 ## Files changed
 
-See the final task report; validation evidence is updated after all checks run.
+| File | Focused change |
+| --- | --- |
+| `src/services/every8dGhlOAuthRepository.ts` | Explicit strict pre/post-C1a installation types and compatibility parser. |
+| `test/every8dGhlOAuthRepository.test.cjs` | Exact dual-shape acceptance and malformed/partial rejection proofs. |
+| `supabase/migrations/202609270001_every8d_ghl_oauth_refresh_foundation.sql` | Expired failure-class canonicalization. |
+| `supabase/rollback/202609270001_every8d_ghl_oauth_refresh_foundation.sql` | Exact five-column base UPDATE ACL restoration. |
+| `test/postgres/ghlOAuthRefreshFoundation.sh` | ACL/definition equality, expired fail/finalize, deterministic stale lease, and reauthorization proofs. |
+| `docs/every8d-ghl-oauth-refresh-foundation.md` | Required rollout sequence and repaired semantics. |
+| `docs/agent-run-c1a-oauth-refresh-foundation.md` | Final blocker repair evidence and exact changed-files accounting. |
 
 ## Validation summary
 
 | Check | Result | Notes |
 | --- | --- | --- |
-| `npm run typecheck` | Passed | Local and CI. |
-| `npm test` | Passed | 605/605 locally and in CI. |
-| `npm run build` | Passed | Local and CI. |
-| PostgreSQL 17 suite | Passed | Full migration chain plus backfill, rollback/reapply, two-session claim, CAS, terminal failure, stale lease, authorization compatibility, UNINSTALL races, RLS/grants, and rollback guard. |
+| `npm run typecheck` | Passed | Final blocker repair local validation. |
+| `npm test` | Passed | 607/607 in final blocker repair local validation. |
+| `npm run build` | Passed | Final blocker repair local validation. |
+| PostgreSQL 17 suite | Exact-head CI gate | Full migration chain plus backfill, rollback/reapply, ACL/function equality, two-session claim, CAS, all terminal failure classes, expired failure/finalize, deterministic stale lease, reauthorization, UNINSTALL races, RLS/grants, and rollback guard. |
 
 ## Budget and stop-rule status
 
@@ -103,7 +119,8 @@ Review Draft PR #105. Keep it unmerged; do not apply the migration or begin C1b.
 - Rotating-token replay/two workers: one row lock, one lease, one revision; the
   second claim receives no work.
 - Expired or ambiguous leases: terminal `reauth_required`, sanitized
-  `refresh_outcome_unknown`, credential scrub, no replay.
+  `refresh_outcome_unknown`, credential scrub, no replay; expired failure input
+  cannot override the ambiguity classification.
 - `invalid_grant`: terminal credential scrub; reauthorization is required.
 - Late finalize/stale generation: exact generation, revision, and lease CAS;
   UNINSTALL or reauthorization invalidates the prior claim.
@@ -113,7 +130,9 @@ Review Draft PR #105. Keep it unmerged; do not apply the migration or begin C1b.
   provider, signed version, lifecycle, and generation are revalidated under the
   row lock.
 - Direct DML/RLS: browser roles have no access; `service_role` cannot update
-  refresh columns directly and uses only the three narrow refresh RPCs.
+  refresh or protected lifecycle/ownership columns directly, retains only the
+  five pre-C1a credential-column UPDATE grants, and uses the three narrow
+  refresh RPCs.
 - Secret handling: SQL never decrypts or returns plaintext; tests use synthetic
   ciphertext and do not print credential values.
 - Rollback: refuses revisions above baseline, lease/refreshing evidence,

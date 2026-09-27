@@ -15,6 +15,30 @@ No scheduler, reconciler refresh, request-time refresh, token endpoint call,
 provider activation, EVERY8D call, or SMS send is enabled. Phase 2F remains
 disabled. LINE is not involved.
 
+## Rollout compatibility and required order
+
+The application row parser accepts exactly two strict shapes: the complete
+pre-C1a installation row with none of the eight refresh columns, or the
+complete post-C1a row with all eight refresh columns. Partial C1a rows and
+unrelated unknown columns fail closed. Pre-C1a rows remain distinguishable;
+the parser does not synthesize a revision, state, lease, or failure metadata.
+
+The required production order is:
+
+1. deploy the dual-shape-compatible application code while the database is
+   still pre-C1a;
+2. verify the existing lifecycle and OAuth runtime against the pre-C1a schema;
+3. apply the C1a migration through a separate, explicit production migration
+   gate;
+4. verify migrated rows and runtime;
+5. optionally tighten parsing in a later PR only after migration is proven in
+   every environment;
+6. only then implement and deploy the separately gated C1b refresh runtime.
+
+Deploy-before-migration is supported. Migration-before-this-compatible-code is
+not supported. Merge or application deployment does not automatically apply
+the C1a migration.
+
 ## Durable state machine
 
 `ghl_marketplace_installations` gains a monotonic `credential_revision` and one
@@ -86,7 +110,11 @@ fails. There is no automatic replay.
 
 It requires the exact current generation, revision, and lease. Every accepted
 failure is terminal, clears the lease, scrubs the credential pair, and requires
-application/user reauthorization. In particular, `invalid_grant` is not retried.
+application/user reauthorization. If the exact lease is already expired, the
+database canonicalizes every accepted caller failure class to
+`refresh_outcome_unknown`; the caller cannot downgrade the ambiguous outcome.
+For an unexpired exact lease, the caller's enumerated class is preserved. In
+particular, `invalid_grant` is not retried.
 
 ## Finalize CAS
 
@@ -129,8 +157,13 @@ baseline, any lease evidence exists (active or expired), state is `refreshing`
 or `reauth_required`, a successful refresh time exists, or refresh failure
 evidence exists. It therefore cannot silently discard real refresh-runtime
 history.
-On a safe rollback, the historical pre-C1a table-level UPDATE grant is restored
-only after the evidence guard passes.
+On a safe rollback, `service_role` still has no table-wide installation UPDATE.
+The exact pre-C1a ACL is restored: direct UPDATE is granted only on
+`access_token_ciphertext`, `refresh_token_ciphertext`,
+`encryption_key_version`, `token_expires_at`, and `granted_scopes`; protected
+ownership, status, and lifecycle columns remain denied. The PostgreSQL proof
+compares the normalized post-rollback privilege set and restored function and
+trigger definitions with the captured pre-C1a baseline.
 
 Migration: `supabase/migrations/202609270001_every8d_ghl_oauth_refresh_foundation.sql`
 

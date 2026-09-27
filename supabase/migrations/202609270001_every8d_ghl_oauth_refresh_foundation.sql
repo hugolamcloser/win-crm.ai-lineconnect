@@ -697,6 +697,7 @@ set search_path = pg_catalog, public
 as $$
 declare
   installation public.ghl_marketplace_installations%rowtype;
+  terminal_failure_class text;
 begin
   if input_failure_class is null or input_failure_class not in (
       'invalid_grant', 'token_response_rejected',
@@ -737,12 +738,18 @@ begin
     return false;
   end if;
 
+  terminal_failure_class := case
+    when installation.refresh_lease_expires_at <= clock_timestamp()
+      then 'refresh_outcome_unknown'
+    else input_failure_class
+  end;
+
   update public.ghl_marketplace_installations
   set credential_state = 'reauth_required',
       access_token_ciphertext = null, refresh_token_ciphertext = null,
       encryption_key_version = null, token_expires_at = null, granted_scopes = '{}',
       refresh_lease_id = null, refresh_started_at = null, refresh_lease_expires_at = null,
-      refresh_failure_class = input_failure_class,
+      refresh_failure_class = terminal_failure_class,
       refresh_failed_at = clock_timestamp()
   where id = installation.id;
   return true;
