@@ -60,6 +60,17 @@ drop function public.protect_ghl_marketplace_installation_v5();
 
 drop index public.ghl_marketplace_installations_refresh_lease_key;
 
+-- Restore the exact pre-C1a table-level installation UPDATE grant. The guarded
+-- evidence checks above must pass before this broader historical grant returns.
+revoke update (
+  access_token_ciphertext,
+  refresh_token_ciphertext,
+  encryption_key_version,
+  token_expires_at,
+  granted_scopes
+) on public.ghl_marketplace_installations from service_role;
+grant update on public.ghl_marketplace_installations to service_role;
+
 alter table public.ghl_marketplace_installations
   drop constraint ghl_marketplace_installations_credential_revision_check,
   drop constraint ghl_marketplace_installations_credential_state_value_check,

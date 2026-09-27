@@ -40,6 +40,22 @@ begin
     raise exception 'C1a preflight rejected a partial OAuth credential tuple'
       using errcode = '23514';
   end if;
+
+  if exists (
+    select 1
+    from public.ghl_marketplace_installations i
+    where (i.status = 'uninstalled' or i.latest_lifecycle_event_type = 'UNINSTALL')
+      and (
+        i.access_token_ciphertext is not null
+        or i.refresh_token_ciphertext is not null
+        or i.encryption_key_version is not null
+        or i.token_expires_at is not null
+        or cardinality(i.granted_scopes) > 0
+      )
+  ) then
+    raise exception 'C1a preflight rejected credentials retained by an uninstalled row'
+      using errcode = '23514';
+  end if;
 end;
 $$;
 
@@ -144,6 +160,18 @@ alter table public.ghl_marketplace_installations
 create unique index ghl_marketplace_installations_refresh_lease_key
   on public.ghl_marketplace_installations(refresh_lease_id)
   where refresh_lease_id is not null;
+
+-- The pre-C1a table-level UPDATE grant would automatically cover columns added
+-- by this migration. Preserve only the five deployed authorization-code writes;
+-- refresh state remains mutable exclusively through the SECURITY DEFINER RPCs.
+revoke update on public.ghl_marketplace_installations from service_role;
+grant update (
+  access_token_ciphertext,
+  refresh_token_ciphertext,
+  encryption_key_version,
+  token_expires_at,
+  granted_scopes
+) on public.ghl_marketplace_installations to service_role;
 
 create function public.protect_ghl_marketplace_installation_v5()
 returns trigger language plpgsql security definer

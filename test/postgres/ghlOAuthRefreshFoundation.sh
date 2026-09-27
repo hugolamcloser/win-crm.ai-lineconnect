@@ -40,7 +40,8 @@ psql_query -q <<'SQL' >/dev/null
 insert into public.tenants(id,location_id,ghl_provider_id,line_channel_id) values
  ('00000000-0000-4000-8000-000000000301','refresh-backfill-usable','line-301','line-channel-301'),
  ('00000000-0000-4000-8000-000000000302','refresh-backfill-none','line-302','line-channel-302'),
- ('00000000-0000-4000-8000-000000000303','refresh-backfill-partial','line-303','line-channel-303');
+ ('00000000-0000-4000-8000-000000000303','refresh-backfill-partial','line-303','line-channel-303'),
+ ('00000000-0000-4000-8000-000000000311','refresh-backfill-uninstalled','line-311','line-channel-311');
 set role service_role;
 select public.apply_every8d_ghl_marketplace_lifecycle_v2(
  'INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000301',
@@ -54,6 +55,13 @@ select public.apply_every8d_ghl_marketplace_lifecycle_v2(
  'INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000303',
  'refresh-backfill-partial','refresh-company','oauth-provider','race-version',
  '2026-09-27T01:02:00Z','refresh-backfill-partial-install');
+select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'INSTALL','oauth-app','oauth-client','00000000-0000-4000-8000-000000000311',
+ 'refresh-backfill-uninstalled','refresh-company','oauth-provider','race-version',
+ '2026-09-27T01:03:00Z','refresh-backfill-uninstalled-install');
+select public.apply_every8d_ghl_marketplace_lifecycle_v2(
+ 'UNINSTALL','oauth-app','oauth-client',null,'refresh-backfill-uninstalled',null,
+ 'oauth-provider','race-version','2026-09-27T01:04:00Z','refresh-backfill-uninstalled-event');
 update public.ghl_marketplace_installations
 set access_token_ciphertext=convert_to('synthetic-backfill-access','utf8'),
     refresh_token_ciphertext=convert_to('synthetic-backfill-refresh','utf8'),
@@ -67,6 +75,12 @@ set access_token_ciphertext=convert_to('synthetic-partial-access','utf8'),
     encryption_key_version='synthetic-v1', token_expires_at=clock_timestamp()+interval '1 hour',
     granted_scopes='{}'
 where location_id='refresh-backfill-partial';
+update public.ghl_marketplace_installations
+set access_token_ciphertext=convert_to('synthetic-uninstalled-access','utf8'),
+    refresh_token_ciphertext=convert_to('synthetic-uninstalled-refresh','utf8'),
+    encryption_key_version='synthetic-v1', token_expires_at=clock_timestamp()+interval '1 hour',
+    granted_scopes=array['locations.readonly']
+where location_id='refresh-backfill-uninstalled';
 reset role;
 SQL
 
@@ -77,6 +91,16 @@ assert_query "select not exists(select 1 from information_schema.columns where t
   'partial tuple refusal is transactional'
 psql_query -q -c "set role service_role; update public.ghl_marketplace_installations
  set granted_scopes=array['locations.readonly'] where location_id='refresh-backfill-partial';"
+
+expect_failure 'C1a preflight rejected credentials retained by an uninstalled row' uninstalled_preflight \
+  apply_migration
+assert_query "select not exists(select 1 from information_schema.columns where table_schema='public'
+ and table_name='ghl_marketplace_installations' and column_name='credential_state')" \
+  'uninstalled credential refusal is transactional'
+psql_query -q -c "set role service_role; update public.ghl_marketplace_installations
+ set access_token_ciphertext=null, refresh_token_ciphertext=null, encryption_key_version=null,
+     token_expires_at=null, granted_scopes='{}'
+ where location_id='refresh-backfill-uninstalled';"
 
 psql_query < "$migration" >/dev/null
 assert_query "select credential_state='usable' and credential_revision=1
@@ -231,8 +255,8 @@ psql_query -q -c "set role service_role; select public.claim_every8d_ghl_oauth_r
 psql_query -q -c "alter table public.ghl_marketplace_installations
  disable trigger protect_ghl_marketplace_installation;
  update public.ghl_marketplace_installations
- set refresh_started_at=clock_timestamp()-interval '6 minutes',
-     refresh_lease_expires_at=clock_timestamp()-interval '1 minute'
+ set refresh_started_at=statement_timestamp()-interval '6 minutes',
+     refresh_lease_expires_at=statement_timestamp()-interval '1 minute'
  where id='$stale_id';
  alter table public.ghl_marketplace_installations
  enable trigger protect_ghl_marketplace_installation;"
