@@ -25,6 +25,15 @@ export type Every8dGhlMarketplaceInstallation = {
   encryption_key_version: string | null;
   token_expires_at: string | null;
   granted_scopes: string[];
+  credential_revision: number;
+  credential_state: "none" | "usable" | "refreshing" | "reauth_required";
+  refresh_lease_id: string | null;
+  refresh_started_at: string | null;
+  refresh_lease_expires_at: string | null;
+  refresh_failure_class: "invalid_grant" | "token_response_rejected"
+    | "refresh_outcome_unknown" | "credential_persistence_failed" | null;
+  refresh_failed_at: string | null;
+  last_refreshed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -189,6 +198,17 @@ const installationSchema = z.object({
   encryption_key_version: z.string().nullable(),
   token_expires_at: timestampSchema.nullable(),
   granted_scopes: z.array(z.string().min(1).refine((scope) => scope === scope.trim())),
+  credential_revision: z.number().int().nonnegative(),
+  credential_state: z.enum(["none", "usable", "refreshing", "reauth_required"]),
+  refresh_lease_id: uuidSchema.nullable(),
+  refresh_started_at: timestampSchema.nullable(),
+  refresh_lease_expires_at: timestampSchema.nullable(),
+  refresh_failure_class: z.enum([
+    "invalid_grant", "token_response_rejected",
+    "refresh_outcome_unknown", "credential_persistence_failed"
+  ]).nullable(),
+  refresh_failed_at: timestampSchema.nullable(),
+  last_refreshed_at: timestampSchema.nullable(),
   created_at: timestampSchema,
   updated_at: timestampSchema
 }).strict();

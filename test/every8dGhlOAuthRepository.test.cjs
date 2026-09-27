@@ -13,7 +13,10 @@ function installation(overrides = {}) { return {
   latest_lifecycle_event_at: now, latest_lifecycle_event_id: "event-98",
   latest_lifecycle_event_type: "INSTALL", latest_lifecycle_version_id: "version-98",
   access_token_ciphertext: null, refresh_token_ciphertext: null, encryption_key_version: null,
-  token_expires_at: null, granted_scopes: [], created_at: now, updated_at: now, ...overrides
+  token_expires_at: null, granted_scopes: [], credential_revision: 0, credential_state: "none",
+  refresh_lease_id: null, refresh_started_at: null, refresh_lease_expires_at: null,
+  refresh_failure_class: null, refresh_failed_at: null, last_refreshed_at: null,
+  created_at: now, updated_at: now, ...overrides
 }; }
 function bootstrap(overrides = {}) { return {
   id: bootstrapId, app_namespace: "every8d_connect", marketplace_version_id: "version-98",
@@ -117,7 +120,9 @@ test("legacy credential persistence result uses the strict installation schema",
     refresh_token_ciphertext: "\\x02",
     encryption_key_version: "token-v1",
     token_expires_at: persistenceInput.expiresAt,
-    granted_scopes: persistenceInput.grantedScopes
+    granted_scopes: persistenceInput.grantedScopes,
+    credential_revision: 1,
+    credential_state: "usable"
   });
   assert.equal((await persistenceHarness(valid).persistInstalledCredentials(persistenceInput)).id, installationId);
   assert.equal(await persistenceHarness(null).persistInstalledCredentials(persistenceInput), null);
