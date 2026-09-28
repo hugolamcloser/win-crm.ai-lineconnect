@@ -5,6 +5,10 @@ const { createEvery8dGhlOAuthRepository } = require("../dist/services/every8dGhl
 const installationId = "10000000-0000-4000-8000-000000000098";
 const bootstrapId = "20000000-0000-4000-8000-000000000098";
 const now = "2026-09-23T12:00:00.000Z";
+const refreshColumnNames = [
+  "credential_revision", "credential_state", "refresh_lease_id", "refresh_started_at",
+  "refresh_lease_expires_at", "refresh_failure_class", "refresh_failed_at", "last_refreshed_at"
+];
 function installation(overrides = {}) { return {
   id: installationId, app_namespace: "every8d_connect", marketplace_app_id: "app-98",
   oauth_client_id: "client-98", tenant_id: "00000000-0000-4000-8000-000000000098",
@@ -13,8 +17,16 @@ function installation(overrides = {}) { return {
   latest_lifecycle_event_at: now, latest_lifecycle_event_id: "event-98",
   latest_lifecycle_event_type: "INSTALL", latest_lifecycle_version_id: "version-98",
   access_token_ciphertext: null, refresh_token_ciphertext: null, encryption_key_version: null,
-  token_expires_at: null, granted_scopes: [], created_at: now, updated_at: now, ...overrides
+  token_expires_at: null, granted_scopes: [], credential_revision: 0, credential_state: "none",
+  refresh_lease_id: null, refresh_started_at: null, refresh_lease_expires_at: null,
+  refresh_failure_class: null, refresh_failed_at: null, last_refreshed_at: null,
+  created_at: now, updated_at: now, ...overrides
 }; }
+function preC1aInstallation(overrides = {}) {
+  const row = installation(overrides);
+  for (const column of refreshColumnNames) delete row[column];
+  return row;
+}
 function bootstrap(overrides = {}) { return {
   id: bootstrapId, app_namespace: "every8d_connect", marketplace_version_id: "version-98",
   expected_location_id: "location-98", target_installation_generation: 3,
@@ -63,14 +75,50 @@ const persistenceInput = {
   grantedScopes: ["locations.readonly"]
 };
 
+const lifecycleInput = {
+  eventType: "INSTALL", marketplaceAppId: "app-98", oauthClientId: "client-98",
+  tenantId: "00000000-0000-4000-8000-000000000098", locationId: "location-98", companyId: "company-98",
+  conversationProviderId: "provider-98", marketplaceVersionId: "version-98", eventAt: now, eventId: "event-98"
+};
+
 test("repository validates lifecycle v2 output without coercing authority", async () => {
   const h = harness({ apply_every8d_ghl_marketplace_lifecycle_v2: { outcome: "applied", installation: installation() } });
-  const input = { eventType: "INSTALL", marketplaceAppId: "app-98", oauthClientId: "client-98",
-    tenantId: "00000000-0000-4000-8000-000000000098", locationId: "location-98", companyId: "company-98",
-    conversationProviderId: "provider-98", marketplaceVersionId: "version-98", eventAt: now, eventId: "event-98" };
-  assert.equal((await h.repository.applyLifecycleEvent(input)).outcome, "applied");
+  assert.equal((await h.repository.applyLifecycleEvent(lifecycleInput)).outcome, "applied");
   const malformed = harness({ apply_every8d_ghl_marketplace_lifecycle_v2: { outcome: 1, installation: installation() } });
-  await assert.rejects(() => malformed.repository.applyLifecycleEvent(input));
+  await assert.rejects(() => malformed.repository.applyLifecycleEvent(lifecycleInput));
+});
+
+test("installation parser accepts exact pre-C1a and post-C1a rows without synthesizing metadata", async () => {
+  const rows = [preC1aInstallation(), installation()];
+  for (const row of rows) {
+    const h = harness({ apply_every8d_ghl_marketplace_lifecycle_v2: { outcome: "applied", installation: row } });
+    const parsed = (await h.repository.applyLifecycleEvent(lifecycleInput)).installation;
+    assert.equal(parsed.id, installationId);
+    assert.equal(parsed.location_id, "location-98");
+    assert.equal(parsed.status, "pending");
+    assert.deepEqual(parsed.granted_scopes, []);
+  }
+  const pre = (await harness({
+    apply_every8d_ghl_marketplace_lifecycle_v2: {
+      outcome: "applied", installation: preC1aInstallation()
+    }
+  }).repository.applyLifecycleEvent(lifecycleInput)).installation;
+  assert.equal(Object.hasOwn(pre, "credential_revision"), false);
+  assert.equal(Object.hasOwn(pre, "credential_state"), false);
+});
+
+test("installation parser rejects partial or malformed C1a metadata", async () => {
+  const malformedRows = [
+    { ...preC1aInstallation(), credential_revision: 1 },
+    installation({ credential_state: "invented" }),
+    installation({ refresh_lease_id: "not-a-uuid" }),
+    installation({ refresh_started_at: "not-a-timestamp" }),
+    installation({ unexpected: true })
+  ];
+  for (const row of malformedRows) {
+    const h = harness({ apply_every8d_ghl_marketplace_lifecycle_v2: { outcome: "applied", installation: row } });
+    await assert.rejects(() => h.repository.applyLifecycleEvent(lifecycleInput));
+  }
 });
 
 test("atomic callback RPC receives only authenticated context and server-pinned Location", async () => {
@@ -111,13 +159,15 @@ test("claim and finalization validate and preserve bytea boundaries", async () =
   assert.match(h.calls[1].input.input_access_token_ciphertext, /^\\x[0-9a-f]+$/);
 });
 
-test("legacy credential persistence result uses the strict installation schema", async () => {
+test("legacy credential persistence result uses the strict compatibility schema", async () => {
   const valid = installation({
     access_token_ciphertext: "\\x01",
     refresh_token_ciphertext: "\\x02",
     encryption_key_version: "token-v1",
     token_expires_at: persistenceInput.expiresAt,
-    granted_scopes: persistenceInput.grantedScopes
+    granted_scopes: persistenceInput.grantedScopes,
+    credential_revision: 1,
+    credential_state: "usable"
   });
   assert.equal((await persistenceHarness(valid).persistInstalledCredentials(persistenceInput)).id, installationId);
   assert.equal(await persistenceHarness(null).persistInstalledCredentials(persistenceInput), null);

@@ -3,7 +3,7 @@ import { z } from "zod";
 
 export type Every8dLifecycleOutcome = "applied" | "exact_replay" | "stale_ignored";
 
-export type Every8dGhlMarketplaceInstallation = {
+export type Every8dGhlMarketplaceInstallationBase = {
   id: string;
   app_namespace: "every8d_connect";
   marketplace_app_id: string;
@@ -28,6 +28,26 @@ export type Every8dGhlMarketplaceInstallation = {
   created_at: string;
   updated_at: string;
 };
+
+export type Every8dGhlMarketplaceInstallationPreC1a =
+  Every8dGhlMarketplaceInstallationBase;
+
+export type Every8dGhlMarketplaceInstallationPostC1a =
+  Every8dGhlMarketplaceInstallationBase & {
+    credential_revision: number;
+    credential_state: "none" | "usable" | "refreshing" | "reauth_required";
+    refresh_lease_id: string | null;
+    refresh_started_at: string | null;
+    refresh_lease_expires_at: string | null;
+    refresh_failure_class: "invalid_grant" | "token_response_rejected"
+      | "refresh_outcome_unknown" | "credential_persistence_failed" | null;
+    refresh_failed_at: string | null;
+    last_refreshed_at: string | null;
+  };
+
+export type Every8dGhlMarketplaceInstallation =
+  Every8dGhlMarketplaceInstallationPreC1a
+  | Every8dGhlMarketplaceInstallationPostC1a;
 
 export type Every8dOAuthBootstrapStatus =
   | "waiting_install" | "ready"
@@ -167,7 +187,7 @@ const identifierSchema = z.string().regex(/^[A-Za-z0-9_.-]{1,256}$/);
 const byteaSchema = z.string().regex(/^\\x[0-9a-f]+$/i);
 const lifecycleOutcomeSchema = z.enum(["applied", "exact_replay", "stale_ignored"]);
 const bootstrapStatusSchema = z.enum(["waiting_install", "ready", "exchanging", "succeeded", "failed"]);
-const installationSchema = z.object({
+const installationBaseSchema = z.object({
   id: uuidSchema,
   app_namespace: z.literal("every8d_connect"),
   marketplace_app_id: z.string().min(1),
@@ -192,6 +212,23 @@ const installationSchema = z.object({
   created_at: timestampSchema,
   updated_at: timestampSchema
 }).strict();
+const installationPostC1aSchema = installationBaseSchema.extend({
+  credential_revision: z.number().int().nonnegative(),
+  credential_state: z.enum(["none", "usable", "refreshing", "reauth_required"]),
+  refresh_lease_id: uuidSchema.nullable(),
+  refresh_started_at: timestampSchema.nullable(),
+  refresh_lease_expires_at: timestampSchema.nullable(),
+  refresh_failure_class: z.enum([
+    "invalid_grant", "token_response_rejected",
+    "refresh_outcome_unknown", "credential_persistence_failed"
+  ]).nullable(),
+  refresh_failed_at: timestampSchema.nullable(),
+  last_refreshed_at: timestampSchema.nullable()
+}).strict();
+const installationSchema: z.ZodType<Every8dGhlMarketplaceInstallation> = z.union([
+  installationBaseSchema,
+  installationPostC1aSchema
+]);
 const bootstrapSchema = z.object({
   id: uuidSchema,
   app_namespace: z.literal("every8d_connect"),
@@ -368,7 +405,7 @@ export function createEvery8dGhlOAuthRepository(
       if (input.installationGeneration) query = query.eq("installation_generation", input.installationGeneration);
       const { data, error } = await query.maybeSingle();
       if (error) throwDatabaseError(error);
-      return data as Every8dGhlMarketplaceInstallation | null;
+      return parseRpc(installationSchema.nullable(), data);
     },
 
     async createOAuthState(input) {
