@@ -6,7 +6,7 @@
 - Approved branch: `feature/every8d-ghl-oauth-refresh-db-foundation`
 - Authority level: Level 3, Draft PR only; no merge/deploy/migration application
 - Started at: 2026-09-27 Asia/Kuala_Lumpur
-- Last updated at: 2026-09-27 Asia/Kuala_Lumpur
+- Last updated at: 2026-09-28 Asia/Kuala_Lumpur
 
 ## Task objective
 
@@ -41,6 +41,18 @@ Railway workers from replaying one rotating refresh token.
 | Strict post-C1a-only parsing creates a deploy-order deadlock | Repository schema and Gate-B write-path inspection | The application parser now accepts exact complete pre-C1a or post-C1a rows while rejecting partial and unknown shapes. |
 | Caller-supplied failure class survived an already-expired exact lease | Failure RPC inspection | Expired failure now always persists `refresh_outcome_unknown`; unexpired failures preserve the enumerated input. |
 
+## Authoritative final technical-head evidence
+
+| Evidence | Result |
+| --- | --- |
+| PR head | `7de9ee47fbadd0bf4271dc17b004e63dc634cebe` |
+| Exact-head GitHub CI run | `36324660987` |
+| `validate` job | SUCCESS |
+| `postgres-concurrency` job | SUCCESS |
+| Node tests | 607/607 passed; 0 failed |
+| Typecheck | PASS |
+| Build | PASS |
+
 ## Commands executed and results
 
 | Command | Purpose | Result | Evidence or follow-up |
@@ -49,7 +61,7 @@ Railway workers from replaying one rotating refresh token.
 | `git status --porcelain=v1` | Clean-worktree gate | Passed | No pre-existing changes. |
 | `git switch -c ... origin/main` | Exact-base feature branch | Passed | Branch created at authoritative SHA. |
 | `npm run typecheck` | Mandatory static validation | Passed | No TypeScript errors. |
-| `npm test` | Mandatory Node validation | Passed | 605/605 tests passed. |
+| `npm test` | Initial implementation Node validation | Passed | Historical result: 605/605 tests passed. |
 | `npm run build` | Mandatory build validation | Passed | TypeScript build completed. |
 | Draft PR CI run `36321629096` | Verify stale lease and grant correction | Failed at authorization compatibility | All proofs through stale lease and both UNINSTALL orders passed; isolated the remaining authorization fixture issue. |
 | Draft PR CI run `36321910760` | Verify explicit authorization metadata finalization | Failed at the same target-row assertion | Confirmed the finalizer was not the cause; fixture inspection found collision with an earlier globally unique OAuth state. |
@@ -59,7 +71,7 @@ Railway workers from replaying one rotating refresh token.
 | `npm test` | Final blocker repair Node validation | Passed | 607/607 tests passed, including exact pre/post and malformed/partial parser cases. |
 | `npm run build` | Final blocker repair build validation | Passed | TypeScript build completed. |
 | `bash -n test/postgres/ghlOAuthRefreshFoundation.sh` | Shell syntax validation | Passed | The strengthened PostgreSQL proof script parses cleanly. |
-| Exact-head GitHub PostgreSQL 17 CI | Authoritative database execution environment | Required before handoff | Final run ID and step/job results are reported in the PR repair handoff without changing the verified head. |
+| GitHub CI run `36324660987` at exact head `7de9ee47fbadd0bf4271dc17b004e63dc634cebe` | Authoritative exact-head validation | Passed | `validate`: SUCCESS; `postgres-concurrency`: SUCCESS; Node: 607/607 passed, 0 failed; typecheck: PASS; build: PASS. |
 
 ## Approaches attempted
 
@@ -76,17 +88,18 @@ Railway workers from replaying one rotating refresh token.
 | Add refresh methods/callers to TypeScript | C1a is database foundation only; runtime belongs to C1b. |
 | Replace lifecycle-v2 merely to add fields | Trigger extension preserves its current semantics and reduces rollback risk. |
 
-## Files changed
+## Overall PR files changed
 
 | File | Focused change |
 | --- | --- |
+| `.github/workflows/ci.yml` | Runs the dedicated C1a PostgreSQL 17 proof separately from the generic migration loop while preserving required failure behavior. |
+| `docs/agent-run-c1a-oauth-refresh-foundation.md` | Run evidence, validation history, and exact overall PR changed-files accounting. |
+| `docs/every8d-ghl-oauth-refresh-foundation.md` | Required rollout sequence and repaired semantics. |
 | `src/services/every8dGhlOAuthRepository.ts` | Explicit strict pre/post-C1a installation types and compatibility parser. |
-| `test/every8dGhlOAuthRepository.test.cjs` | Exact dual-shape acceptance and malformed/partial rejection proofs. |
 | `supabase/migrations/202609270001_every8d_ghl_oauth_refresh_foundation.sql` | Expired failure-class canonicalization. |
 | `supabase/rollback/202609270001_every8d_ghl_oauth_refresh_foundation.sql` | Exact five-column base UPDATE ACL restoration. |
+| `test/every8dGhlOAuthRepository.test.cjs` | Exact dual-shape acceptance and malformed/partial rejection proofs. |
 | `test/postgres/ghlOAuthRefreshFoundation.sh` | ACL/definition equality, expired fail/finalize, deterministic stale lease, and reauthorization proofs. |
-| `docs/every8d-ghl-oauth-refresh-foundation.md` | Required rollout sequence and repaired semantics. |
-| `docs/agent-run-c1a-oauth-refresh-foundation.md` | Final blocker repair evidence and exact changed-files accounting. |
 
 ## Validation summary
 
