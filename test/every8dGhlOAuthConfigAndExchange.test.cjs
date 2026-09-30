@@ -5,6 +5,7 @@ const test = require("node:test");
 const {
   Every8dGhlOAuthConfigurationError,
   assertEvery8dGhlOAuthConfig,
+  assertEvery8dGhlOAuthRefreshConfig,
   readEvery8dGhlOAuthConfig
 } = require("../dist/config/every8dGhlOAuth");
 const {
@@ -55,7 +56,28 @@ test("EVERY8D HighLevel OAuth is disabled by default without parsing secret conf
     EVERY8D_GHL_OAUTH_ENCRYPTION_KEYS: "deliberately-invalid-while-disabled"
   });
   assert.equal(config.enabled, false);
+  assert.equal(config.refreshEnabled, false);
   assert.equal(config.encryptionKeys.size, 0);
+});
+
+test("EVERY8D HighLevel OAuth refresh requires both immutable process flags", () => {
+  const baseOnly = readEvery8dGhlOAuthConfig(completeEnvironment());
+  assert.equal(baseOnly.enabled, true);
+  assert.equal(baseOnly.refreshEnabled, false);
+  assert.throws(() => assertEvery8dGhlOAuthRefreshConfig(baseOnly),
+    Every8dGhlOAuthConfigurationError);
+
+  const refreshEnabled = readEvery8dGhlOAuthConfig(completeEnvironment({
+    EVERY8D_GHL_OAUTH_REFRESH_ENABLED: "true"
+  }));
+  assert.doesNotThrow(() => assertEvery8dGhlOAuthRefreshConfig(refreshEnabled));
+
+  const refreshWithoutBase = readEvery8dGhlOAuthConfig({
+    ...completeEnvironment({ EVERY8D_GHL_OAUTH_ENABLED: "false" }),
+    EVERY8D_GHL_OAUTH_REFRESH_ENABLED: "true"
+  });
+  assert.throws(() => assertEvery8dGhlOAuthRefreshConfig(refreshWithoutBase),
+    Every8dGhlOAuthConfigurationError);
 });
 
 test("enabled configuration requires dedicated complete exact values", () => {
