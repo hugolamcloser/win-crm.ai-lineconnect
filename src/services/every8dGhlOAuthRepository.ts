@@ -81,6 +81,73 @@ export type Every8dOAuthExchangeClaim = {
   installation: Every8dGhlMarketplaceInstallation;
 };
 
+export type Every8dGhlOAuthRefreshFailureClass =
+  | "invalid_grant"
+  | "token_response_rejected"
+  | "refresh_outcome_unknown"
+  | "credential_persistence_failed";
+
+export type Every8dGhlOAuthRefreshCandidate = {
+  id: string;
+  app_namespace: "every8d_connect";
+  marketplace_app_id: string;
+  oauth_client_id: string;
+  tenant_id: string;
+  location_id: string;
+  company_id: string;
+  conversation_provider_id: string;
+  channel: "sms";
+  provider: "every8d";
+  status: "pending" | "active";
+  installation_generation: number;
+  latest_lifecycle_event_type: "INSTALL";
+  latest_lifecycle_version_id: string;
+  credential_revision: number;
+  credential_state: "usable";
+  encryption_key_version: string;
+  token_expires_at: string;
+  granted_scopes: string[];
+};
+
+export type Every8dGhlOAuthExpiredRefreshLease = Omit<
+  Every8dGhlOAuthRefreshCandidate,
+  "credential_state" | "encryption_key_version" | "token_expires_at" | "granted_scopes"
+> & {
+  credential_state: "refreshing";
+  refresh_lease_expires_at: string;
+};
+
+export type Every8dGhlOAuthRefreshClaim = {
+  installationId: string;
+  installationGeneration: number;
+  credentialRevision: number;
+  refreshLeaseId: string;
+  refreshLeaseExpiresAt: string;
+  refreshTokenCiphertext: string;
+  encryptionKeyVersion: string;
+  grantedScopes: string[];
+};
+
+export type Every8dGhlOAuthRefreshState = {
+  credential_revision: number;
+  credential_state: "none" | "usable" | "refreshing" | "reauth_required";
+  refresh_lease_id: string | null;
+  refresh_failure_class: Every8dGhlOAuthRefreshFailureClass | null;
+  refresh_failed_at: string | null;
+};
+
+export type Every8dGhlOAuthRefreshIdentity = {
+  installationId: string;
+  marketplaceAppId: string;
+  oauthClientId: string;
+  tenantId: string;
+  locationId: string;
+  companyId: string;
+  conversationProviderId: string;
+  marketplaceVersionId: string;
+  installationGeneration: number;
+};
+
 export type Every8dGhlOAuthState = {
   id: string;
   installation_id: string;
@@ -95,6 +162,38 @@ export type Every8dGhlOAuthState = {
 };
 
 export type Every8dGhlOAuthRepository = {
+  findRefreshCandidate(input: {
+    marketplaceAppId: string;
+    oauthClientId: string;
+    expectedLocationId: string;
+    conversationProviderId: string;
+    marketplaceVersionId: string;
+    refreshDueBefore: string;
+  }): Promise<Every8dGhlOAuthRefreshCandidate | null>;
+  findExpiredRefreshLease(input: {
+    marketplaceAppId: string;
+    oauthClientId: string;
+    expectedLocationId: string;
+    conversationProviderId: string;
+    marketplaceVersionId: string;
+    expiredBefore: string;
+  }): Promise<Every8dGhlOAuthExpiredRefreshLease | null>;
+  getRefreshState(input: Every8dGhlOAuthRefreshIdentity): Promise<Every8dGhlOAuthRefreshState | null>;
+  claimRefresh(input: Every8dGhlOAuthRefreshIdentity): Promise<Every8dGhlOAuthRefreshClaim | null>;
+  finalizeRefresh(input: Every8dGhlOAuthRefreshIdentity & {
+    priorCredentialRevision: number;
+    refreshLeaseId: string;
+    accessTokenCiphertext: string;
+    refreshTokenCiphertext: string;
+    encryptionKeyVersion: string;
+    tokenExpiresAt: string;
+    grantedScopes: string[];
+  }): Promise<boolean>;
+  failRefresh(input: Every8dGhlOAuthRefreshIdentity & {
+    priorCredentialRevision: number;
+    refreshLeaseId: string;
+    failureClass: Every8dGhlOAuthRefreshFailureClass;
+  }): Promise<boolean>;
   applyLifecycleEvent(input: {
     eventType: "INSTALL" | "UNINSTALL";
     marketplaceAppId: string;
@@ -269,6 +368,83 @@ const recoverableSchema = z.array(z.union([
   uuidSchema,
   z.object({ list_every8d_oauth_recoverable_v1: uuidSchema }).strict()
 ]));
+const refreshCandidateSchema: z.ZodType<Every8dGhlOAuthRefreshCandidate> = z.object({
+  id: uuidSchema,
+  app_namespace: z.literal("every8d_connect"),
+  marketplace_app_id: identifierSchema,
+  oauth_client_id: identifierSchema,
+  tenant_id: uuidSchema,
+  location_id: identifierSchema,
+  company_id: identifierSchema,
+  conversation_provider_id: identifierSchema,
+  channel: z.literal("sms"),
+  provider: z.literal("every8d"),
+  status: z.enum(["pending", "active"]),
+  installation_generation: z.number().int().positive(),
+  latest_lifecycle_event_type: z.literal("INSTALL"),
+  latest_lifecycle_version_id: identifierSchema,
+  credential_revision: z.number().int().positive(),
+  credential_state: z.literal("usable"),
+  encryption_key_version: identifierSchema,
+  token_expires_at: timestampSchema,
+  granted_scopes: z.array(z.string().min(1).refine((scope) => scope === scope.trim())).nonempty()
+}).strict();
+const expiredRefreshLeaseSchema: z.ZodType<Every8dGhlOAuthExpiredRefreshLease> = z.object({
+  id: uuidSchema,
+  app_namespace: z.literal("every8d_connect"),
+  marketplace_app_id: identifierSchema,
+  oauth_client_id: identifierSchema,
+  tenant_id: uuidSchema,
+  location_id: identifierSchema,
+  company_id: identifierSchema,
+  conversation_provider_id: identifierSchema,
+  channel: z.literal("sms"),
+  provider: z.literal("every8d"),
+  status: z.enum(["pending", "active"]),
+  installation_generation: z.number().int().positive(),
+  latest_lifecycle_event_type: z.literal("INSTALL"),
+  latest_lifecycle_version_id: identifierSchema,
+  credential_revision: z.number().int().positive(),
+  credential_state: z.literal("refreshing"),
+  refresh_lease_expires_at: timestampSchema
+}).strict();
+const refreshClaimSchema: z.ZodType<Omit<Every8dGhlOAuthRefreshClaim, "refreshTokenCiphertext"> & {
+  refreshTokenCiphertext: string;
+}> = z.object({
+  installationId: uuidSchema,
+  installationGeneration: z.number().int().positive(),
+  credentialRevision: z.number().int().positive(),
+  refreshLeaseId: uuidSchema,
+  refreshLeaseExpiresAt: timestampSchema,
+  refreshTokenCiphertext: byteaSchema,
+  encryptionKeyVersion: identifierSchema,
+  grantedScopes: z.array(z.string().min(1).refine((scope) => scope === scope.trim())).nonempty()
+}).strict();
+const refreshStateSchema: z.ZodType<Every8dGhlOAuthRefreshState> = z.object({
+  credential_revision: z.number().int().nonnegative(),
+  credential_state: z.enum(["none", "usable", "refreshing", "reauth_required"]),
+  refresh_lease_id: uuidSchema.nullable(),
+  refresh_failure_class: z.enum([
+    "invalid_grant", "token_response_rejected",
+    "refresh_outcome_unknown", "credential_persistence_failed"
+  ]).nullable(),
+  refresh_failed_at: timestampSchema.nullable()
+}).strict();
+
+const refreshCandidateColumns = [
+  "id", "app_namespace", "marketplace_app_id", "oauth_client_id", "tenant_id",
+  "location_id", "company_id", "conversation_provider_id", "channel", "provider",
+  "status", "installation_generation", "latest_lifecycle_event_type",
+  "latest_lifecycle_version_id", "credential_revision", "credential_state",
+  "encryption_key_version", "token_expires_at", "granted_scopes"
+].join(",");
+const expiredRefreshLeaseColumns = [
+  "id", "app_namespace", "marketplace_app_id", "oauth_client_id", "tenant_id",
+  "location_id", "company_id", "conversation_provider_id", "channel", "provider",
+  "status", "installation_generation", "latest_lifecycle_event_type",
+  "latest_lifecycle_version_id", "credential_revision", "credential_state",
+  "refresh_lease_expires_at"
+].join(",");
 
 function parseRpc<T>(schema: z.ZodType<T>, value: unknown): T {
   const parsed = schema.safeParse(value);
@@ -303,6 +479,124 @@ export function createEvery8dGhlOAuthRepository(
   }
 
   return {
+    async findRefreshCandidate(input) {
+      const { data, error } = await getClient().from("ghl_marketplace_installations")
+        .select(refreshCandidateColumns)
+        .eq("app_namespace", "every8d_connect")
+        .eq("marketplace_app_id", input.marketplaceAppId)
+        .eq("oauth_client_id", input.oauthClientId)
+        .eq("location_id", input.expectedLocationId)
+        .eq("conversation_provider_id", input.conversationProviderId)
+        .eq("channel", "sms").eq("provider", "every8d")
+        .eq("latest_lifecycle_event_type", "INSTALL")
+        .eq("latest_lifecycle_version_id", input.marketplaceVersionId)
+        .in("status", ["pending", "active"])
+        .not("company_id", "is", null)
+        .eq("credential_state", "usable")
+        .gt("credential_revision", 0)
+        .lte("token_expires_at", input.refreshDueBefore)
+        .order("token_expires_at", { ascending: true })
+        .order("id", { ascending: true })
+        .limit(1).maybeSingle();
+      if (error) throwDatabaseError(error);
+      return parseRpc(refreshCandidateSchema.nullable(), data);
+    },
+
+    async findExpiredRefreshLease(input) {
+      const { data, error } = await getClient().from("ghl_marketplace_installations")
+        .select(expiredRefreshLeaseColumns)
+        .eq("app_namespace", "every8d_connect")
+        .eq("marketplace_app_id", input.marketplaceAppId)
+        .eq("oauth_client_id", input.oauthClientId)
+        .eq("location_id", input.expectedLocationId)
+        .eq("conversation_provider_id", input.conversationProviderId)
+        .eq("channel", "sms").eq("provider", "every8d")
+        .eq("latest_lifecycle_event_type", "INSTALL")
+        .eq("latest_lifecycle_version_id", input.marketplaceVersionId)
+        .in("status", ["pending", "active"])
+        .not("company_id", "is", null)
+        .eq("credential_state", "refreshing")
+        .lte("refresh_lease_expires_at", input.expiredBefore)
+        .order("refresh_lease_expires_at", { ascending: true })
+        .order("id", { ascending: true })
+        .limit(1).maybeSingle();
+      if (error) throwDatabaseError(error);
+      return parseRpc(expiredRefreshLeaseSchema.nullable(), data);
+    },
+
+    async getRefreshState(input) {
+      const { data, error } = await getClient().from("ghl_marketplace_installations")
+        .select("credential_revision,credential_state,refresh_lease_id,refresh_failure_class,refresh_failed_at")
+        .eq("id", input.installationId)
+        .eq("app_namespace", "every8d_connect")
+        .eq("marketplace_app_id", input.marketplaceAppId)
+        .eq("oauth_client_id", input.oauthClientId)
+        .eq("tenant_id", input.tenantId)
+        .eq("location_id", input.locationId)
+        .eq("company_id", input.companyId)
+        .eq("conversation_provider_id", input.conversationProviderId)
+        .eq("channel", "sms").eq("provider", "every8d")
+        .eq("installation_generation", input.installationGeneration)
+        .eq("latest_lifecycle_version_id", input.marketplaceVersionId)
+        .limit(1).maybeSingle();
+      if (error) throwDatabaseError(error);
+      return parseRpc(refreshStateSchema.nullable(), data);
+    },
+
+    async claimRefresh(input) {
+      const data = await rpcScalar("claim_every8d_ghl_oauth_refresh_v1", {
+        input_installation_id: input.installationId,
+        input_marketplace_app_id: input.marketplaceAppId,
+        input_oauth_client_id: input.oauthClientId,
+        input_tenant_id: input.tenantId,
+        input_location_id: input.locationId,
+        input_company_id: input.companyId,
+        input_conversation_provider_id: input.conversationProviderId,
+        input_marketplace_version_id: input.marketplaceVersionId,
+        input_installation_generation: input.installationGeneration
+      });
+      const claim = parseRpc(refreshClaimSchema.nullable(), data);
+      return claim ? { ...claim, refreshTokenCiphertext: decodeBytea(claim.refreshTokenCiphertext) } : null;
+    },
+
+    async finalizeRefresh(input) {
+      return parseRpc(z.boolean(), await rpcScalar("finalize_every8d_ghl_oauth_refresh_v1", {
+        input_installation_id: input.installationId,
+        input_marketplace_app_id: input.marketplaceAppId,
+        input_oauth_client_id: input.oauthClientId,
+        input_tenant_id: input.tenantId,
+        input_location_id: input.locationId,
+        input_company_id: input.companyId,
+        input_conversation_provider_id: input.conversationProviderId,
+        input_marketplace_version_id: input.marketplaceVersionId,
+        input_installation_generation: input.installationGeneration,
+        input_prior_credential_revision: input.priorCredentialRevision,
+        input_refresh_lease_id: input.refreshLeaseId,
+        input_access_token_ciphertext: encodeBytea(input.accessTokenCiphertext),
+        input_refresh_token_ciphertext: encodeBytea(input.refreshTokenCiphertext),
+        input_encryption_key_version: input.encryptionKeyVersion,
+        input_token_expires_at: input.tokenExpiresAt,
+        input_granted_scopes: input.grantedScopes
+      }));
+    },
+
+    async failRefresh(input) {
+      return parseRpc(z.boolean(), await rpcScalar("fail_every8d_ghl_oauth_refresh_v1", {
+        input_installation_id: input.installationId,
+        input_marketplace_app_id: input.marketplaceAppId,
+        input_oauth_client_id: input.oauthClientId,
+        input_tenant_id: input.tenantId,
+        input_location_id: input.locationId,
+        input_company_id: input.companyId,
+        input_conversation_provider_id: input.conversationProviderId,
+        input_marketplace_version_id: input.marketplaceVersionId,
+        input_installation_generation: input.installationGeneration,
+        input_prior_credential_revision: input.priorCredentialRevision,
+        input_refresh_lease_id: input.refreshLeaseId,
+        input_failure_class: input.failureClass
+      }));
+    },
+
     async applyLifecycleEvent(input) {
       const data = await rpcScalar("apply_every8d_ghl_marketplace_lifecycle_v2", {
         input_event_type: input.eventType,

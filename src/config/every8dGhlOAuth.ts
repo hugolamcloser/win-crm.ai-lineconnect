@@ -9,6 +9,7 @@ const locationInstallationPathPattern = /^\/v2\/location\/([^/]+)\/integration\/
 
 export type Every8dGhlOAuthConfig = {
   enabled: boolean;
+  refreshEnabled: boolean;
   marketplaceAppId: string;
   oauthClientId: string;
   oauthClientSecret: string;
@@ -132,6 +133,7 @@ export function readEvery8dGhlOAuthConfig(
   const installationUrl = trimmed(source.EVERY8D_GHL_OAUTH_INSTALLATION_URL);
   return {
     enabled,
+    refreshEnabled: source.EVERY8D_GHL_OAUTH_REFRESH_ENABLED === "true",
     marketplaceAppId: trimmed(source.EVERY8D_GHL_MARKETPLACE_APP_ID),
     oauthClientId: trimmed(source.EVERY8D_GHL_OAUTH_CLIENT_ID),
     oauthClientSecret: source.EVERY8D_GHL_OAUTH_CLIENT_SECRET ?? "",
@@ -147,6 +149,13 @@ export function readEvery8dGhlOAuthConfig(
     activeKeyVersion: trimmed(source.EVERY8D_GHL_OAUTH_ACTIVE_KEY_VERSION),
     encryptionKeys
   };
+}
+
+export function assertEvery8dGhlOAuthRefreshConfig(config: Every8dGhlOAuthConfig): void {
+  if (!config.refreshEnabled) {
+    throw new Every8dGhlOAuthConfigurationError();
+  }
+  assertEvery8dGhlOAuthConfig(config);
 }
 
 export function assertEvery8dGhlOAuthConfig(config: Every8dGhlOAuthConfig): void {
