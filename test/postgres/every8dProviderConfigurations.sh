@@ -7,7 +7,22 @@ readonly migration=supabase/migrations/202609300001_every8d_provider_configurati
 readonly rollback=supabase/rollback/202609300001_every8d_provider_configurations.sql
 readonly proof=test/postgres/every8dProviderConfigurations.sql
 tmp_dir=$(mktemp -d)
-trap 'rm -rf "$tmp_dir"' EXIT
+declare -a background_pids=()
+readonly backend_wait_timeout_seconds=30
+readonly barrier_safety_timeout_seconds=90
+
+cleanup() {
+  psql_query -Atqc "select pg_terminate_backend(pid)
+    from pg_stat_activity
+    where application_name like 'c2\\_%' escape '\\'
+      and pid <> pg_backend_pid()" >/dev/null 2>&1 || true
+  for pid in "${background_pids[@]}"; do
+    kill "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+  done
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
 
 psql_query() {
   docker exec -i "$POSTGRES_CONTAINER_ID" psql -X -v ON_ERROR_STOP=1 -v VERBOSITY=terse -U postgres -d "$database" "$@"
@@ -41,21 +56,91 @@ expect_failure() {
   }
 }
 
+sanitize_diagnostic_stream() {
+  sed -E \
+    -e 's/([Bb][Ee][Aa][Rr][Ee][Rr][[:space:]]+)[A-Za-z0-9._~+\/=:-]+/\1<REDACTED>/g' \
+    -e 's/((access|refresh|id)_token|client_secret|password)([[:space:]]*[:=][[:space:]]*)[^[:space:],;]+/\1\3<REDACTED>/Ig'
+}
+
+report_backend_state() {
+  local application_name=$1
+  local evidence
+  evidence=$(psql_query -AtF $'\t' -c "select application_name, pid, state,
+      coalesce(wait_event_type, '<null>'), coalesce(wait_event, '<null>'),
+      left(regexp_replace(query, '[[:space:]]+', ' ', 'g'), 240)
+    from pg_stat_activity
+    where application_name = '$application_name'
+    order by pid" 2>/dev/null || true)
+  echo "pg_stat_activity for $application_name:" >&2
+  if [[ -n "$evidence" ]]; then
+    printf '%s\n' "$evidence" | sanitize_diagnostic_stream >&2
+  else
+    echo '<no matching backend>' >&2
+  fi
+}
+
+report_session_output() {
+  local application_name=$1
+  echo "sanitized stdout for $application_name:" >&2
+  if [[ -s "$tmp_dir/$application_name.out" ]]; then
+    sanitize_diagnostic_stream <"$tmp_dir/$application_name.out" >&2
+  else
+    echo '<empty>' >&2
+  fi
+  echo "sanitized stderr for $application_name:" >&2
+  if [[ -s "$tmp_dir/$application_name.err" ]]; then
+    sanitize_diagnostic_stream <"$tmp_dir/$application_name.err" >&2
+  else
+    echo '<empty>' >&2
+  fi
+}
+
+report_early_exit() {
+  local pid=$1
+  local application_name=$2
+  local label=$3
+  local status
+  set +e
+  wait "$pid"
+  status=$?
+  set -e
+  echo "FAIL: $label exited before reaching the expected backend state (application_name=$application_name, status=$status)" >&2
+  report_backend_state "$application_name"
+  report_session_output "$application_name"
+}
+
 wait_for_backend_state() {
   local application_name=$1
   local predicate=$2
   local label=$3
-  for _ in $(seq 1 160); do
+  local child_pid=$4
+  local related_application_name=${5:-}
+  local deadline=$((SECONDS + backend_wait_timeout_seconds))
+  while (( SECONDS < deadline )); do
+    if ! kill -0 "$child_pid" 2>/dev/null; then
+      report_early_exit "$child_pid" "$application_name" "$label"
+      if [[ -n "$related_application_name" ]]; then
+        report_backend_state "$related_application_name"
+        report_session_output "$related_application_name"
+      fi
+      return 1
+    fi
     if [[ "$(psql_query -Atqc "select exists (
-      select 1 from pg_stat_activity
-      where application_name = '$application_name' and ($predicate)
+      select 1 from pg_stat_activity a
+      where a.application_name = '$application_name' and ($predicate)
     )" | tr -d '\r')" == t ]]; then
       return
     fi
-    sleep 0.05
+    sleep 0.1
   done
-  echo "FAIL: timed out waiting for $label ($application_name)" >&2
-  exit 1
+  echo "FAIL: timed out waiting for $label (application_name=$application_name, process_alive=$(kill -0 "$child_pid" 2>/dev/null && echo yes || echo no))" >&2
+  report_backend_state "$application_name"
+  if [[ -n "$related_application_name" ]]; then
+    report_backend_state "$related_application_name"
+    report_session_output "$related_application_name"
+  fi
+  report_session_output "$application_name"
+  return 1
 }
 
 run_serialized_race() {
@@ -65,26 +150,80 @@ run_serialized_race() {
   local second_app=$4
   local second_sql=$5
   local second_outcome=$6
+  local barrier_key=$7
+  local barrier_app="${first_app}_barrier"
+  local barrier_sql="$tmp_dir/$barrier_app.sql"
 
-  psql_app "$first_app" -f "$first_sql" \
+  cat >"$barrier_sql" <<SQL
+select pg_advisory_lock($barrier_key);
+select pg_sleep($barrier_safety_timeout_seconds);
+SQL
+  psql_app "$barrier_app" <"$barrier_sql" \
+    >"$tmp_dir/$barrier_app.out" 2>"$tmp_dir/$barrier_app.err" &
+  local barrier_pid=$!
+  background_pids+=("$barrier_pid")
+  wait_for_backend_state "$barrier_app" \
+    "a.wait_event_type = 'Timeout' and a.wait_event = 'PgSleep'" \
+    "$label coordinator to hold its advisory barrier" "$barrier_pid"
+
+  psql_app "$first_app" -v "c2_barrier_key=$barrier_key" <"$first_sql" \
     >"$tmp_dir/$first_app.out" 2>"$tmp_dir/$first_app.err" &
   local first_pid=$!
+  background_pids+=("$first_pid")
   wait_for_backend_state "$first_app" \
-    "wait_event_type = 'Timeout' and wait_event = 'PgSleep'" \
-    "$label first transaction to hold its parent lock"
+    "a.wait_event_type = 'Lock'
+      and a.query like '%pg_advisory_xact_lock%'
+      and exists (
+        select 1 from pg_stat_activity coordinator
+        where coordinator.application_name = '$barrier_app'
+          and coordinator.pid = any(pg_blocking_pids(a.pid))
+      )" \
+    "$label first transaction to reach its post-parent-lock barrier" \
+    "$first_pid" "$barrier_app"
+  echo "$label first transaction reached its post-parent-lock barrier"
 
-  psql_app "$second_app" -f "$second_sql" \
+  psql_app "$second_app" <"$second_sql" \
     >"$tmp_dir/$second_app.out" 2>"$tmp_dir/$second_app.err" &
   local second_pid=$!
+  background_pids+=("$second_pid")
   wait_for_backend_state "$second_app" \
-    "wait_event_type = 'Lock'" \
-    "$label second transaction to block on the parent row"
+    "a.wait_event_type = 'Lock'
+      and exists (
+        select 1 from pg_stat_activity first_backend
+        where first_backend.application_name = '$first_app'
+          and first_backend.pid = any(pg_blocking_pids(a.pid))
+      )" \
+    "$label second transaction to block behind the first parent lock" \
+    "$second_pid" "$first_app"
+  echo "$label second transaction blocked behind the first parent lock"
 
-  wait "$first_pid" || {
-    echo "FAIL: $label first transaction failed" >&2
-    cat "$tmp_dir/$first_app.err" >&2
+  [[ "$(psql_query -Atqc "select pg_terminate_backend(pid)
+    from pg_stat_activity
+    where application_name = '$barrier_app'" | tr -d '\r')" == t ]] || {
+    echo "FAIL: $label could not release its advisory barrier" >&2
+    report_backend_state "$barrier_app"
     exit 1
   }
+  set +e
+  wait "$barrier_pid"
+  local barrier_status=$?
+  set -e
+  if [[ $barrier_status -eq 0 ]]; then
+    echo "FAIL: $label advisory barrier exited without the expected coordinator termination" >&2
+    report_session_output "$barrier_app"
+    exit 1
+  fi
+
+  set +e
+  wait "$first_pid"
+  local first_status=$?
+  set -e
+  if [[ $first_status -ne 0 ]]; then
+    echo "FAIL: $label first transaction failed" >&2
+    report_backend_state "$first_app"
+    report_session_output "$first_app"
+    exit 1
+  fi
 
   set +e
   wait "$second_pid"
@@ -92,7 +231,8 @@ run_serialized_race() {
   set -e
   if [[ "$second_outcome" == success && $second_status -ne 0 ]]; then
     echo "FAIL: $label second transaction failed" >&2
-    cat "$tmp_dir/$second_app.err" >&2
+    report_backend_state "$second_app"
+    report_session_output "$second_app"
     exit 1
   fi
   if [[ "$second_outcome" == eligibility_failure ]]; then
@@ -100,7 +240,8 @@ run_serialized_race() {
       && grep -Fq 'EVERY8D provider configuration parent is not currently eligible' \
         "$tmp_dir/$second_app.err" || {
       echo "FAIL: $label did not fail closed after lifecycle won" >&2
-      cat "$tmp_dir/$second_app.err" >&2
+      report_backend_state "$second_app"
+      report_session_output "$second_app"
       exit 1
     }
   fi
@@ -221,6 +362,52 @@ begin
 end;
 $$;
 
+-- This test-only helper models the future C4 parent-first lock contract. Keep
+-- its registration, ownership, lifecycle, generation and lock predicates in
+-- sync with protect_every8d_provider_configuration_v1().
+do $$
+declare
+  helper_definition text := lower(pg_get_functiondef(
+    'public.c2_test_lock_eligible_parent(uuid,integer)'::regprocedure
+  ));
+  production_definition text := lower(pg_get_functiondef(
+    'public.protect_every8d_provider_configuration_v1()'::regprocedure
+  ));
+  fragment text;
+begin
+  foreach fragment in array array[
+    'r.app_namespace = i.app_namespace',
+    'r.marketplace_app_id = i.marketplace_app_id',
+    'r.oauth_client_id = i.oauth_client_id',
+    'r.conversation_provider_id = i.conversation_provider_id',
+    'r.channel = i.channel',
+    'r.provider = i.provider',
+    'v.app_namespace = i.app_namespace',
+    'v.marketplace_version_id = i.latest_lifecycle_version_id',
+    'i.app_namespace = ''every8d_connect''',
+    'i.channel = ''sms''',
+    'i.provider = ''every8d''',
+    'i.company_id is not null',
+    'i.latest_lifecycle_event_type = ''install''',
+    'i.status in (''pending'', ''active'')',
+    'for share of i'
+  ] loop
+    if position(fragment in helper_definition) = 0
+      or position(fragment in production_definition) = 0 then
+      raise exception 'test parent-lock helper drifted from production eligibility: %',
+      fragment;
+    end if;
+  end loop;
+  if position('i.installation_generation = input_generation' in helper_definition) = 0
+    or position(
+      'i.installation_generation = new.installation_generation'
+      in production_definition
+    ) = 0 then
+    raise exception 'test parent-lock helper drifted from production generation eligibility';
+  end if;
+end
+$$;
+
 do $$
 begin
   if not exists (
@@ -334,7 +521,7 @@ insert into public.every8d_provider_configurations (
   decode('a1','hex'), decode('b2','hex'), 'synthetic-race-v1', 1,
   'event-race-501'
 );
-select pg_sleep(2);
+select pg_advisory_xact_lock(:c2_barrier_key);
 commit;
 SQL
 cat >"$tmp_dir/disable-config-first-b.sql" <<'SQL'
@@ -346,7 +533,7 @@ commit;
 SQL
 run_serialized_race 'initial INSERT versus disable (configuration first)' \
   c2_ins_disable_a "$tmp_dir/disable-config-first-a.sql" \
-  c2_ins_disable_b "$tmp_dir/disable-config-first-b.sql" success
+  c2_ins_disable_b "$tmp_dir/disable-config-first-b.sql" success 8200501
 assert_query "select i.status = 'disabled'
     and c.credential_state = 'disconnected'
     and c.credential_revision = 2
@@ -361,7 +548,7 @@ begin;
 update public.ghl_marketplace_installations
 set status = 'disabled'
 where id = '10000000-0000-4000-8000-000000000502';
-select pg_sleep(2);
+select pg_advisory_xact_lock(:c2_barrier_key);
 commit;
 SQL
 cat >"$tmp_dir/disable-lifecycle-first-b.sql" <<'SQL'
@@ -382,7 +569,7 @@ commit;
 SQL
 run_serialized_race 'initial INSERT versus disable (lifecycle first)' \
   c2_disable_ins_a "$tmp_dir/disable-lifecycle-first-a.sql" \
-  c2_disable_ins_b "$tmp_dir/disable-lifecycle-first-b.sql" eligibility_failure
+  c2_disable_ins_b "$tmp_dir/disable-lifecycle-first-b.sql" eligibility_failure 8200502
 assert_query "select i.status = 'disabled'
     and not exists (
       select 1 from public.every8d_provider_configurations c
@@ -405,7 +592,7 @@ set credential_state = 'configured',
     replaced_at = clock_timestamp(),
     disconnected_at = null
 where id = '20000000-0000-4000-8000-000000000503';
-select pg_sleep(2);
+select pg_advisory_xact_lock(:c2_barrier_key);
 commit;
 SQL
 cat >"$tmp_dir/uninstall-config-first-b.sql" <<'SQL'
@@ -431,7 +618,7 @@ commit;
 SQL
 run_serialized_race 'reconnect versus UNINSTALL (configuration first)' \
   c2_reconnect_un_a "$tmp_dir/uninstall-config-first-a.sql" \
-  c2_reconnect_un_b "$tmp_dir/uninstall-config-first-b.sql" success
+  c2_reconnect_un_b "$tmp_dir/uninstall-config-first-b.sql" success 8200503
 assert_query "select i.status = 'uninstalled'
     and i.installation_generation = 2
     and c.credential_state = 'disconnected'
@@ -463,7 +650,7 @@ select public.apply_every8d_ghl_marketplace_lifecycle_v2(
   '2090-06-01T00:01:00Z', 'c2_race_uninstall_504'
 );
 reset role;
-select pg_sleep(2);
+select pg_advisory_xact_lock(:c2_barrier_key);
 commit;
 SQL
 cat >"$tmp_dir/uninstall-lifecycle-first-b.sql" <<'SQL'
@@ -483,7 +670,7 @@ commit;
 SQL
 run_serialized_race 'reconnect versus UNINSTALL (lifecycle first)' \
   c2_un_reconnect_a "$tmp_dir/uninstall-lifecycle-first-a.sql" \
-  c2_un_reconnect_b "$tmp_dir/uninstall-lifecycle-first-b.sql" eligibility_failure
+  c2_un_reconnect_b "$tmp_dir/uninstall-lifecycle-first-b.sql" eligibility_failure 8200504
 assert_query "select i.status = 'uninstalled'
     and i.installation_generation = 2
     and c.credential_state = 'disconnected'
@@ -507,7 +694,7 @@ set site_url = 'synthetic-race-replaced.example.invalid',
     credential_revision = 2,
     replaced_at = clock_timestamp()
 where id = '20000000-0000-4000-8000-000000000505';
-select pg_sleep(2);
+select pg_advisory_xact_lock(:c2_barrier_key);
 commit;
 SQL
 cat >"$tmp_dir/generation-config-first-b.sql" <<'SQL'
@@ -519,7 +706,7 @@ commit;
 SQL
 run_serialized_race 'authority replacement versus generation advance (configuration first)' \
   c2_replace_gen_a "$tmp_dir/generation-config-first-a.sql" \
-  c2_replace_gen_b "$tmp_dir/generation-config-first-b.sql" success
+  c2_replace_gen_b "$tmp_dir/generation-config-first-b.sql" success 8200505
 assert_query "select i.installation_generation = 2
     and c.installation_generation = 1
     and c.credential_state = 'disconnected'
@@ -535,7 +722,7 @@ begin;
 update public.ghl_marketplace_installations
 set installation_generation = 2
 where id = '10000000-0000-4000-8000-000000000506';
-select pg_sleep(2);
+select pg_advisory_xact_lock(:c2_barrier_key);
 commit;
 SQL
 cat >"$tmp_dir/generation-lifecycle-first-b.sql" <<'SQL'
@@ -554,7 +741,7 @@ commit;
 SQL
 run_serialized_race 'authority replacement versus generation advance (lifecycle first)' \
   c2_gen_replace_a "$tmp_dir/generation-lifecycle-first-a.sql" \
-  c2_gen_replace_b "$tmp_dir/generation-lifecycle-first-b.sql" eligibility_failure
+  c2_gen_replace_b "$tmp_dir/generation-lifecycle-first-b.sql" eligibility_failure 8200506
 assert_query "select i.installation_generation = 2
     and c.installation_generation = 1
     and c.credential_state = 'disconnected'
