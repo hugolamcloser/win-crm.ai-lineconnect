@@ -239,7 +239,7 @@ begin
       and i.company_id is not null
       and i.latest_lifecycle_event_type = 'INSTALL'
       and i.status in ('pending', 'active')
-    for key share of i;
+    for share of i;
 
     if not found then
       raise exception 'EVERY8D provider configuration parent is not currently eligible'
@@ -301,7 +301,7 @@ begin
 end;
 $$;
 
-create trigger invalidate_every8d_provider_configuration_after_installation_update
+create trigger invalidate_every8d_provider_cfg_after_install_update
 after update of status, installation_generation on public.ghl_marketplace_installations
 for each row
 when (

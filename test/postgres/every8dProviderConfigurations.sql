@@ -71,7 +71,10 @@ create function pg_temp.insert_parent(
   input_event_type text default 'INSTALL',
   input_version_override text default null,
   input_app_override text default null,
-  input_provider_override text default null
+  input_provider_override text default null,
+  input_oauth_override text default null,
+  input_channel_override text default null,
+  input_sms_provider_override text default null
 )
 returns void
 language plpgsql
@@ -88,9 +91,11 @@ begin
     latest_lifecycle_event_type, latest_lifecycle_version_id
   ) values (
     input_id, 'every8d_connect', coalesce(input_app_override, context.marketplace_app_id),
-    context.oauth_client_id, input_tenant_id, input_location_id, input_company_id,
+    coalesce(input_oauth_override, context.oauth_client_id),
+    input_tenant_id, input_location_id, input_company_id,
     coalesce(input_provider_override, context.conversation_provider_id),
-    'sms', 'every8d', input_status, input_generation,
+    coalesce(input_channel_override, 'sms'),
+    coalesce(input_sms_provider_override, 'every8d'), input_status, input_generation,
     case when input_event_type is null then null else '2090-01-01T00:00:00Z'::timestamptz end,
     case when input_event_type is null then null else 'c2_' || replace(input_id::text, '-', '_') end,
     input_event_type,
@@ -245,6 +250,24 @@ select pg_temp.assert_true(
      and column_name = 'safesay_event_id'),
   'SafeSay EventID has no global default'
 );
+select pg_temp.assert_true(
+  exists (
+    select 1
+    from pg_trigger
+    where tgrelid = 'public.ghl_marketplace_installations'::regclass
+      and tgname = 'invalidate_every8d_provider_cfg_after_install_update'
+      and not tgisinternal
+  )
+  and length('invalidate_every8d_provider_cfg_after_install_update') <= 63,
+  'exact non-truncated lifecycle invalidation trigger name'
+);
+select pg_temp.assert_true(
+  position('for share of i' in lower(pg_get_functiondef(
+    'public.protect_every8d_provider_configuration_v1()'::regprocedure))) > 0
+  and position('for key share' in lower(pg_get_functiondef(
+    'public.protect_every8d_provider_configuration_v1()'::regprocedure))) = 0,
+  'parent eligibility uses lifecycle-conflicting FOR SHARE'
+);
 
 insert into public.tenants (id, location_id, ghl_provider_id, line_channel_id)
 values
@@ -258,12 +281,244 @@ values
   ('00000000-0000-4000-8000-000000000408', 'c2-unregistered-version', 'line-408', 'line-channel-408'),
   ('00000000-0000-4000-8000-000000000409', 'c2-lifecycle', 'line-409', 'line-channel-409'),
   ('00000000-0000-4000-8000-000000000410', 'c2-empty-lifecycle', 'line-410', 'line-channel-410'),
-  ('00000000-0000-4000-8000-000000000411', 'c2-rollback', 'line-411', 'line-channel-411');
+  ('00000000-0000-4000-8000-000000000411', 'c2-rollback', 'line-411', 'line-channel-411'),
+  ('00000000-0000-4000-8000-000000000412', 'c2-boundary-one', 'line-412', 'line-channel-412'),
+  ('00000000-0000-4000-8000-000000000413', 'c2-boundary-two', 'line-413', 'line-channel-413'),
+  ('00000000-0000-4000-8000-000000000414', 'c2-active', 'line-414', 'line-channel-414'),
+  ('00000000-0000-4000-8000-000000000415', 'c2-wrong-oauth', 'line-415', 'line-channel-415');
 
 select pg_temp.insert_parent(
   '10000000-0000-4000-8000-000000000401',
   '00000000-0000-4000-8000-000000000401',
   'c2-state', 'c2-company'
+);
+
+-- Constraint boundaries and explicit NULL/three-valued-logic bypass matrix.
+select pg_temp.reject(
+  $q$select pg_temp.insert_configuration(
+    '20000000-0000-4000-8000-000000000420',
+    '10000000-0000-4000-8000-000000000401', 0)$q$,
+  '23514', 'installation generation zero'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, timeout_ms,
+    credential_state, uid_ciphertext, password_ciphertext,
+    encryption_key_version, credential_revision
+  ) values (
+    '10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-c2.example.invalid', 99, 'configured',
+    decode('a1','hex'), decode('b2','hex'), 'synthetic-v1', 1
+  )$q$,
+  '23514', 'timeout below 100'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, timeout_ms,
+    credential_state, uid_ciphertext, password_ciphertext,
+    encryption_key_version, credential_revision
+  ) values (
+    '10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-c2.example.invalid', 60001, 'configured',
+    decode('a1','hex'), decode('b2','hex'), 'synthetic-v1', 1
+  )$q$,
+  '23514', 'timeout above 60000'
+);
+select pg_temp.reject(
+  $q$select pg_temp.insert_configuration(
+    '20000000-0000-4000-8000-000000000421',
+    '10000000-0000-4000-8000-000000000401', 1, 'unknown')$q$,
+  '23514', 'unknown credential state'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values (
+    '10000000-0000-4000-8000-000000000401', 1, '', 'configured',
+    decode('a1','hex'), decode('b2','hex'), 'synthetic-v1', 1
+  )$q$,
+  '23514', 'blank site URL'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values (
+    '10000000-0000-4000-8000-000000000401', 1,
+    ' synthetic-c2.example.invalid ', 'configured',
+    decode('a1','hex'), decode('b2','hex'), 'synthetic-v1', 1
+  )$q$,
+  '23514', 'site URL surrounding whitespace'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values (
+    '10000000-0000-4000-8000-000000000401', 1,
+    repeat('x', 2049), 'configured', decode('a1','hex'), decode('b2','hex'),
+    'synthetic-v1', 1
+  )$q$,
+  '23514', 'site URL over 2048 characters'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values (
+    '10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-c2.example.invalid', 'configured', decode('a1','hex'),
+    decode('b2','hex'), 'synthetic-v1', 0
+  )$q$,
+  '23514', 'credential revision zero'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values (
+    '10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-c2.example.invalid', 'configured', decode('a1','hex'),
+    decode('b2','hex'), 'bad key', 1
+  )$q$,
+  '23514', 'key version invalid characters'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values (
+    '10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-c2.example.invalid', 'configured', decode('a1','hex'),
+    decode('b2','hex'), '', 1
+  )$q$,
+  '23514', 'blank key version in secret-bearing state'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values (
+    '10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-c2.example.invalid', 'configured', decode('a1','hex'),
+    decode('b2','hex'), repeat('k', 129), 1
+  )$q$,
+  '23514', 'key version over 128 characters'
+);
+
+select pg_temp.insert_parent(
+  '10000000-0000-4000-8000-000000000412',
+  '00000000-0000-4000-8000-000000000412',
+  'c2-boundary-one', 'c2-company'
+);
+insert into public.every8d_provider_configurations (
+  id, installation_id, installation_generation, site_url, timeout_ms,
+  credential_state, uid_ciphertext, password_ciphertext,
+  encryption_key_version, credential_revision
+) values (
+  '20000000-0000-4000-8000-000000000412',
+  '10000000-0000-4000-8000-000000000412', 1, repeat('x', 2048), 100,
+  'configured', decode('a1','hex'), decode('b2','hex'), repeat('K', 128), 1
+);
+select pg_temp.assert_true(
+  (select installation_generation = 1 and timeout_ms = 100
+     and char_length(site_url) = 2048
+     and credential_revision = 1
+     and char_length(encryption_key_version) = 128
+   from public.every8d_provider_configurations
+   where id = '20000000-0000-4000-8000-000000000412'),
+  'generation/revision one, timeout 100, and URL/key maximums accepted'
+);
+select pg_temp.insert_parent(
+  '10000000-0000-4000-8000-000000000413',
+  '00000000-0000-4000-8000-000000000413',
+  'c2-boundary-two', 'c2-company'
+);
+insert into public.every8d_provider_configurations (
+  id, installation_id, installation_generation, site_url, timeout_ms,
+  credential_state, uid_ciphertext, password_ciphertext,
+  encryption_key_version, credential_revision
+) values (
+  '20000000-0000-4000-8000-000000000413',
+  '10000000-0000-4000-8000-000000000413', 1,
+  'synthetic-boundary.example.invalid', 60000, 'configured',
+  decode('a1','hex'), decode('b2','hex'), 'synthetic-v1', 1
+);
+select pg_temp.assert_true(
+  (select timeout_ms = 60000
+   from public.every8d_provider_configurations
+   where id = '20000000-0000-4000-8000-000000000413'),
+  'timeout 60000 accepted'
+);
+
+-- NULL must not turn any security invariant into an accepted UNKNOWN check.
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values ('10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-null.example.invalid', 'configured', null,
+    decode('b2','hex'), 'synthetic-v1', 1)$q$,
+  '23514', 'NULL matrix: UID tuple member'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values ('10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-null.example.invalid', 'configured', decode('a1','hex'),
+    null, 'synthetic-v1', 1)$q$,
+  '23514', 'NULL matrix: password tuple member'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values ('10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-null.example.invalid', 'configured', decode('a1','hex'),
+    decode('b2','hex'), null, 1)$q$,
+  '23514', 'NULL matrix: key-version tuple member'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version,
+    credential_revision, last_validation_at
+  ) values ('10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-null.example.invalid', 'validated', decode('a1','hex'),
+    decode('b2','hex'), 'synthetic-v1', 1, null)$q$,
+  '23514', 'NULL matrix: validated timestamp'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version,
+    credential_revision, last_validation_at, validation_failure_class
+  ) values ('10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-null.example.invalid', 'invalid', decode('a1','hex'),
+    decode('b2','hex'), 'synthetic-v1', 1, clock_timestamp(), null)$q$,
+  '23514', 'NULL matrix: invalid failure class'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version,
+    credential_revision, validation_failure_class
+  ) values ('10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-null.example.invalid', 'configured', decode('a1','hex'),
+    decode('b2','hex'), 'synthetic-v1', 1, '')$q$,
+  '23514', 'NULL matrix: failure constraint cannot be bypassed by state metadata'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version,
+    credential_revision, safesay_enabled, safesay_event_id
+  ) values ('10000000-0000-4000-8000-000000000401', 1,
+    'synthetic-null.example.invalid', 'configured', decode('a1','hex'),
+    decode('b2','hex'), 'synthetic-v1', 1, true, null)$q$,
+  '23514', 'NULL matrix: SafeSay enabled EventID'
 );
 
 -- Initial shape, state transitions, validation metadata, and structural revisions.
@@ -569,6 +824,33 @@ select pg_temp.reject(
     '10000000-0000-4000-8000-000000000408', 1)$q$,
   '23514', 'unregistered lifecycle version'
 );
+select pg_temp.insert_parent(
+  '10000000-0000-4000-8000-000000000415',
+  '00000000-0000-4000-8000-000000000415',
+  'c2-wrong-oauth', 'c2-company', 'pending', 1, 'INSTALL', null, null,
+  null, 'c2.wrong.oauth.client'
+);
+select pg_temp.reject(
+  $q$select pg_temp.insert_configuration(
+    '20000000-0000-4000-8000-000000000415',
+    '10000000-0000-4000-8000-000000000415', 1)$q$,
+  '23514', 'wrong OAuth client registration'
+);
+select pg_temp.insert_parent(
+  '10000000-0000-4000-8000-000000000414',
+  '00000000-0000-4000-8000-000000000414',
+  'c2-active', 'c2-company', 'active'
+);
+select pg_temp.insert_configuration(
+  '20000000-0000-4000-8000-000000000414',
+  '10000000-0000-4000-8000-000000000414', 1
+);
+select pg_temp.assert_true(
+  (select credential_state = 'configured'
+   from public.every8d_provider_configurations
+   where id = '20000000-0000-4000-8000-000000000414'),
+  'active parent is eligible (pending acceptance is proven by state fixture)'
+);
 
 -- RLS, grants, and non-executable trigger functions.
 set local role anon;
@@ -576,11 +858,47 @@ select pg_temp.reject(
   'select count(*) from public.every8d_provider_configurations',
   '42501', 'anon select'
 );
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values ('10000000-0000-4000-8000-000000000401', 1,
+    'acl.example.invalid', 'configured', decode('a1','hex'),
+    decode('b2','hex'), 'synthetic-v1', 1)$q$,
+  '42501', 'anon insert'
+);
+select pg_temp.reject(
+  $q$update public.every8d_provider_configurations
+     set safesay_event_id = 'anon-change'$q$,
+  '42501', 'anon update'
+);
+select pg_temp.reject(
+  'delete from public.every8d_provider_configurations',
+  '42501', 'anon delete'
+);
 reset role;
 set local role authenticated;
 select pg_temp.reject(
   'select count(*) from public.every8d_provider_configurations',
   '42501', 'authenticated select'
+);
+select pg_temp.reject(
+  $q$insert into public.every8d_provider_configurations (
+    installation_id, installation_generation, site_url, credential_state,
+    uid_ciphertext, password_ciphertext, encryption_key_version, credential_revision
+  ) values ('10000000-0000-4000-8000-000000000401', 1,
+    'acl.example.invalid', 'configured', decode('a1','hex'),
+    decode('b2','hex'), 'synthetic-v1', 1)$q$,
+  '42501', 'authenticated insert'
+);
+select pg_temp.reject(
+  $q$update public.every8d_provider_configurations
+     set safesay_event_id = 'authenticated-change'$q$,
+  '42501', 'authenticated update'
+);
+select pg_temp.reject(
+  'delete from public.every8d_provider_configurations',
+  '42501', 'authenticated delete'
 );
 reset role;
 set local role service_role;
@@ -610,7 +928,13 @@ select pg_temp.reject(
 reset role;
 select pg_temp.assert_true(
   not has_table_privilege('anon', 'public.every8d_provider_configurations', 'SELECT')
+  and not has_table_privilege('anon', 'public.every8d_provider_configurations', 'INSERT')
+  and not has_table_privilege('anon', 'public.every8d_provider_configurations', 'UPDATE')
+  and not has_table_privilege('anon', 'public.every8d_provider_configurations', 'DELETE')
   and not has_table_privilege('authenticated', 'public.every8d_provider_configurations', 'SELECT')
+  and not has_table_privilege('authenticated', 'public.every8d_provider_configurations', 'INSERT')
+  and not has_table_privilege('authenticated', 'public.every8d_provider_configurations', 'UPDATE')
+  and not has_table_privilege('authenticated', 'public.every8d_provider_configurations', 'DELETE')
   and has_table_privilege('service_role', 'public.every8d_provider_configurations', 'SELECT')
   and not has_table_privilege('service_role', 'public.every8d_provider_configurations', 'INSERT')
   and not has_table_privilege('service_role', 'public.every8d_provider_configurations', 'UPDATE')
@@ -624,6 +948,26 @@ select pg_temp.assert_true(
   and not has_function_privilege(
     'service_role', 'public.invalidate_every8d_provider_configuration_v1()', 'EXECUTE'),
   'table ACL and trigger function execution boundary'
+);
+select pg_temp.assert_true(
+  not exists (
+    select 1
+    from pg_proc p
+    cross join lateral aclexplode(
+      coalesce(p.proacl, acldefault('f', p.proowner))
+    ) a
+    where p.oid in (
+      'public.protect_every8d_provider_configuration_v1()'::regprocedure,
+      'public.invalidate_every8d_provider_configuration_v1()'::regprocedure
+    )
+      and a.grantee = 0
+      and a.privilege_type = 'EXECUTE'
+  )
+  and not has_function_privilege(
+    'anon', 'public.invalidate_every8d_provider_configuration_v1()', 'EXECUTE')
+  and not has_function_privilege(
+    'authenticated', 'public.protect_every8d_provider_configuration_v1()', 'EXECUTE'),
+  'PUBLIC, anon, authenticated, and service_role cannot execute trigger functions'
 );
 
 -- Lifecycle with an empty C2 table remains valid.

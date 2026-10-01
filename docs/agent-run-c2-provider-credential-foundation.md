@@ -1,5 +1,37 @@
 # Agent run log: C2 provider credential foundation
 
+## Security review remediation
+
+- Original C2 commit: `a18220c823058977e2f0f6b3b4135b9bb15d832f`
+- Finding: `FOR KEY SHARE` did not conflict with the `FOR NO KEY UPDATE` row
+  lock taken by lifecycle status/generation updates.
+- Fix: use `FOR SHARE`, the weakest PostgreSQL 17 row lock that conflicts with
+  `FOR NO KEY UPDATE`.
+- Lock order: parent installation row, then provider configuration row. Future
+  C4 mutation RPCs must lock and revalidate the exact parent before touching
+  the configuration; the C2 trigger remains a fail-closed backstop.
+- Concurrency proof: deterministic two-session coverage in both orderings for
+  insert/disable, reconnect/UNINSTALL, and replacement/generation advance,
+  with final committed-state assertions.
+- Coverage remediation: constraint boundaries, NULL/three-valued-logic cases,
+  OAuth registration mismatch, active-parent acceptance, and full anon /
+  authenticated / service_role ACL matrices.
+- Trigger rename:
+  `invalidate_every8d_provider_configuration_after_installation_update` to
+  `invalidate_every8d_provider_cfg_after_install_update` (52 bytes).
+- PostgreSQL 17.11 remediation result: all six two-session races passed. The
+  configuration-first outcomes committed only before lifecycle scrubbed the
+  row; the lifecycle-first outcomes rejected the waiting authority mutation.
+  Final disabled/uninstalled/stale-generation rows contained no credential
+  ciphertext, key version, or enabled SafeSay state.
+- Existing PostgreSQL regression result: durable claim, controlled-live,
+  Marketplace ownership, public OAuth, and OAuth refresh suites passed. The
+  Marketplace lifecycle SQL/order/replay/rollback sections passed; its existing
+  FIFO lock observer remains a Windows Git Bash platform limitation. The C2
+  suite independently observed the required parent-row lock waits on this host.
+- Scope remains C2-only; no runtime TypeScript, environment, Railway, LINE,
+  Phase 2F, provider call, or real credential change.
+
 ## Task identification
 
 - GitHub task: EVERY8D C2 provider credential foundation implementation
@@ -96,23 +128,25 @@ live external API.
 | npm run typecheck | Passed | TypeScript runtime unchanged |
 | npm test | Passed | 636 passed; 0 failed/skipped |
 | npm run build | Passed | TypeScript compilation successful |
-| C2 PostgreSQL proof | Passed | PostgreSQL 17.11 disposable cluster |
+| C2 PostgreSQL proof | Passed | PostgreSQL 17.11; full schema/ACL/rollback proof plus all six deterministic lifecycle races |
 | Public OAuth bootstrap proof | Passed | Existing migration/runtime boundary unchanged |
 | OAuth refresh foundation proof | Passed | Existing C1a behavior and concurrency unchanged |
 | Durable SMS claim concurrency | Passed | One winner and one durable row |
 | Controlled-live authorization concurrency | Passed | Constraints, one winner, and atomic rollback |
-| Marketplace lifecycle SQL/order proof | Passed | Stale/replay/rollback proof passed before local lock-observer stage |
+| Marketplace lifecycle SQL/order proof | Passed with platform limitation | Stale/replay/rollback passed; existing FIFO observer cannot retain its connection through Git Bash on Windows |
 | bash -n test/postgres/every8dProviderConfigurations.sh | Passed | Git for Windows Bash |
 | git diff --check | Passed | Complete staged diff |
 
 ## Budget and stop-rule status
 
 - Active coding tasks: 1
-- Implementation correction loops used: 2
+- Original implementation correction loops used: 2; remediation continuation
+  was explicitly authorized after the required stop
 - Reviewer correction loops used: 0
 - Repeated errors or failed approaches: none; one Windows named-pipe observer
   could not retain/observe the existing two-session lifecycle test connection
-- Stop rule triggered: no
+- Stop rule triggered: yes during the first remediation session; work resumed
+  only through the explicit continuation gate
 
 ## Unresolved decisions
 

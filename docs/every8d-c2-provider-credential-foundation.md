@@ -57,7 +57,19 @@ semantic failure-class vocabulary.
 ## Parent and generation isolation
 
 Every insert and every update that produces a secret-bearing state rechecks the
-current parent under a row lock. The exact generation must match, and the
+current parent under a `FOR SHARE` row lock. PostgreSQL uses `FOR NO KEY UPDATE`
+for the lifecycle's non-key updates of status and installation_generation.
+`FOR SHARE` is the weakest row-lock mode that conflicts with that mutation;
+`FOR KEY SHARE` is insufficient because it is compatible with `FOR NO KEY
+UPDATE`.
+
+The frozen production lock order is parent installation row, then provider
+configuration row. Future C4 mutation RPCs must resolve the exact installation,
+take `FOR SHARE` on the parent, revalidate eligibility and generation, and only
+then lock or mutate the configuration. The C2 trigger defensively takes and
+rechecks the same parent lock as a structural/security backstop. Direct
+owner-level child-first updates are unsupported; they may serialize or abort,
+but must never commit stale secrets. The exact generation must match, and the
 parent must:
 
 - be the registered every8d_connect / sms / every8d installation;
@@ -69,8 +81,8 @@ parent must:
 - have status pending or active.
 
 Disabled, uninstalled, stale-generation, unregistered-version, and mismatched
-identity rows fail closed. A later generation receives no row and inherits no
-credentials.
+identity rows fail closed under that serialization protocol. A later generation
+receives no row and inherits no credentials.
 
 ## Revision and mutation protection
 
@@ -108,11 +120,17 @@ parent lifecycle transaction, including the existing OAuth scrub.
 
 Exact lifecycle replay and an already-disconnected row are inert.
 
-PostgreSQL limits identifiers to 63 bytes, so the requested lifecycle trigger
-declaration is stored in the catalog as
-invalidate_every8d_provider_configuration_after_installation_up. The forward
-and rollback SQL both use the requested full spelling, which PostgreSQL resolves
-to that same deterministic identifier.
+The lifecycle trigger is explicitly named
+invalidate_every8d_provider_cfg_after_install_update (52 bytes), avoiding any
+dependence on PostgreSQL identifier truncation.
+
+The disposable PostgreSQL 17 proof exercises both transaction orderings for
+initial insert versus disable, reconnect versus UNINSTALL, and authority
+replacement versus generation advance. If configuration wins the parent lock,
+lifecycle waits and then scrubs the committed old-generation row. If lifecycle
+wins, the C4-style parent-first mutation waits and then rejects the now
+ineligible or stale parent. Every proof inspects the final committed state; no
+disabled, uninstalled, or stale generation retains credential ciphertext.
 
 ## SafeSay boundary
 
@@ -135,7 +153,8 @@ browser-readable surface is added.
 
 - C3 may add approved settings presentation and collection; C2 adds no route.
 - C4 owns encryption/key selection, canonical URL validation, expected-revision
-  CAS, and narrow mutation RPCs.
+  CAS, and narrow mutation RPCs. Those RPCs must use the parent-first `FOR
+  SHARE` lock protocol described above; C2 does not implement C4 CAS.
 - C5 owns provider credential validation and semantic failure classes.
 - Runtime provider resolution, activation, SafeSay behavior, Phase 2F
   enablement, and external calls require separate authorization.

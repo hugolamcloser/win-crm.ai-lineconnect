@@ -132,7 +132,7 @@ jobs:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: bash test/postgres/ghlOAuthRefreshFoundation.sh
 
-      - name: Prove EVERY8D provider credential foundation and guarded rollback
+      - name: Prove EVERY8D provider credential foundation, concurrency, and guarded rollback
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: bash test/postgres/every8dProviderConfigurations.sh

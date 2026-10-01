@@ -12,7 +12,7 @@ begin
 end;
 $$;
 
-drop trigger invalidate_every8d_provider_configuration_after_installation_update
+drop trigger invalidate_every8d_provider_cfg_after_install_update
   on public.ghl_marketplace_installations;
 drop trigger protect_every8d_provider_configuration
   on public.every8d_provider_configurations;
