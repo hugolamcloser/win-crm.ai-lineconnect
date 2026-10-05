@@ -4,6 +4,24 @@ begin;
 set local lock_timeout = '5s';
 lock table public.ghl_marketplace_installations in share row exclusive mode;
 
+do $$
+begin
+  if exists (
+    select 1
+    from pg_catalog.pg_class c
+    where c.oid in (
+      'public.ghl_marketplace_installations'::regclass,
+      'public.ghl_marketplace_app_registrations'::regclass,
+      'public.ghl_marketplace_app_version_registrations'::regclass,
+      'public.ghl_marketplace_oauth_bootstraps'::regclass
+    ) and c.relowner <> current_user::regrole
+  ) then
+    raise exception 'C3a migration requires the existing Marketplace table owner'
+      using errcode = '42501';
+  end if;
+end;
+$$;
+
 create table public.every8d_settings_enrollment_grants (
   id uuid primary key default gen_random_uuid(),
   token_hash bytea not null,
@@ -27,10 +45,8 @@ create table public.every8d_settings_enrollment_grants (
     foreign key (installation_id)
     references public.ghl_marketplace_installations(id)
     on update restrict on delete restrict,
-  constraint every8d_settings_enrollment_grants_oauth_bootstrap_fk
-    foreign key (oauth_bootstrap_reference)
-    references public.ghl_marketplace_oauth_bootstraps(id)
-    on update restrict on delete restrict,
+  constraint every8d_settings_enrollment_grants_oauth_bootstrap_key
+    unique (oauth_bootstrap_reference),
   constraint every8d_settings_enrollment_grants_token_hash_key unique (token_hash),
   constraint every8d_settings_enrollment_grants_generation_check
     check (installation_generation > 0),
@@ -55,6 +71,9 @@ create table public.every8d_settings_enrollment_grants (
     check (
       (installer_user_hmac is null and installer_user_hmac_key_version is null)
       or (
+        installer_user_hmac is not null
+        and installer_user_hmac_key_version is not null
+        and
         installer_user_hmac ~ '^[0-9a-f]{64}$'
         and installer_user_hmac_key_version ~ '^[A-Za-z0-9_.-]{1,128}$'
       )
@@ -64,6 +83,9 @@ create table public.every8d_settings_enrollment_grants (
       (
         method = 'install_callback'
         and pinned_normalized_email is null
+        and oauth_bootstrap_reference is not null
+        and installer_user_hmac is not null
+        and installer_user_hmac_key_version is not null
         and operator_issuer is null
         and operator_approver is null
         and operator_case_reference is null
@@ -74,6 +96,8 @@ create table public.every8d_settings_enrollment_grants (
         method in ('operator_initial', 'operator_recovery')
         and pinned_normalized_email is not null
         and oauth_bootstrap_reference is null
+        and installer_user_hmac is null
+        and installer_user_hmac_key_version is null
         and operator_issuer is not null
         and operator_issuer = btrim(operator_issuer)
         and octet_length(operator_issuer) between 1 and 128
@@ -140,6 +164,8 @@ create table public.every8d_settings_administrators (
     foreign key (enrollment_grant_id)
     references public.every8d_settings_enrollment_grants(id)
     on update restrict on delete restrict,
+  constraint every8d_settings_administrators_enrollment_grant_key
+    unique (enrollment_grant_id),
   constraint every8d_settings_administrators_authorization_snapshot_key
     unique (id, installation_id, installation_generation),
   constraint every8d_settings_administrators_generation_check
@@ -167,6 +193,9 @@ create table public.every8d_settings_administrators (
     check (
       (installer_user_hmac is null and installer_user_hmac_key_version is null)
       or (
+        installer_user_hmac is not null
+        and installer_user_hmac_key_version is not null
+        and
         installer_user_hmac ~ '^[0-9a-f]{64}$'
         and installer_user_hmac_key_version ~ '^[A-Za-z0-9_.-]{1,128}$'
       )
@@ -385,6 +414,9 @@ begin
       and g.method = new.enrollment_method
       and g.consumed_at is not null
       and g.revoked_at is null
+      and g.installer_user_hmac is not distinct from new.installer_user_hmac
+      and g.installer_user_hmac_key_version
+        is not distinct from new.installer_user_hmac_key_version
       and (
         (g.method = 'install_callback' and g.pinned_normalized_email is null)
         or g.pinned_normalized_email = new.normalized_email
@@ -506,6 +538,233 @@ create trigger protect_every8d_settings_session
 before insert or update or delete on public.every8d_settings_sessions
 for each row execute function public.protect_every8d_settings_session_v1();
 
+create function public.issue_every8d_settings_install_callback_enrollment_grant_v1(
+  input_installation_id uuid,
+  input_installation_generation integer,
+  input_oauth_bootstrap_reference uuid,
+  input_token_hash bytea,
+  input_expires_at timestamptz,
+  input_installer_user_hmac text,
+  input_installer_user_hmac_key_version text
+)
+returns table(grant_id uuid, created_at timestamptz, expires_at timestamptz)
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  bootstrap public.ghl_marketplace_oauth_bootstraps%rowtype;
+  issued_at timestamptz;
+begin
+  if input_oauth_bootstrap_reference is null then
+    raise exception 'EVERY8D install callback bootstrap is invalid'
+      using errcode = '23514';
+  end if;
+  if input_token_hash is null or octet_length(input_token_hash) <> 32 then
+    raise exception 'EVERY8D install callback enrollment grant hash is invalid'
+      using errcode = '23514';
+  end if;
+  if input_installer_user_hmac is null
+    or input_installer_user_hmac !~ '^[0-9a-f]{64}$'
+    or input_installer_user_hmac_key_version is null
+    or input_installer_user_hmac_key_version
+      !~ '^[A-Za-z0-9_.-]{1,128}$' then
+    raise exception 'EVERY8D install callback installer identity is invalid'
+      using errcode = '23514';
+  end if;
+  if input_expires_at is null or not isfinite(input_expires_at) then
+    raise exception 'EVERY8D install callback enrollment grant expiry is invalid'
+      using errcode = '23514';
+  end if;
+
+  -- Succeeded bootstrap identity is immutable. Read it without a row lock before
+  -- the installation parent so this operation cannot invert an OAuth
+  -- bootstrap-to-parent lock path.
+  select b.* into bootstrap
+  from public.ghl_marketplace_oauth_bootstraps b
+  where b.id = input_oauth_bootstrap_reference;
+
+  if not found
+    or bootstrap.status is distinct from 'succeeded'
+    or bootstrap.app_namespace is distinct from 'every8d_connect'
+    or bootstrap.claimed_installation_id is distinct from input_installation_id
+    or bootstrap.claimed_installation_generation
+      is distinct from input_installation_generation
+    or bootstrap.target_installation_generation
+      is distinct from input_installation_generation then
+    raise exception 'EVERY8D install callback bootstrap provenance is invalid'
+      using errcode = '23514';
+  end if;
+
+  perform public.assert_every8d_settings_installation_eligible_v1(
+    input_installation_id, input_installation_generation
+  );
+
+  perform 1
+  from public.ghl_marketplace_installations i
+  where i.id = input_installation_id
+    and i.installation_generation = input_installation_generation
+    and i.app_namespace = bootstrap.app_namespace
+    and i.location_id = bootstrap.expected_location_id
+    and i.latest_lifecycle_version_id = bootstrap.marketplace_version_id;
+
+  if not found then
+    raise exception 'EVERY8D install callback bootstrap context is invalid'
+      using errcode = '23514';
+  end if;
+
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+    'install_callback:' || input_oauth_bootstrap_reference::text,
+    73001
+  ));
+
+  if exists (
+    select 1 from public.every8d_settings_enrollment_grants g
+    where g.oauth_bootstrap_reference = input_oauth_bootstrap_reference
+  ) then
+    raise exception 'EVERY8D install callback bootstrap was already used'
+      using errcode = '23514';
+  end if;
+
+  issued_at := clock_timestamp();
+  if input_expires_at <= issued_at
+    or input_expires_at > issued_at + interval '15 minutes' then
+    raise exception 'EVERY8D install callback enrollment grant expiry is invalid'
+      using errcode = '23514';
+  end if;
+
+  return query
+  insert into public.every8d_settings_enrollment_grants (
+    token_hash, installation_id, installation_generation, method,
+    oauth_bootstrap_reference, installer_user_hmac,
+    installer_user_hmac_key_version, created_at, expires_at
+  ) values (
+    input_token_hash, input_installation_id, input_installation_generation,
+    'install_callback', input_oauth_bootstrap_reference,
+    input_installer_user_hmac, input_installer_user_hmac_key_version,
+    issued_at, input_expires_at
+  )
+  returning id, every8d_settings_enrollment_grants.created_at,
+    every8d_settings_enrollment_grants.expires_at;
+end;
+$$;
+
+create function public.redeem_every8d_settings_enrollment_grant_v1(
+  input_token_hash bytea,
+  input_verified_normalized_email text,
+  input_email_pseudonym text
+)
+returns table(
+  administrator_id uuid,
+  grant_id uuid,
+  installation_id uuid,
+  installation_generation integer,
+  created_at timestamptz
+)
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  discovered public.every8d_settings_enrollment_grants%rowtype;
+  locked_grant public.every8d_settings_enrollment_grants%rowtype;
+  redeemed_at timestamptz;
+  created_administrator_id uuid;
+  administrator_created_at timestamptz;
+begin
+  if input_token_hash is null or octet_length(input_token_hash) <> 32 then
+    raise exception 'EVERY8D settings enrollment grant hash is invalid'
+      using errcode = '23514';
+  end if;
+  if input_verified_normalized_email is null
+    or input_verified_normalized_email <> btrim(input_verified_normalized_email)
+    or octet_length(input_verified_normalized_email) not between 3 and 254
+    or input_verified_normalized_email ~ '[[:cntrl:]]'
+    or length(input_verified_normalized_email)
+      - length(replace(input_verified_normalized_email, '@', '')) <> 1
+    or position('@' in input_verified_normalized_email) <= 1
+    or position('@' in input_verified_normalized_email)
+      >= length(input_verified_normalized_email) then
+    raise exception 'EVERY8D settings verified email is structurally invalid'
+      using errcode = '23514';
+  end if;
+  if input_email_pseudonym is null
+    or input_email_pseudonym <> btrim(input_email_pseudonym)
+    or octet_length(input_email_pseudonym) not between 1 and 128
+    or input_email_pseudonym !~ '^[A-Za-z0-9_.:-]+$' then
+    raise exception 'EVERY8D settings email pseudonym is invalid'
+      using errcode = '23514';
+  end if;
+
+  -- Discovery is deliberately non-locking. The exact parent is always locked
+  -- before the grant row is locked and all grant fields are revalidated later.
+  select g.* into discovered
+  from public.every8d_settings_enrollment_grants g
+  where g.token_hash = input_token_hash;
+
+  if not found then
+    raise exception 'EVERY8D settings enrollment grant is invalid'
+      using errcode = '23514';
+  end if;
+
+  perform public.assert_every8d_settings_installation_eligible_v1(
+    discovered.installation_id, discovered.installation_generation
+  );
+
+  select g.* into locked_grant
+  from public.every8d_settings_enrollment_grants g
+  where g.id = discovered.id
+  for update of g;
+
+  redeemed_at := clock_timestamp();
+  if not found
+    or locked_grant.token_hash is distinct from input_token_hash
+    or locked_grant.installation_id is distinct from discovered.installation_id
+    or locked_grant.installation_generation
+      is distinct from discovered.installation_generation
+    or locked_grant.consumed_at is not null
+    or locked_grant.revoked_at is not null
+    or locked_grant.expires_at <= redeemed_at
+    or (
+      locked_grant.method in ('operator_initial', 'operator_recovery')
+      and locked_grant.pinned_normalized_email
+        is distinct from input_verified_normalized_email
+    )
+    or (
+      locked_grant.method = 'install_callback'
+      and (
+        locked_grant.oauth_bootstrap_reference is null
+        or locked_grant.installer_user_hmac is null
+        or locked_grant.installer_user_hmac_key_version is null
+      )
+    ) then
+    raise exception 'EVERY8D settings enrollment grant is not redeemable'
+      using errcode = '23514';
+  end if;
+
+  update public.every8d_settings_enrollment_grants
+  set consumed_at = redeemed_at
+  where id = locked_grant.id;
+
+  insert into public.every8d_settings_administrators (
+    installation_id, installation_generation, normalized_email,
+    email_pseudonym, enrollment_method, enrollment_grant_id,
+    installer_user_hmac, installer_user_hmac_key_version
+  ) values (
+    locked_grant.installation_id, locked_grant.installation_generation,
+    input_verified_normalized_email, input_email_pseudonym,
+    locked_grant.method, locked_grant.id, locked_grant.installer_user_hmac,
+    locked_grant.installer_user_hmac_key_version
+  )
+  returning id, every8d_settings_administrators.created_at
+  into created_administrator_id, administrator_created_at;
+
+  return query select created_administrator_id, locked_grant.id,
+    locked_grant.installation_id, locked_grant.installation_generation,
+    administrator_created_at;
+end;
+$$;
+
 create function public.issue_every8d_settings_operator_enrollment_grant_v1(
   input_installation_id uuid,
   input_installation_generation integer,
@@ -524,7 +783,7 @@ security definer
 set search_path = pg_catalog, public
 as $$
 declare
-  issued_at timestamptz := clock_timestamp();
+  issued_at timestamptz;
 begin
   if input_method is null
     or input_method not in ('operator_initial', 'operator_recovery') then
@@ -570,10 +829,7 @@ begin
     raise exception 'EVERY8D operator enrollment audit metadata is invalid'
       using errcode = '23514';
   end if;
-  if input_expires_at is null
-    or not isfinite(input_expires_at)
-    or input_expires_at <= issued_at
-    or input_expires_at > issued_at + interval '15 minutes' then
+  if input_expires_at is null or not isfinite(input_expires_at) then
     raise exception 'EVERY8D operator enrollment grant expiry is invalid'
       using errcode = '23514';
   end if;
@@ -588,6 +844,13 @@ begin
       || ':' || input_pinned_normalized_email,
     73001
   ));
+
+  issued_at := clock_timestamp();
+  if input_expires_at <= issued_at
+    or input_expires_at > issued_at + interval '15 minutes' then
+    raise exception 'EVERY8D operator enrollment grant expiry is invalid'
+      using errcode = '23514';
+  end if;
 
   update public.every8d_settings_enrollment_grants g
   set revoked_at = issued_at,
@@ -689,11 +952,8 @@ when (
 execute function public.invalidate_every8d_settings_auth_v1();
 
 alter table public.every8d_settings_administrators enable row level security;
-alter table public.every8d_settings_administrators force row level security;
 alter table public.every8d_settings_enrollment_grants enable row level security;
-alter table public.every8d_settings_enrollment_grants force row level security;
 alter table public.every8d_settings_sessions enable row level security;
-alter table public.every8d_settings_sessions force row level security;
 
 revoke all on public.every8d_settings_administrators
   from public, anon, authenticated, service_role;
@@ -707,6 +967,10 @@ revoke all on function
   public.protect_every8d_settings_enrollment_grant_v1(),
   public.protect_every8d_settings_administrator_v1(),
   public.protect_every8d_settings_session_v1(),
+  public.issue_every8d_settings_install_callback_enrollment_grant_v1(
+    uuid, integer, uuid, bytea, timestamptz, text, text
+  ),
+  public.redeem_every8d_settings_enrollment_grant_v1(bytea, text, text),
   public.issue_every8d_settings_operator_enrollment_grant_v1(
     uuid, integer, text, bytea, text, timestamptz, text, text, text, text
   ),
@@ -723,5 +987,13 @@ comment on function public.issue_every8d_settings_operator_enrollment_grant_v1(
   uuid, integer, text, bytea, text, timestamptz, text, text, text, text
 ) is
   'Owner-only dual-control operator grant issuance. Accepts a SHA-256 token hash and returns safe metadata only.';
+comment on function public.issue_every8d_settings_install_callback_enrollment_grant_v1(
+  uuid, integer, uuid, bytea, timestamptz, text, text
+) is
+  'Owner-only generation-bound install-callback grant issuance from immutable succeeded OAuth bootstrap evidence.';
+comment on function public.redeem_every8d_settings_enrollment_grant_v1(
+  bytea, text, text
+) is
+  'Owner-only parent-first one-time enrollment redemption that copies grant provenance into one administrator.';
 
 commit;

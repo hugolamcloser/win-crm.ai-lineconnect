@@ -33,6 +33,10 @@ drop table public.every8d_settings_sessions;
 drop table public.every8d_settings_administrators;
 drop table public.every8d_settings_enrollment_grants;
 
+drop function public.redeem_every8d_settings_enrollment_grant_v1(bytea, text, text);
+drop function public.issue_every8d_settings_install_callback_enrollment_grant_v1(
+  uuid, integer, uuid, bytea, timestamptz, text, text
+);
 drop function public.issue_every8d_settings_operator_enrollment_grant_v1(
   uuid, integer, text, bytea, text, timestamptz, text, text, text, text
 );

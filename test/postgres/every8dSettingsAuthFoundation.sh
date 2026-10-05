@@ -6,6 +6,7 @@ readonly database=wincrm_test
 readonly migration=supabase/migrations/202610020001_every8d_settings_auth_foundation.sql
 readonly rollback=supabase/rollback/202610020001_every8d_settings_auth_foundation.sql
 readonly proof=test/postgres/every8dSettingsAuthFoundation.sql
+readonly owner_role=c3a_migration_owner
 readonly backend_wait_timeout_seconds=30
 readonly barrier_safety_timeout_seconds=90
 tmp_dir=$(mktemp -d)
@@ -20,6 +21,19 @@ psql_app() {
   local application_name=$1
   shift
   docker exec -e "PGAPPNAME=$application_name" -i "$POSTGRES_CONTAINER_ID" \
+    psql -X -v ON_ERROR_STOP=1 -v VERBOSITY=terse -U postgres -d "$database" "$@"
+}
+
+psql_owner() {
+  docker exec -e "PGOPTIONS=-c role=$owner_role" -i "$POSTGRES_CONTAINER_ID" \
+    psql -X -v ON_ERROR_STOP=1 -v VERBOSITY=terse -U postgres -d "$database" "$@"
+}
+
+psql_owner_app() {
+  local application_name=$1
+  shift
+  docker exec -e "PGAPPNAME=$application_name" \
+    -e "PGOPTIONS=-c role=$owner_role" -i "$POSTGRES_CONTAINER_ID" \
     psql -X -v ON_ERROR_STOP=1 -v VERBOSITY=terse -U postgres -d "$database" "$@"
 }
 
@@ -139,6 +153,7 @@ release_barrier() {
 run_race() {
   local label=$1 first_app=$2 first_sql=$3 second_app=$4 second_sql=$5
   local second_outcome=$6 barrier_key=$7 expected_error=${8:-}
+  local second_wait_assertion=${9:-}
   local barrier_app="${first_app}_barrier"
 
   psql_app "$barrier_app" <<SQL >"$tmp_dir/$barrier_app.out" 2>"$tmp_dir/$barrier_app.err" &
@@ -169,6 +184,12 @@ SQL
       where blocker.application_name='$first_app'
         and blocker.pid=any(pg_blocking_pids(a.pid)))" \
     "$label serialization" "$second_pid"
+
+  if [[ -n "$second_wait_assertion" ]]; then
+    assert_query "select exists(select 1 from pg_stat_activity a
+      where a.application_name='$second_app' and ($second_wait_assertion))" \
+      "$label wait-state lock assertion"
+  fi
 
   release_barrier "$barrier_app" "$barrier_pid"
 
@@ -267,7 +288,7 @@ SQL
     "a.wait_event_type='Lock' and a.query like '%pg_advisory_xact_lock%'" \
     "$label child barrier" "$child_pid"
 
-  psql_app "$rollback_app" <"$rollback" \
+  psql_owner_app "$rollback_app" <"$rollback" \
     >"$tmp_dir/$rollback_app.out" 2>"$tmp_dir/$rollback_app.err" &
   local rollback_pid=$!
   background_pids+=("$rollback_pid")
@@ -337,7 +358,7 @@ SQL
     "a.wait_event_type='Lock' and a.query like '%pg_advisory_xact_lock%'" \
     "$label lifecycle barrier" "$lifecycle_pid"
 
-  psql_app "$rollback_app" <"$rollback" \
+  psql_owner_app "$rollback_app" <"$rollback" \
     >"$tmp_dir/$rollback_app.out" 2>"$tmp_dir/$rollback_app.err" &
   local rollback_pid=$!
   background_pids+=("$rollback_pid")
@@ -377,9 +398,25 @@ assert_query "select current_database()='wincrm_test'
   and to_regclass('public.every8d_settings_administrators') is null" \
   'requires C2 and no prior C3a schema'
 
+psql_query -q <<SQL >/dev/null
+do \$\$
+begin
+  if not exists(select 1 from pg_roles where rolname='$owner_role') then
+    create role $owner_role nologin nosuperuser nocreatedb nocreaterole
+      noinherit noreplication nobypassrls;
+  end if;
+end
+\$\$;
+grant usage, create on schema public to $owner_role;
+alter table public.ghl_marketplace_installations owner to $owner_role;
+alter table public.ghl_marketplace_app_registrations owner to $owner_role;
+alter table public.ghl_marketplace_app_version_registrations owner to $owner_role;
+alter table public.ghl_marketplace_oauth_bootstraps owner to $owner_role;
+SQL
+
 mkdir "$tmp_dir/before" "$tmp_dir/after-apply" "$tmp_dir/after-rollback"
 capture_boundary "$tmp_dir/before"
-psql_query <"$migration" >/dev/null
+psql_owner <"$migration" >/dev/null
 compare_boundary "$tmp_dir/before" "$tmp_dir/after-apply"
 assert_query "select
   (select count(*)=0 from public.every8d_settings_administrators)
@@ -388,7 +425,7 @@ assert_query "select
   'all C3a tables begin empty'
 
 schema_dump >"$tmp_dir/schema-before-reapply.sql"
-expect_failure 'already exists' migration_reapply psql_query <"$migration"
+expect_failure 'already exists' migration_reapply psql_owner <"$migration"
 schema_dump >"$tmp_dir/schema-after-reapply.sql"
 cmp -s "$tmp_dir/schema-before-reapply.sql" "$tmp_dir/schema-after-reapply.sql" || {
   echo 'FAIL: failed migration reapplication changed schema' >&2
@@ -402,7 +439,7 @@ assert_query "select
   and (select count(*)=0 from public.every8d_settings_sessions)" \
   'transactional proof leaves C3a tables empty'
 
-psql_query <"$rollback" >/dev/null
+psql_owner <"$rollback" >/dev/null
 assert_query "select to_regclass('public.every8d_settings_administrators') is null
   and to_regclass('public.every8d_settings_enrollment_grants') is null
   and to_regclass('public.every8d_settings_sessions') is null
@@ -412,7 +449,7 @@ assert_query "select to_regclass('public.every8d_settings_administrators') is nu
 compare_boundary "$tmp_dir/before" "$tmp_dir/after-rollback"
 echo 'C3a empty-table rollback proof passed'
 
-psql_query <"$migration" >/dev/null
+psql_owner <"$migration" >/dev/null
 
 # Rollback/lifecycle deadlock regression. Each ordering executes the production
 # rollback against empty C3a tables. Advisory locks only hold deterministic
@@ -539,27 +576,27 @@ SQL
 run_rollback_first 'rollback-first vs disable' c3a_rb_dis_a \
   "$tmp_dir/rollback-disable-first.sql" \
   51000000-0000-4000-8000-000000000001 disabled 1 9400001
-psql_query <"$migration" >/dev/null
+psql_owner <"$migration" >/dev/null
 run_lifecycle_first 'disable-first vs rollback' c3a_dis_rb_b \
   "$tmp_dir/disable-rollback-first.sql" \
   51000000-0000-4000-8000-000000000002 disabled 1 9400002
-psql_query <"$migration" >/dev/null
+psql_owner <"$migration" >/dev/null
 run_rollback_first 'rollback-first vs UNINSTALL' c3a_rb_uni_a \
   "$tmp_dir/rollback-uninstall-first.sql" \
   51000000-0000-4000-8000-000000000003 uninstalled 2 9400003
-psql_query <"$migration" >/dev/null
+psql_owner <"$migration" >/dev/null
 run_lifecycle_first 'UNINSTALL-first vs rollback' c3a_uni_rb_b \
   "$tmp_dir/uninstall-rollback-first.sql" \
   51000000-0000-4000-8000-000000000004 uninstalled 2 9400004
-psql_query <"$migration" >/dev/null
+psql_owner <"$migration" >/dev/null
 run_rollback_first 'rollback-first vs generation advance' c3a_rb_gen_a \
   "$tmp_dir/rollback-generation-first.sql" \
   51000000-0000-4000-8000-000000000005 pending 2 9400005
-psql_query <"$migration" >/dev/null
+psql_owner <"$migration" >/dev/null
 run_lifecycle_first 'generation-first vs rollback' c3a_gen_rb_b \
   "$tmp_dir/generation-rollback-first.sql" \
   51000000-0000-4000-8000-000000000006 pending 2 9400006
-psql_query <"$migration" >/dev/null
+psql_owner <"$migration" >/dev/null
 echo 'C3a rollback/lifecycle parent-first concurrency proofs passed'
 
 # Committed synthetic parents for lifecycle and reissue races.
@@ -626,7 +663,7 @@ select public.c3a_test_insert_parent(
   ('41000000-0000-4000-8000-'||lpad(n::text,12,'0'))::uuid,
   ('40000000-0000-4000-8000-'||lpad(n::text,12,'0'))::uuid,
   'c3a-race-'||n::text
-) from generate_series(1,8) n;
+) from generate_series(1,14) n;
 SQL
 
 # Same-email operator reissue: the second call must block on the tuple-scoped
@@ -658,6 +695,58 @@ assert_query "select count(*)=2 and count(*) filter(where revoked_at is null)=1
   where installation_id='41000000-0000-4000-8000-000000000001'
     and pinned_normalized_email='race@example.invalid'" \
   'concurrent operator reissue leaves exactly one live newest grant'
+
+# Hold the exact production advisory key until the caller-provided expiry has
+# passed. The function must capture its issuance timestamp after serialization
+# and reject instead of inserting an already-expired grant.
+delayed_lock_key=$(psql_query -Atqc "select hashtextextended(
+  '41000000-0000-4000-8000-000000000012:1:delayed@example.invalid',73001)" |
+  tr -d '\r')
+delayed_barrier_app=c3a_operator_delayed_barrier
+delayed_call_app=c3a_operator_delayed_call
+psql_app "$delayed_barrier_app" <<SQL \
+  >"$tmp_dir/$delayed_barrier_app.out" 2>"$tmp_dir/$delayed_barrier_app.err" &
+select pg_advisory_lock($delayed_lock_key);
+select pg_sleep($barrier_safety_timeout_seconds);
+SQL
+delayed_barrier_pid=$!
+background_pids+=("$delayed_barrier_pid")
+wait_for_backend "$delayed_barrier_app" \
+  "a.wait_event_type='Timeout' and a.wait_event='PgSleep'" \
+  'operator delayed-lock barrier' "$delayed_barrier_pid"
+psql_app "$delayed_call_app" -c "select * from
+  public.issue_every8d_settings_operator_enrollment_grant_v1(
+    '41000000-0000-4000-8000-000000000012',1,'delayed@example.invalid',
+    decode(repeat('cc',32),'hex'),'operator_initial',
+    clock_timestamp()+interval '1 second','issuer-cc','approver-cc',
+    'CASE-CC','post-lock timestamp proof')" \
+  >"$tmp_dir/$delayed_call_app.out" 2>"$tmp_dir/$delayed_call_app.err" &
+delayed_call_pid=$!
+background_pids+=("$delayed_call_pid")
+wait_for_backend "$delayed_call_app" \
+  "a.wait_event_type='Lock' and a.query like '%issue_every8d_settings_operator%'" \
+  'operator delayed on tuple serialization' "$delayed_call_pid"
+wait_for_backend "$delayed_call_app" \
+  "a.wait_event_type='Lock'
+    and clock_timestamp()>a.query_start+interval '2 seconds'" \
+  'operator input expiry elapsed while serialized' "$delayed_call_pid"
+release_barrier "$delayed_barrier_app" "$delayed_barrier_pid"
+set +e
+wait "$delayed_call_pid"
+delayed_call_status=$?
+set -e
+[[ $delayed_call_status -ne 0 ]] \
+  && grep -Fq 'EVERY8D operator enrollment grant expiry is invalid' \
+    "$tmp_dir/$delayed_call_app.err" || {
+  echo 'FAIL: delayed operator issuance did not reject stale expiry' >&2
+  cat "$tmp_dir/$delayed_call_app.err" >&2
+  exit 1
+}
+assert_query "select not exists(select 1
+  from public.every8d_settings_enrollment_grants
+  where token_hash=decode(repeat('cc',32),'hex'))" \
+  'delayed operator issuance cannot create an already-expired grant'
+echo 'operator post-serialization timestamp proof passed'
 
 make_operation_sql() {
   local file=$1 installation=$2 discriminator=$3 admin=$4 session=$5 barrier=$6
@@ -718,6 +807,93 @@ make_generation_sql() {
   } >"$file"
 }
 
+# Parent-first redemption uses grants committed by an earlier transaction.
+psql_query -q <<'SQL' >/dev/null
+select * from public.issue_every8d_settings_operator_enrollment_grant_v1(
+  '41000000-0000-4000-8000-000000000009',1,'redeem-race@example.invalid',
+  decode(repeat('c9',32),'hex'),'operator_initial',clock_timestamp()+interval '10 minutes',
+  'issuer-c9','approver-c9','CASE-C9','same grant concurrency proof');
+select * from public.issue_every8d_settings_operator_enrollment_grant_v1(
+  '41000000-0000-4000-8000-000000000010',1,'redeem-first@example.invalid',
+  decode(repeat('ca',32),'hex'),'operator_initial',clock_timestamp()+interval '10 minutes',
+  'issuer-ca','approver-ca','CASE-CA','redemption first lifecycle proof');
+select * from public.issue_every8d_settings_operator_enrollment_grant_v1(
+  '41000000-0000-4000-8000-000000000011',1,'lifecycle-first@example.invalid',
+  decode(repeat('cb',32),'hex'),'operator_initial',clock_timestamp()+interval '10 minutes',
+  'issuer-cb','approver-cb','CASE-CB','lifecycle first redemption proof');
+SQL
+
+cat >"$tmp_dir/redeem-same-a.sql" <<'SQL'
+begin;
+select * from public.redeem_every8d_settings_enrollment_grant_v1(
+  decode(repeat('c9',32),'hex'),'redeem-race@example.invalid','pseudo-redeem-c9');
+select pg_advisory_xact_lock(:c3a_barrier_key);
+commit;
+SQL
+cat >"$tmp_dir/redeem-same-b.sql" <<'SQL'
+begin;
+select * from public.redeem_every8d_settings_enrollment_grant_v1(
+  decode(repeat('c9',32),'hex'),'redeem-race@example.invalid','pseudo-redeem-c9-b');
+commit;
+SQL
+run_race 'same committed grant redemption' c3a_redeem_same_a \
+  "$tmp_dir/redeem-same-a.sql" c3a_redeem_same_b \
+  "$tmp_dir/redeem-same-b.sql" failure 9300008 \
+  'EVERY8D settings enrollment grant is not redeemable'
+assert_query "select
+  (select count(*)=1 from public.every8d_settings_administrators
+    where installation_id='41000000-0000-4000-8000-000000000009')
+  and (select consumed_at is not null and revoked_at is null
+    from public.every8d_settings_enrollment_grants
+    where token_hash=decode(repeat('c9',32),'hex'))" \
+  'concurrent same-grant redemption has exactly one winner'
+
+cat >"$tmp_dir/redeem-first-a.sql" <<'SQL'
+begin;
+select * from public.redeem_every8d_settings_enrollment_grant_v1(
+  decode(repeat('ca',32),'hex'),'redeem-first@example.invalid','pseudo-redeem-ca');
+select pg_advisory_xact_lock(:c3a_barrier_key);
+commit;
+SQL
+make_disable_sql "$tmp_dir/redeem-first-b.sql" \
+  41000000-0000-4000-8000-000000000010
+run_race 'redemption-first vs lifecycle' c3a_redeem_first_a \
+  "$tmp_dir/redeem-first-a.sql" c3a_redeem_first_b \
+  "$tmp_dir/redeem-first-b.sql" success 9300009
+assert_query "select i.status='disabled'
+  and g.consumed_at is not null and g.revoked_at is null
+  and a.revoked_at is not null and a.revocation_reason='installation_disabled'
+  from public.ghl_marketplace_installations i
+  join public.every8d_settings_enrollment_grants g on g.installation_id=i.id
+  join public.every8d_settings_administrators a on a.enrollment_grant_id=g.id
+  where i.id='41000000-0000-4000-8000-000000000010'" \
+  'redemption-first lifecycle preserves consumed history and revokes administrator'
+
+make_disable_sql "$tmp_dir/lifecycle-first-redeem-a.sql" \
+  41000000-0000-4000-8000-000000000011 ':c3a_barrier_key'
+cat >"$tmp_dir/lifecycle-first-redeem-b.sql" <<'SQL'
+begin;
+select * from public.redeem_every8d_settings_enrollment_grant_v1(
+  decode(repeat('cb',32),'hex'),'lifecycle-first@example.invalid','pseudo-redeem-cb');
+commit;
+SQL
+run_race 'lifecycle-first vs redemption' c3a_lifecycle_first_a \
+  "$tmp_dir/lifecycle-first-redeem-a.sql" c3a_lifecycle_first_b \
+  "$tmp_dir/lifecycle-first-redeem-b.sql" failure 9300010 \
+  'EVERY8D settings parent is not currently eligible' \
+  "not exists(select 1 from pg_locks l
+    where l.pid=a.pid
+      and l.relation='public.every8d_settings_enrollment_grants'::regclass
+      and l.granted and l.mode<>'AccessShareLock')"
+assert_query "select i.status='disabled'
+  and g.consumed_at is null and g.revoked_at is not null
+  and not exists(select 1 from public.every8d_settings_administrators a
+    where a.installation_id=i.id)
+  from public.ghl_marketplace_installations i
+  join public.every8d_settings_enrollment_grants g on g.installation_id=i.id
+  where i.id='41000000-0000-4000-8000-000000000011'" \
+  'lifecycle-first redemption waits on parent without locking grant and fails closed'
+
 assert_invalidated() {
   local installation=$1 expected_status=$2 expected_generation=$3 reason=$4
   assert_query "select i.status='$expected_status' and i.installation_generation=$expected_generation
@@ -732,6 +908,12 @@ assert_invalidated() {
     and not exists(select 1 from public.every8d_settings_administrators a
       where a.installation_id=i.id and a.revoked_at is not null
         and a.revocation_reason<>'$reason')
+    and not exists(select 1 from public.every8d_settings_enrollment_grants g
+      where g.installation_id=i.id and g.revoked_at is not null
+        and g.revocation_reason<>'$reason')
+    and not exists(select 1 from public.every8d_settings_enrollment_grants g
+      where g.installation_id=i.id and g.consumed_at is not null
+        and g.revoked_at is not null)
     and not exists(select 1 from public.every8d_settings_sessions s
       where s.installation_id=i.id and s.revoked_at is not null
         and s.revocation_reason<>'$reason')
@@ -803,6 +985,113 @@ run_race 'generation lifecycle-first' c3a_generation_lifecycle_a "$tmp_dir/gener
   'EVERY8D settings parent is not currently eligible'
 assert_invalidated 41000000-0000-4000-8000-000000000007 pending 2 installation_generation_changed
 
+# Repeated lifecycle application leaves terminal evidence unchanged.
+psql_query -q <<'SQL' >/dev/null
+select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
+  '41000000-0000-4000-8000-000000000013',1,'terminal@example.invalid',
+  decode(repeat('cd',32),'hex'),'operator_initial',clock_timestamp()+interval '10 minutes',
+  'issuer-cd','approver-cd','CASE-CD','terminal history proof') \gset
+select administrator_id from public.redeem_every8d_settings_enrollment_grant_v1(
+  decode(repeat('cd',32),'hex'),'terminal@example.invalid','pseudo-terminal') \gset
+insert into public.every8d_settings_sessions(
+  token_hash,administrator_id,installation_id,installation_generation,expires_at
+) values (decode(repeat('ce',32),'hex'),:'administrator_id',
+  '41000000-0000-4000-8000-000000000013',1,clock_timestamp()+interval '30 minutes');
+select * from public.issue_every8d_settings_operator_enrollment_grant_v1(
+  '41000000-0000-4000-8000-000000000013',1,'unused@example.invalid',
+  decode(repeat('cf',32),'hex'),'operator_recovery',clock_timestamp()+interval '10 minutes',
+  'issuer-cf','approver-cf','CASE-CF','unused lifecycle proof');
+update public.ghl_marketplace_installations set status='disabled'
+where id='41000000-0000-4000-8000-000000000013';
+create table public.c3a_test_terminal_snapshot as
+select
+  (select revoked_at from public.every8d_settings_administrators
+   where id=:'administrator_id') administrator_revoked_at,
+  (select revoked_at from public.every8d_settings_sessions
+   where administrator_id=:'administrator_id') session_revoked_at,
+  (select revoked_at from public.every8d_settings_enrollment_grants
+   where token_hash=decode(repeat('cf',32),'hex')) grant_revoked_at;
+update public.ghl_marketplace_installations set status='disabled'
+where id='41000000-0000-4000-8000-000000000013';
+SQL
+assert_query "select
+  a.revoked_at=s.administrator_revoked_at
+  and se.revoked_at=s.session_revoked_at
+  and unused.revoked_at=s.grant_revoked_at
+  and consumed.consumed_at is not null and consumed.revoked_at is null
+  and a.revocation_reason='installation_disabled'
+  and se.revocation_reason='installation_disabled'
+  and unused.revocation_reason='installation_disabled'
+  from public.c3a_test_terminal_snapshot s
+  cross join public.every8d_settings_administrators a
+  join public.every8d_settings_enrollment_grants consumed
+    on consumed.id=a.enrollment_grant_id
+  join public.every8d_settings_sessions se on se.administrator_id=a.id
+  cross join public.every8d_settings_enrollment_grants unused
+  where a.installation_id='41000000-0000-4000-8000-000000000013'
+    and unused.token_hash=decode(repeat('cf',32),'hex')" \
+  'repeated lifecycle application is idempotent and preserves terminal history'
+psql_query -qc 'drop table public.c3a_test_terminal_snapshot'
+
+# Synthetic future-generation rows prove the old-generation predicate cannot
+# revoke generation 2. Trigger bypass is limited to fixture construction.
+psql_query -q <<'SQL' >/dev/null
+alter table public.every8d_settings_enrollment_grants
+  disable trigger protect_every8d_settings_enrollment_grant;
+alter table public.every8d_settings_administrators
+  disable trigger protect_every8d_settings_administrator;
+alter table public.every8d_settings_sessions
+  disable trigger protect_every8d_settings_session;
+insert into public.every8d_settings_enrollment_grants(
+  id,token_hash,installation_id,installation_generation,method,
+  pinned_normalized_email,operator_issuer,operator_approver,
+  operator_case_reference,operator_reason,created_at,expires_at,consumed_at
+) values
+  ('42000000-0000-4000-8000-000000000141',decode(repeat('da',32),'hex'),
+   '41000000-0000-4000-8000-000000000014',1,'operator_initial',
+   'generation1@example.invalid','issuer-d1','approver-d1','CASE-D1','generation fixture',
+   statement_timestamp(),statement_timestamp()+interval '10 minutes',statement_timestamp()),
+  ('42000000-0000-4000-8000-000000000142',decode(repeat('db',32),'hex'),
+   '41000000-0000-4000-8000-000000000014',2,'operator_initial',
+   'generation2@example.invalid','issuer-d2','approver-d2','CASE-D2','generation fixture',
+   statement_timestamp(),statement_timestamp()+interval '10 minutes',statement_timestamp());
+insert into public.every8d_settings_administrators(
+  id,installation_id,installation_generation,normalized_email,email_pseudonym,
+  enrollment_method,enrollment_grant_id
+) values
+  ('43000000-0000-4000-8000-000000000141',
+   '41000000-0000-4000-8000-000000000014',1,'generation1@example.invalid',
+   'pseudo-generation1','operator_initial','42000000-0000-4000-8000-000000000141'),
+  ('43000000-0000-4000-8000-000000000142',
+   '41000000-0000-4000-8000-000000000014',2,'generation2@example.invalid',
+   'pseudo-generation2','operator_initial','42000000-0000-4000-8000-000000000142');
+insert into public.every8d_settings_sessions(
+  token_hash,administrator_id,installation_id,installation_generation,expires_at
+) values
+  (decode(repeat('dc',32),'hex'),'43000000-0000-4000-8000-000000000141',
+   '41000000-0000-4000-8000-000000000014',1,clock_timestamp()+interval '30 minutes'),
+  (decode(repeat('dd',32),'hex'),'43000000-0000-4000-8000-000000000142',
+   '41000000-0000-4000-8000-000000000014',2,clock_timestamp()+interval '30 minutes');
+alter table public.every8d_settings_sessions
+  enable trigger protect_every8d_settings_session;
+alter table public.every8d_settings_administrators
+  enable trigger protect_every8d_settings_administrator;
+alter table public.every8d_settings_enrollment_grants
+  enable trigger protect_every8d_settings_enrollment_grant;
+update public.ghl_marketplace_installations set installation_generation=2
+where id='41000000-0000-4000-8000-000000000014';
+SQL
+assert_query "select
+  (select revoked_at is not null from public.every8d_settings_administrators
+    where id='43000000-0000-4000-8000-000000000141')
+  and (select revoked_at is null from public.every8d_settings_administrators
+    where id='43000000-0000-4000-8000-000000000142')
+  and (select revoked_at is not null from public.every8d_settings_sessions
+    where administrator_id='43000000-0000-4000-8000-000000000141')
+  and (select revoked_at is null from public.every8d_settings_sessions
+    where administrator_id='43000000-0000-4000-8000-000000000142')" \
+  'generation advance invalidates generation 1 and preserves generation 2'
+
 # Build live C3 state on parent 8 for cross-trigger atomic failure proofs.
 psql_query -q <<'SQL' >/dev/null
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
@@ -873,8 +1162,39 @@ echo 'C2/C3 lifecycle trigger atomic coexistence proofs passed'
 psql_query -qc 'drop function public.c3a_test_insert_parent(uuid,uuid,text)'
 
 schema_dump >"$tmp_dir/schema-before-refused-rollback.sql"
+owner_counts=$(psql_owner -AtF , -c "select
+  (select count(*) from public.every8d_settings_administrators),
+  (select count(*) from public.every8d_settings_enrollment_grants),
+  (select count(*) from public.every8d_settings_sessions)" | tr -d '\r')
+[[ "$owner_counts" != 0,0,0 ]] || {
+  echo 'FAIL: non-BYPASSRLS owner could not see populated C3a tables' >&2
+  exit 1
+}
+
+{
+  echo 'begin;'
+  echo 'alter table public.every8d_settings_sessions disable trigger protect_every8d_settings_session;'
+  echo 'alter table public.every8d_settings_administrators disable trigger protect_every8d_settings_administrator;'
+  echo 'delete from public.every8d_settings_sessions;'
+  echo 'delete from public.every8d_settings_administrators;'
+  cat "$rollback"
+} >"$tmp_dir/populated-grant-rollback.sql"
 expect_failure 'C3a rollback refused: EVERY8D settings auth rows exist' \
-  populated_rollback psql_query <"$rollback"
+  populated_grant_rollback psql_owner <"$tmp_dir/populated-grant-rollback.sql"
+
+{
+  echo 'begin;'
+  echo 'alter table public.every8d_settings_sessions disable trigger protect_every8d_settings_session;'
+  echo 'delete from public.every8d_settings_sessions;'
+  cat "$rollback"
+} >"$tmp_dir/populated-administrator-rollback.sql"
+expect_failure 'C3a rollback refused: EVERY8D settings auth rows exist' \
+  populated_administrator_rollback psql_owner \
+  <"$tmp_dir/populated-administrator-rollback.sql"
+
+expect_failure 'C3a rollback refused: EVERY8D settings auth rows exist' \
+  populated_session_rollback psql_owner <"$rollback"
+
 schema_dump >"$tmp_dir/schema-after-refused-rollback.sql"
 cmp -s "$tmp_dir/schema-before-refused-rollback.sql" \
   "$tmp_dir/schema-after-refused-rollback.sql" || {
@@ -885,5 +1205,10 @@ assert_query "select to_regclass('public.every8d_settings_administrators') is no
   and to_regclass('public.every8d_provider_configurations') is not null
   and exists(select 1 from public.every8d_settings_enrollment_grants)" \
   'populated rollback refusal preserves all C3a and C2 objects'
+assert_query "select '$owner_counts'=(
+  (select count(*) from public.every8d_settings_administrators)::text||','||
+  (select count(*) from public.every8d_settings_enrollment_grants)::text||','||
+  (select count(*) from public.every8d_settings_sessions)::text)" \
+  'all populated rollback refusals preserve rows'
 
 echo 'EVERY8D C3a settings auth PostgreSQL 17 proofs passed'

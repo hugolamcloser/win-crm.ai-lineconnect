@@ -146,13 +146,56 @@ select pg_temp.assert_true(
 );
 
 select pg_temp.assert_true(
-  (select bool_and(relrowsecurity and relforcerowsecurity)
+  (select not rolsuper and not rolbypassrls
+   from pg_roles where rolname='c3a_migration_owner')
+  and (select bool_and(c.relowner='c3a_migration_owner'::regrole)
+    from pg_class c where c.oid in (
+      'public.every8d_settings_administrators'::regclass,
+      'public.every8d_settings_enrollment_grants'::regclass,
+      'public.every8d_settings_sessions'::regclass
+    ))
+  and (select bool_and(p.proowner='c3a_migration_owner'::regrole)
+    from pg_proc p where p.oid in (
+      'public.issue_every8d_settings_install_callback_enrollment_grant_v1(uuid,integer,uuid,bytea,timestamptz,text,text)'::regprocedure,
+      'public.redeem_every8d_settings_enrollment_grant_v1(bytea,text,text)'::regprocedure,
+      'public.issue_every8d_settings_operator_enrollment_grant_v1(uuid,integer,text,bytea,text,timestamptz,text,text,text,text)'::regprocedure,
+      'public.invalidate_every8d_settings_auth_v1()'::regprocedure
+    )),
+  'C3a owner-definer functions use a non-superuser non-BYPASSRLS owner'
+);
+
+select pg_temp.assert_true(
+  (select bool_and(relrowsecurity and not relforcerowsecurity)
    from pg_class where oid in (
      'public.every8d_settings_administrators'::regclass,
      'public.every8d_settings_enrollment_grants'::regclass,
      'public.every8d_settings_sessions'::regclass
    )),
-  'RLS is enabled and forced on every C3a table'
+  'RLS is enabled and intentionally not forced on every C3a table'
+);
+
+select pg_temp.assert_true(
+  not exists (
+    select 1 from pg_policies
+    where schemaname='public'
+      and tablename in (
+        'every8d_settings_administrators',
+        'every8d_settings_enrollment_grants',
+        'every8d_settings_sessions'
+      )
+  ),
+  'C3a installs no RLS policies'
+);
+
+select pg_temp.assert_true(
+  not exists (
+    select 1
+    from pg_constraint c
+    where c.contype='f'
+      and c.conrelid='public.every8d_settings_enrollment_grants'::regclass
+      and c.confrelid='public.ghl_marketplace_oauth_bootstraps'::regclass
+  ),
+  'C3a grant audit provenance has no OAuth bootstrap FK lock dependency'
 );
 
 select pg_temp.assert_true(
@@ -179,20 +222,35 @@ select pg_temp.assert_true(
 
 select pg_temp.assert_true(
   not exists (
-    select 1 from (values ('anon'),('authenticated'),('service_role')) roles(role_name)
-    where has_function_privilege(
-      role_name,
-      'public.issue_every8d_settings_operator_enrollment_grant_v1(uuid,integer,text,bytea,text,timestamptz,text,text,text,text)',
-      'EXECUTE'
-    )
+    select 1
+    from (values ('anon'),('authenticated'),('service_role')) roles(role_name)
+    cross join (values
+      ('public.assert_every8d_settings_installation_eligible_v1(uuid,integer)'),
+      ('public.protect_every8d_settings_enrollment_grant_v1()'),
+      ('public.protect_every8d_settings_administrator_v1()'),
+      ('public.protect_every8d_settings_session_v1()'),
+      ('public.issue_every8d_settings_install_callback_enrollment_grant_v1(uuid,integer,uuid,bytea,timestamptz,text,text)'),
+      ('public.redeem_every8d_settings_enrollment_grant_v1(bytea,text,text)'),
+      ('public.issue_every8d_settings_operator_enrollment_grant_v1(uuid,integer,text,bytea,text,timestamptz,text,text,text,text)'),
+      ('public.invalidate_every8d_settings_auth_v1()')
+    ) functions(function_name)
+    where has_function_privilege(role_name, function_name, 'EXECUTE')
   ) and not exists (
     select 1
     from pg_proc p
     cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) acl
-    where p.oid='public.issue_every8d_settings_operator_enrollment_grant_v1(uuid,integer,text,bytea,text,timestamptz,text,text,text,text)'::regprocedure
-      and acl.grantee=0 and acl.privilege_type='EXECUTE'
+    where p.oid in (
+      'public.assert_every8d_settings_installation_eligible_v1(uuid,integer)'::regprocedure,
+      'public.protect_every8d_settings_enrollment_grant_v1()'::regprocedure,
+      'public.protect_every8d_settings_administrator_v1()'::regprocedure,
+      'public.protect_every8d_settings_session_v1()'::regprocedure,
+      'public.issue_every8d_settings_install_callback_enrollment_grant_v1(uuid,integer,uuid,bytea,timestamptz,text,text)'::regprocedure,
+      'public.redeem_every8d_settings_enrollment_grant_v1(bytea,text,text)'::regprocedure,
+      'public.issue_every8d_settings_operator_enrollment_grant_v1(uuid,integer,text,bytea,text,timestamptz,text,text,text,text)'::regprocedure,
+      'public.invalidate_every8d_settings_auth_v1()'::regprocedure
+    ) and acl.grantee=0 and acl.privilege_type='EXECUTE'
   ),
-  'operator issuance is migration-owner-only'
+  'all C3a functions are migration-owner-only'
 );
 
 select pg_temp.assert_true(
@@ -225,6 +283,113 @@ select pg_temp.insert_parent(
   '31000000-0000-4000-8000-000000000005',
   '30000000-0000-4000-8000-000000000005', 'c3a-proof-refresh', 'pending', 1, true
 );
+
+create function pg_temp.create_bootstrap(
+  input_id uuid,
+  input_installation_id uuid,
+  input_location_id text,
+  input_generation integer,
+  input_succeeded boolean
+)
+returns void language plpgsql as $$
+declare
+  context c3a_context%rowtype;
+  synthetic_hash text := replace(input_id::text, '-', '')
+    || replace(input_id::text, '-', '');
+begin
+  select * into context from c3a_context;
+  insert into public.ghl_marketplace_oauth_bootstraps(
+    id, marketplace_version_id, expected_location_id,
+    target_installation_generation, state_hash, browser_binding_hash,
+    redirect_uri, config_fingerprint, status, expires_at,
+    authorization_code_ciphertext, authorization_code_key_version,
+    claimed_installation_id, claimed_installation_generation
+  ) values (
+    input_id, context.marketplace_version_id, input_location_id,
+    input_generation, synthetic_hash, reverse(synthetic_hash),
+    'https://example.invalid/callback', synthetic_hash, 'ready',
+    clock_timestamp()+interval '10 minutes', decode('01','hex'),
+    'synthetic-v1', input_installation_id, input_generation
+  );
+  if input_succeeded then
+    update public.ghl_marketplace_oauth_bootstraps
+    set status='exchanging', exchange_started_at=clock_timestamp()
+    where id=input_id;
+    update public.ghl_marketplace_oauth_bootstraps
+    set status='succeeded', terminal_at=clock_timestamp(),
+        authorization_code_ciphertext=null,
+        authorization_code_key_version=null
+    where id=input_id;
+  end if;
+end;
+$$;
+
+select pg_temp.create_bootstrap(
+  '32000000-0000-4000-8000-000000000001',
+  '31000000-0000-4000-8000-000000000001', 'c3a-proof-one', 1, true
+);
+select pg_temp.create_bootstrap(
+  '32000000-0000-4000-8000-000000000002',
+  '31000000-0000-4000-8000-000000000002', 'c3a-proof-two', 1, false
+);
+
+select pg_temp.reject($sql$
+  insert into public.every8d_settings_enrollment_grants(
+    token_hash,installation_id,installation_generation,method,
+    oauth_bootstrap_reference,installer_user_hmac,
+    installer_user_hmac_key_version,expires_at
+  ) values (decode(repeat('41',32),'hex'),
+    '31000000-0000-4000-8000-000000000001',1,'install_callback',
+    '32900000-0000-4000-8000-000000000001',repeat('a',64),null,
+    clock_timestamp()+interval '5 minutes')
+$sql$, '23514', 'grant rejects HMAC value/null');
+select pg_temp.reject($sql$
+  insert into public.every8d_settings_enrollment_grants(
+    token_hash,installation_id,installation_generation,method,
+    oauth_bootstrap_reference,installer_user_hmac,
+    installer_user_hmac_key_version,expires_at
+  ) values (decode(repeat('42',32),'hex'),
+    '31000000-0000-4000-8000-000000000001',1,'install_callback',
+    '32900000-0000-4000-8000-000000000002',null,'synthetic-v1',
+    clock_timestamp()+interval '5 minutes')
+$sql$, '23514', 'grant rejects HMAC null/value');
+select pg_temp.reject($sql$
+  insert into public.every8d_settings_enrollment_grants(
+    token_hash,installation_id,installation_generation,method,
+    pinned_normalized_email,installer_user_hmac,
+    installer_user_hmac_key_version,expires_at
+  ) values (decode(repeat('43',32),'hex'),
+    '31000000-0000-4000-8000-000000000001',1,'operator_initial',
+    'mixed@example.invalid',repeat('b',64),'synthetic-v1',
+    clock_timestamp()+interval '5 minutes')
+$sql$, '23514', 'operator grant rejects callback HMAC provenance');
+select pg_temp.reject($sql$
+  insert into public.every8d_settings_enrollment_grants(
+    token_hash,installation_id,installation_generation,method,
+    installer_user_hmac,installer_user_hmac_key_version,expires_at
+  ) values (decode(repeat('44',32),'hex'),
+    '31000000-0000-4000-8000-000000000001',1,'install_callback',
+    repeat('c',64),'synthetic-v1',clock_timestamp()+interval '5 minutes')
+$sql$, '23514', 'install callback grant requires bootstrap provenance');
+
+select pg_temp.reject($sql$
+  select * from public.issue_every8d_settings_install_callback_enrollment_grant_v1(
+    '31000000-0000-4000-8000-000000000002',1,
+    '32000000-0000-4000-8000-000000000001',decode(repeat('45',32),'hex'),
+    clock_timestamp()+interval '5 minutes',repeat('d',64),'synthetic-v1')
+$sql$, '23514', 'install callback rejects bootstrap from another installation');
+select pg_temp.reject($sql$
+  select * from public.issue_every8d_settings_install_callback_enrollment_grant_v1(
+    '31000000-0000-4000-8000-000000000001',2,
+    '32000000-0000-4000-8000-000000000001',decode(repeat('46',32),'hex'),
+    clock_timestamp()+interval '5 minutes',repeat('d',64),'synthetic-v1')
+$sql$, '23514', 'install callback rejects bootstrap from another generation');
+select pg_temp.reject($sql$
+  select * from public.issue_every8d_settings_install_callback_enrollment_grant_v1(
+    '31000000-0000-4000-8000-000000000002',1,
+    '32000000-0000-4000-8000-000000000002',decode(repeat('47',32),'hex'),
+    clock_timestamp()+interval '5 minutes',repeat('d',64),'synthetic-v1')
+$sql$, '23514', 'install callback rejects non-succeeded bootstrap');
 
 select pg_temp.reject($sql$
   select * from public.issue_every8d_settings_operator_enrollment_grant_v1(
@@ -277,12 +442,126 @@ $sql$, '23514', 'operator RPC rejects expiry over fifteen minutes');
 
 do $$
 declare
+  callback_grant uuid;
+  callback_administrator uuid;
+begin
+  select grant_id into callback_grant
+  from public.issue_every8d_settings_install_callback_enrollment_grant_v1(
+    '31000000-0000-4000-8000-000000000001',1,
+    '32000000-0000-4000-8000-000000000001',decode(repeat('48',32),'hex'),
+    clock_timestamp()+interval '10 minutes',repeat('d',64),'synthetic-v1');
+  select administrator_id into callback_administrator
+  from public.redeem_every8d_settings_enrollment_grant_v1(
+    decode(repeat('48',32),'hex'),'callback@example.invalid',
+    'pseudo-callback-valid');
+
+  perform pg_temp.assert_true(
+    (select a.enrollment_grant_id=callback_grant
+      and a.installer_user_hmac=g.installer_user_hmac
+      and a.installer_user_hmac_key_version=g.installer_user_hmac_key_version
+      and g.consumed_at is not null
+      from public.every8d_settings_administrators a
+      join public.every8d_settings_enrollment_grants g
+        on g.id=a.enrollment_grant_id
+      where a.id=callback_administrator),
+    'redemption copies callback HMAC provenance from the locked grant');
+
+  perform pg_temp.reject(format($sql$
+    insert into public.every8d_settings_administrators(
+      installation_id,installation_generation,normalized_email,email_pseudonym,
+      enrollment_method,enrollment_grant_id,installer_user_hmac,
+      installer_user_hmac_key_version
+    ) values ('31000000-0000-4000-8000-000000000001',1,
+      'callback@example.invalid','pseudo-callback-one','install_callback',%L,
+      repeat('d',64),null)
+  $sql$, callback_grant), '23514', 'administrator rejects HMAC value/null');
+  perform pg_temp.reject(format($sql$
+    insert into public.every8d_settings_administrators(
+      installation_id,installation_generation,normalized_email,email_pseudonym,
+      enrollment_method,enrollment_grant_id,installer_user_hmac,
+      installer_user_hmac_key_version
+    ) values ('31000000-0000-4000-8000-000000000001',1,
+      'callback@example.invalid','pseudo-callback-two','install_callback',%L,
+      null,'synthetic-v1')
+  $sql$, callback_grant), '23514', 'administrator rejects HMAC null/value');
+  perform pg_temp.reject(format($sql$
+    insert into public.every8d_settings_administrators(
+      installation_id,installation_generation,normalized_email,email_pseudonym,
+      enrollment_method,enrollment_grant_id,installer_user_hmac,
+      installer_user_hmac_key_version
+    ) values ('31000000-0000-4000-8000-000000000001',1,
+      'callback@example.invalid','pseudo-callback-mismatch','install_callback',%L,
+      repeat('e',64),'synthetic-v1')
+  $sql$, callback_grant), '23514', 'administrator rejects callback HMAC mismatch');
+
+end;
+$$;
+
+do $$
+declare
+  issued_grant uuid;
+  redeemed_administrator uuid;
+begin
+  select grant_id into issued_grant
+  from public.issue_every8d_settings_operator_enrollment_grant_v1(
+    '31000000-0000-4000-8000-000000000002',1,'redeem@example.invalid',
+    decode(repeat('49',32),'hex'),'operator_initial',
+    clock_timestamp()+interval '10 minutes','issuer-z','approver-z',
+    'CASE-REDEEM','one-time redemption proof');
+  select administrator_id into redeemed_administrator
+  from public.redeem_every8d_settings_enrollment_grant_v1(
+    decode(repeat('49',32),'hex'),'redeem@example.invalid','pseudo-redeem');
+
+  perform pg_temp.reject($sql$
+    select * from public.redeem_every8d_settings_enrollment_grant_v1(
+      decode(repeat('49',32),'hex'),'redeem@example.invalid','pseudo-reuse')
+  $sql$, '23514', 'consumed grant cannot be redeemed twice');
+  perform pg_temp.reject(format($sql$
+    insert into public.every8d_settings_administrators(
+      installation_id,installation_generation,normalized_email,email_pseudonym,
+      enrollment_method,enrollment_grant_id
+    ) values ('31000000-0000-4000-8000-000000000002',1,
+      'different@example.invalid','pseudo-different','operator_initial',%L)
+  $sql$, issued_grant), '23514', 'same grant cannot bind a different email');
+
+  update public.every8d_settings_administrators
+  set revoked_at=clock_timestamp(),revocation_reason='operator_recovery'
+  where id=redeemed_administrator;
+  perform pg_temp.reject(format($sql$
+    insert into public.every8d_settings_administrators(
+      installation_id,installation_generation,normalized_email,email_pseudonym,
+      enrollment_method,enrollment_grant_id
+    ) values ('31000000-0000-4000-8000-000000000002',1,
+      'redeem@example.invalid','pseudo-reuse-after-revoke','operator_initial',%L)
+  $sql$, issued_grant), '23505', 'revoked administrator does not recycle its grant');
+  perform pg_temp.reject($sql$
+    select * from public.redeem_every8d_settings_enrollment_grant_v1(
+      decode(repeat('49',32),'hex'),'redeem@example.invalid','pseudo-reuse-two')
+  $sql$, '23514', 'revoked administrator grant remains consumed');
+end;
+$$;
+
+do $$
+declare
   initial_id uuid;
   recovery_id uuid;
+  consumed_id uuid;
+  expired_id uuid := '32900000-0000-4000-8000-000000000015';
   other_email_id uuid;
   other_installation_id uuid;
   first_admin_id uuid := '33000000-0000-4000-8000-000000000001';
 begin
+  insert into public.every8d_settings_enrollment_grants(
+    id,token_hash,installation_id,installation_generation,method,
+    pinned_normalized_email,operator_issuer,operator_approver,
+    operator_case_reference,operator_reason,created_at,expires_at
+  ) values (
+    expired_id,decode(repeat('10',32),'hex'),
+    '31000000-0000-4000-8000-000000000001',1,'operator_initial',
+    'admin@example.invalid','issuer-old','approver-old','CASE-OLD',
+    'expired history proof',clock_timestamp()-interval '20 minutes',
+    clock_timestamp()-interval '10 minutes'
+  );
   select grant_id into initial_id
   from public.issue_every8d_settings_operator_enrollment_grant_v1(
     '31000000-0000-4000-8000-000000000001', 1, 'admin@example.invalid',
@@ -309,12 +588,16 @@ begin
      from public.every8d_settings_enrollment_grants where id=initial_id),
     'reissue revokes older matching unused grant');
   perform pg_temp.assert_true(
+    (select revoked_at is null from public.every8d_settings_enrollment_grants
+     where id=expired_id)
+    and
     (select revoked_at is null from public.every8d_settings_enrollment_grants where id=other_email_id)
     and (select revoked_at is null from public.every8d_settings_enrollment_grants where id=other_installation_id),
-    'reissue leaves other email and installation grants unchanged');
+    'reissue leaves expired, other-email, and other-installation grants unchanged');
 
   update public.every8d_settings_enrollment_grants
   set consumed_at=clock_timestamp() where id=recovery_id;
+  consumed_id := recovery_id;
   insert into public.every8d_settings_administrators(
     id, installation_id, installation_generation, normalized_email,
     email_pseudonym, enrollment_method, enrollment_grant_id
@@ -328,6 +611,10 @@ begin
     '31000000-0000-4000-8000-000000000001', 1, 'admin@example.invalid',
     decode(repeat('15',32),'hex'), 'operator_recovery', clock_timestamp()+interval '10 minutes',
     'issuer-c','approver-c','CASE-15','duplicate administrator proof');
+  perform pg_temp.assert_true(
+    (select consumed_at is not null and revoked_at is null
+     from public.every8d_settings_enrollment_grants where id=consumed_id),
+    'reissue preserves consumed grant history');
   update public.every8d_settings_enrollment_grants
   set consumed_at=clock_timestamp() where id=recovery_id;
 
