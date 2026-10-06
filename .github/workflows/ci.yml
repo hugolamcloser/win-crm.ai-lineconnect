@@ -93,7 +93,8 @@ jobs:
           for migration in supabase/migrations/*.sql; do
             if [[ "$migration" == *"202609230002_every8d_public_oauth_bootstrap.sql" \
               || "$migration" == *"202609270001_every8d_ghl_oauth_refresh_foundation.sql" \
-              || "$migration" == *"202609300001_every8d_provider_configurations.sql" ]]; then
+              || "$migration" == *"202609300001_every8d_provider_configurations.sql" \
+              || "$migration" == *"202610020001_every8d_settings_auth_foundation.sql" ]]; then
               continue
             fi
             echo "Applying $migration"
@@ -136,3 +137,8 @@ jobs:
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: bash test/postgres/every8dProviderConfigurations.sh
+
+      - name: Prove EVERY8D settings auth foundation, lifecycle races, and guarded rollback
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: bash test/postgres/every8dSettingsAuthFoundation.sh
