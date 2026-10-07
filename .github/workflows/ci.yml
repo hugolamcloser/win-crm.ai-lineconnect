@@ -94,7 +94,8 @@ jobs:
             if [[ "$migration" == *"202609230002_every8d_public_oauth_bootstrap.sql" \
               || "$migration" == *"202609270001_every8d_ghl_oauth_refresh_foundation.sql" \
               || "$migration" == *"202609300001_every8d_provider_configurations.sql" \
-              || "$migration" == *"202610020001_every8d_settings_auth_foundation.sql" ]]; then
+              || "$migration" == *"202610020001_every8d_settings_auth_foundation.sql" \
+              || "$migration" == *"202610060001_every8d_settings_email_challenge_foundation.sql" ]]; then
               continue
             fi
             echo "Applying $migration"
@@ -142,3 +143,8 @@ jobs:
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: bash test/postgres/every8dSettingsAuthFoundation.sh
+
+      - name: Prove EVERY8D settings email challenge foundation, concurrency, and guarded rollback
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: bash test/postgres/every8dSettingsEmailChallengeFoundation.sh
