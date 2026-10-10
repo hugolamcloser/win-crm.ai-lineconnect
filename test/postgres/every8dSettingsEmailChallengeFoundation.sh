@@ -12,6 +12,9 @@ readonly app_prefix="c3b_${run_id}"
 readonly admin_db="c3b_admin_${run_id}"
 readonly grant_db="c3b_grant_${run_id}"
 readonly history_db="c3b_history_${run_id}"
+readonly missing_pgcrypto_db="c3b_missing_pgcrypto_${run_id}"
+readonly wrong_pgcrypto_schema_db="c3b_wrong_pgcrypto_schema_${run_id}"
+readonly missing_digest_signature_db="c3b_missing_digest_signature_${run_id}"
 readonly wait_seconds=30
 readonly actor_seconds=50
 tmp_dir=$(mktemp -d)
@@ -57,7 +60,8 @@ cleanup() {
       original_status=1
     fi
   done
-  for db in "$admin_db" "$grant_db" "$history_db"; do
+  for db in "$admin_db" "$grant_db" "$history_db" "$missing_pgcrypto_db" \
+    "$wrong_pgcrypto_schema_db" "$missing_digest_signature_db"; do
     psql_db postgres -c "drop database if exists $db with (force)" >/dev/null 2>&1 || true
   done
   rm -rf "$tmp_dir"
@@ -95,6 +99,25 @@ assert_query() {
     echo "FAIL: $label" >&2
     exit 1
   }
+}
+
+assert_query_in_db() {
+  local db=$1 query=$2 label=$3
+  [[ "$(psql_db "$db" -Atqc "$query" | tr -d '\r')" == t ]] || {
+    echo "FAIL: $label" >&2
+    exit 1
+  }
+}
+
+assert_no_c3b_objects() {
+  local db=$1 label=$2
+  assert_query_in_db "$db" "select
+      to_regclass('public.every8d_settings_auth_challenges') is null
+      and to_regclass('public.every8d_settings_auth_challenge_failures') is null
+      and to_regprocedure(
+        'public.is_every8d_settings_canonical_email_v1(text)') is null
+      and to_regprocedure(
+        'public.every8d_settings_email_lock_word_v1(text)') is null" "$label"
 }
 
 wait_for_backend() {
@@ -225,11 +248,65 @@ wait_capture_status() {
   set -e
 }
 
-# The source database is the completed C3a proof database. Clone it to prove
-# migration preflight behavior without mutating or weakening C3a.
-for db in "$admin_db" "$grant_db" "$history_db"; do
+# The source database is the completed C3a proof database. Mirror Supabase's
+# disposable pgcrypto placement before any C3b migration execution. This setup
+# verifies the production dependency contract without changing migration history.
+psql_db "$database" -qc "
+  create schema if not exists extensions;
+  grant usage on schema extensions to $owner_role;"
+pgcrypto_schema=$(psql_db "$database" -Atqc "select n.nspname
+  from pg_extension e join pg_namespace n on n.oid=e.extnamespace
+  where e.extname='pgcrypto'" | tr -d '\r')
+if [[ "$pgcrypto_schema" == public ]]; then
+  psql_db "$database" -qc "alter extension pgcrypto set schema extensions"
+elif [[ "$pgcrypto_schema" != extensions ]]; then
+  echo "FAIL: disposable pgcrypto must begin in public or extensions" >&2
+  exit 1
+fi
+assert_query "select
+    (select n.nspname='extensions' from pg_extension e
+      join pg_namespace n on n.oid=e.extnamespace where e.extname='pgcrypto')
+    and to_regprocedure('extensions.digest(bytea,text)') is not null
+    and to_regprocedure('public.digest(bytea,text)') is null" \
+  'disposable pgcrypto mirrors production extensions schema'
+
+# Clone the production-compatible C3a source to prove dependency and data
+# preflight behavior without mutating or weakening C3a.
+for db in "$admin_db" "$grant_db" "$history_db" "$missing_pgcrypto_db" \
+  "$wrong_pgcrypto_schema_db" "$missing_digest_signature_db"; do
   psql_db postgres -qc "create database $db template $database"
 done
+
+psql_db "$missing_pgcrypto_db" -qc "drop extension pgcrypto"
+expect_failure 'C3b-1 migration requires pgcrypto extension' missing_pgcrypto \
+  psql_owner_db "$missing_pgcrypto_db" <"$migration"
+assert_no_c3b_objects "$missing_pgcrypto_db" \
+  'missing pgcrypto failure leaves no C3b objects'
+
+psql_db "$wrong_pgcrypto_schema_db" -qc \
+  "alter extension pgcrypto set schema public"
+assert_query_in_db "$wrong_pgcrypto_schema_db" "select
+    to_regprocedure('public.digest(bytea,text)') is not null
+    and to_regprocedure('extensions.digest(bytea,text)') is null" \
+  'wrong-schema fixture exposes only public.digest'
+expect_failure 'C3b-1 migration requires pgcrypto extension in extensions schema' \
+  wrong_pgcrypto_schema psql_owner_db "$wrong_pgcrypto_schema_db" <"$migration"
+assert_no_c3b_objects "$wrong_pgcrypto_schema_db" \
+  'wrong pgcrypto schema failure leaves no C3b objects'
+
+psql_db "$missing_digest_signature_db" -qc "
+  alter extension pgcrypto drop function extensions.digest(bytea,text);
+  drop function extensions.digest(bytea,text);"
+assert_query_in_db "$missing_digest_signature_db" "select
+    (select n.nspname='extensions' from pg_extension e
+      join pg_namespace n on n.oid=e.extnamespace where e.extname='pgcrypto')
+    and to_regprocedure('extensions.digest(bytea,text)') is null
+    and to_regprocedure('extensions.digest(text,text)') is not null" \
+  'missing-signature fixture preserves pgcrypto but removes exact overload'
+expect_failure 'C3b-1 migration requires extensions.digest(bytea,text)' \
+  missing_digest_signature psql_owner_db "$missing_digest_signature_db" <"$migration"
+assert_no_c3b_objects "$missing_digest_signature_db" \
+  'missing digest signature failure leaves no C3b objects'
 
 psql_owner_db "$admin_db" -qc "
   alter table public.every8d_settings_administrators

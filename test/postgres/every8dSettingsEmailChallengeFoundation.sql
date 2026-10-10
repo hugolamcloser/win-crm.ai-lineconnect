@@ -75,6 +75,29 @@ select pg_temp.assert_true(
     'public.protect_every8d_settings_auth_challenge_v1()'::regprocedure
   ) ~* 'grant_row[[:space:]]+record',
   'challenge protection trigger has no enrollment-grant rowtype dependency');
+select pg_temp.assert_true(
+  (select n.nspname='extensions'
+   from pg_extension e join pg_namespace n on n.oid=e.extnamespace
+   where e.extname='pgcrypto')
+  and to_regprocedure('extensions.digest(bytea,text)') is not null
+  and to_regprocedure('public.digest(bytea,text)') is null,
+  'pgcrypto dependency is exact and public.digest is not required');
+select pg_temp.assert_true(
+  pg_get_functiondef(
+    'public.every8d_settings_email_lock_word_v1(text)'::regprocedure
+  ) ~* 'extensions[.]digest[[:space:]]*[(]'
+  and pg_get_functiondef(
+    'public.every8d_settings_email_lock_word_v1(text)'::regprocedure
+  ) !~* 'public[.]digest[[:space:]]*[(]',
+  'advisory projection explicitly calls extensions.digest');
+select pg_temp.assert_true(
+  encode(extensions.digest(
+    convert_to('wincrm/every8d/settings/email-lock/v1','UTF8')
+      || decode('00','hex')
+      || convert_to('k1:'||repeat('0',64),'UTF8'),
+    'sha256'
+  ),'hex')='905c89617fdc43649efd85a669731f26c34a65c7780e9743da0687b09342ad89',
+  'fixed SHA-256 advisory projection vector');
 
 select pg_temp.assert_true(bool_and(public.is_every8d_settings_canonical_email_v1(v)),
   'canonical valid vectors') from (values
