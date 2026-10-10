@@ -3,6 +3,53 @@
 begin;
 set local lock_timeout = '5s';
 
+-- Supabase installs pgcrypto in extensions. Verify the exact trusted dependency;
+-- this migration must neither install pgcrypto nor move it between schemas.
+do $$
+declare
+  pgcrypto_extension_oid oid;
+  pgcrypto_schema name;
+begin
+  select e.oid,n.nspname
+  into pgcrypto_extension_oid,pgcrypto_schema
+  from pg_catalog.pg_extension e
+  join pg_catalog.pg_namespace n on n.oid=e.extnamespace
+  where e.extname='pgcrypto';
+
+  if pgcrypto_extension_oid is null then
+    raise exception 'C3b-1 migration requires pgcrypto extension'
+      using errcode = '55000';
+  end if;
+
+  if pgcrypto_schema <> 'extensions' then
+    raise exception 'C3b-1 migration requires pgcrypto extension in extensions schema'
+      using errcode = '55000';
+  end if;
+
+  if not exists (
+    select 1
+    from pg_catalog.pg_proc p
+    join pg_catalog.pg_namespace n on n.oid=p.pronamespace
+    join pg_catalog.pg_depend d
+      on d.classid='pg_catalog.pg_proc'::pg_catalog.regclass
+      and d.objid=p.oid
+      and d.objsubid=0
+      and d.refclassid='pg_catalog.pg_extension'::pg_catalog.regclass
+      and d.refobjid=pgcrypto_extension_oid
+      and d.deptype='e'
+    where n.nspname='extensions'
+      and p.proname='digest'
+      and p.pronargs=2
+      and p.proargtypes[0]='pg_catalog.bytea'::pg_catalog.regtype
+      and p.proargtypes[1]='pg_catalog.text'::pg_catalog.regtype
+      and p.prorettype='pg_catalog.bytea'::pg_catalog.regtype
+  ) then
+    raise exception 'C3b-1 migration requires extensions.digest(bytea,text)'
+      using errcode = '55000';
+  end if;
+end;
+$$;
+
 -- Frozen parent-first migration lock order. Do not rely on implicit DDL locks.
 lock table public.ghl_marketplace_installations in share row exclusive mode;
 lock table public.every8d_settings_enrollment_grants in share row exclusive mode;
@@ -152,7 +199,7 @@ begin
     raise exception 'EVERY8D settings email pseudonym is invalid'
       using errcode = '23514';
   end if;
-  lock_digest := public.digest(
+  lock_digest := extensions.digest(
     convert_to('wincrm/every8d/settings/email-lock/v1', 'UTF8')
       || decode('00', 'hex') || convert_to(input_pseudonym, 'UTF8'),
     'sha256'

@@ -17,6 +17,14 @@ Both have RLS enabled without FORCE RLS, have zero policies, and deny all table
 privileges to `PUBLIC`, `anon`, `authenticated`, and `service_role`. All C3b-1
 functions are owner-only. A later reviewed phase must add narrow runtime wrappers.
 
+## Cryptographic dependency
+
+The forward migration fails closed before creating C3b objects unless the
+`pgcrypto` extension is installed in the exact `extensions` schema and owns the
+exact `extensions.digest(bytea,text)` signature. It does not install or move the
+extension. The advisory-lock projection calls `extensions.digest` explicitly and
+does not depend on `search_path` or a `public.digest` compatibility alias.
+
 ## Canonical identity
 
 `is_every8d_settings_canonical_email_v1(text)` validates but never transforms.
