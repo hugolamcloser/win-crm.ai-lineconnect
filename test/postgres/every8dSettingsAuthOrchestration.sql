@@ -39,6 +39,57 @@ begin
 end;
 $$;
 
+create function pg_temp.append_challenge_failures(
+  input_challenge_id uuid, input_failure_count integer
+) returns void language plpgsql as $$
+declare
+  challenge_row public.every8d_settings_auth_challenges%rowtype;
+  existing_count integer;
+  attempt_n integer;
+begin
+  select c.* into challenge_row
+  from public.every8d_settings_auth_challenges c
+  where c.id=input_challenge_id for update of c;
+  perform pg_temp.assert_true(
+    challenge_row.id is not null and challenge_row.delivery_succeeded_at is not null
+    and challenge_row.delivery_failed_at is null and challenge_row.locked_at is null
+    and challenge_row.superseded_at is null and challenge_row.verified_at is null
+    and challenge_row.consumed_at is null
+    and challenge_row.delivery_succeeded_at<challenge_row.expires_at
+    and pg_catalog.clock_timestamp()<challenge_row.expires_at,
+    'failure fixture must be LIVE with persisted delivery before expiry');
+  select count(*)::integer into existing_count
+  from public.every8d_settings_auth_challenge_failures f
+  where f.challenge_id=input_challenge_id;
+  perform pg_temp.assert_true(
+    input_failure_count between 1 and 5 and existing_count<input_failure_count,
+    'failure fixture appends only the next attempts up to five');
+
+  -- C3b-1 permits failure-equal-delivery and nondecreasing ledger timestamps.
+  -- Use the persisted row, never an old capture or an invented future time.
+  -- Each INSERT completes its immediate triggers before the next attempt.
+  for attempt_n in (existing_count+1)..input_failure_count loop
+    insert into public.every8d_settings_auth_challenge_failures(
+      challenge_id,attempt_number,failed_at
+    ) values (input_challenge_id,attempt_n,challenge_row.delivery_succeeded_at);
+  end loop;
+  perform pg_temp.assert_true(
+    (select count(*)=input_failure_count
+      and array_agg(f.attempt_number order by f.attempt_number)
+        =array(select generate_series(1,input_failure_count))
+      and bool_and(f.failed_at=challenge_row.delivery_succeeded_at
+        and f.failed_at<challenge_row.expires_at)
+    from public.every8d_settings_auth_challenge_failures f
+    where f.challenge_id=input_challenge_id)
+    and (select case when input_failure_count=5 then
+        c.locked_at=challenge_row.delivery_succeeded_at
+        and c.normalized_email is null and c.email_scrubbed_at=c.locked_at
+      else c.locked_at is null end
+    from public.every8d_settings_auth_challenges c where c.id=input_challenge_id),
+    'ordered failure fixture preserves chronology and database-owned fifth lock');
+end;
+$$;
+
 create function pg_temp.assert_static_enrollment_parity(
   v1_statement text, v2_statement text, label text
 ) returns void language plpgsql as $$
@@ -420,13 +471,21 @@ cross join lateral (select :'rate_captured_at'::timestamptz-(n+4)*interval '1 mi
 select pg_temp.assert_true(public.runtime_record_every8d_settings_challenge_delivery_v1(
   decode(lpad(to_hex(112+n),64,'0'),'hex'),true,null),
   'rate-failure fixture delivery recorded') from generate_series(1,2) n;
-insert into public.every8d_settings_auth_challenge_failures(
-  challenge_id,attempt_number,failed_at
-)
-select ('7b305000-0000-4000-8004-'||lpad(challenge_n::text,12,'0'))::uuid,
-  attempt_n,:'rate_captured_at'::timestamptz-(challenge_n+4)*interval '1 minute'
-    +attempt_n*interval '1 second'
-from generate_series(1,2) challenge_n cross join generate_series(1,5) attempt_n;
+select pg_temp.append_challenge_failures('7b305000-0000-4000-8004-000000000001',5);
+select pg_temp.append_challenge_failures('7b305000-0000-4000-8004-000000000002',4);
+select pg_temp.assert_true((select count(*)=9
+  from public.every8d_settings_auth_challenge_failures f
+  join public.every8d_settings_auth_challenges c on c.id=f.challenge_id
+  where c.email_pseudonym='k1:'||repeat('9',64)),
+  'frozen helper baseline has exactly nine recent failures');
+select public.assert_every8d_settings_challenge_rate_limits_v1(
+  array['k1:'||repeat('9',64)],null,:'rate_captured_at'::timestamptz);
+select pg_temp.append_challenge_failures('7b305000-0000-4000-8004-000000000002',5);
+select pg_temp.assert_true((select count(*)=10
+  from public.every8d_settings_auth_challenge_failures f
+  join public.every8d_settings_auth_challenges c on c.id=f.challenge_id
+  where c.email_pseudonym='k1:'||repeat('9',64)),
+  'frozen helper baseline has exactly ten recent failures');
 select pg_temp.assert_rate_rejected(array['k1:'||repeat('9',64)],null,
   :'rate_captured_at'::timestamptz,'tenth failed attempt in one hour');
 
@@ -507,7 +566,6 @@ from generate_series(3101,3108) hash_n;
 do $$
 declare
   fixture record;
-  attempt_n integer;
 begin
   for fixture in
     select * from (values
@@ -522,11 +580,7 @@ begin
     ) failures(challenge_id,failure_count)
     order by challenge_id
   loop
-    for attempt_n in 1..fixture.failure_count loop
-      insert into public.every8d_settings_auth_challenge_failures(
-        challenge_id,attempt_number,failed_at
-      ) values (fixture.challenge_id,attempt_n,pg_catalog.clock_timestamp());
-    end loop;
+    perform pg_temp.append_challenge_failures(fixture.challenge_id,fixture.failure_count);
   end loop;
 end;
 $$;
@@ -1554,7 +1608,7 @@ select pg_temp.assert_true(public.runtime_record_every8d_settings_challenge_deli
   'R05 v1 parity fixture delivery recorded')
 from (values (2521,1),(2521,2),(2522,1),(2522,2)) fixture(token_n,challenge_n);
 do $$
-declare fixture record; attempt_n integer;
+declare fixture record;
 begin
   for fixture in select * from (values
     ('7b3a2000-0000-4000-8001-000000000001'::uuid,5),
@@ -1562,11 +1616,7 @@ begin
     ('7b3a2000-0000-4000-8002-000000000001'::uuid,5),
     ('7b3a2000-0000-4000-8002-000000000002'::uuid,5)
   ) failures(challenge_id,failure_count) loop
-    for attempt_n in 1..fixture.failure_count loop
-      insert into public.every8d_settings_auth_challenge_failures(
-        challenge_id,attempt_number,failed_at
-      ) values (fixture.challenge_id,attempt_n,pg_catalog.clock_timestamp());
-    end loop;
+    perform pg_temp.append_challenge_failures(fixture.challenge_id,fixture.failure_count);
   end loop;
 end;
 $$;
@@ -2223,12 +2273,7 @@ select pg_temp.assert_true(public.runtime_record_every8d_settings_challenge_deli
   decode(repeat('f2',32),'hex'),true,null),'expiry-race fixture delivery recorded');
 select pg_sleep(2);
 
-insert into public.every8d_settings_auth_challenge_failures(
-  challenge_id,attempt_number,failed_at
-)
-select '7b360000-0000-4000-8000-000000000002',n,
-  clock_timestamp()-interval '10 seconds'+n*interval '1 second'
-from generate_series(1,4) n;
+select pg_temp.append_challenge_failures('7b360000-0000-4000-8000-000000000002',4);
 
 select * from public.runtime_request_every8d_settings_enrollment_challenge_v1(
   decode(repeat('d4',32),'hex'),'7b360000-0000-4000-8000-000000000005',

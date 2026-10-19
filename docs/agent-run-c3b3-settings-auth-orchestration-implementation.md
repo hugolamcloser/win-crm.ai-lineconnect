@@ -419,3 +419,117 @@ Perform the final independent approval review, then run the pending hosted
 PostgreSQL 17 proof only through a later authorized PR CI flow. Do not push,
 open a PR, deploy, enable settings auth, create keys, or apply the migration
 externally in this task.
+
+## Hosted CI failure and focused fixture remediation (2026-10-19)
+
+This section supersedes earlier PENDING_PR_CI and pre-PR next-action statements.
+PR: #114 (https://github.com/hugolamcloser/win-crm.ai-lineconnect/pull/114).
+Initial pushed/reviewed HEAD: 40da875bdddfc00bceedcd2bb7f8fdccdbf61a67.
+Authoritative origin/main: 64d2418ab592e710d92eaa58ddd6b570f7473585.
+The exact branch and local/remote HEAD were verified after fetching origin;
+the worktree was clean before editing. The owner explicitly authorized this
+focused hosted-proof remediation and one new local commit, without a push,
+CI rerun, runtime authority change, merge, deployment, or external migration.
+
+Initial hosted CI, run 39204772721, postgres job 117905112514:
+
+- validate: SUCCESS.
+- postgres-concurrency: FAILURE.
+- Failed step: Prove EVERY8D settings auth orchestration, ACLs, and guarded rollback.
+- First terminating error: EVERY8D settings challenge failure append is invalid.
+- Exit code: 3.
+- All earlier proof steps passed, including C3a and C3b-1.
+
+The failure was discovered only by real hosted PostgreSQL 17 execution.
+It was not a production/runtime deployment. Hosted job step results and the
+narrowly filtered error/exit lines were independently inspected read-only.
+
+### Independently confirmed root cause and append audit
+
+The frozen C3b-1 protect_every8d_settings_auth_challenge_failure_v1 trigger
+requires an existing LIVE, unexpired challenge, attempt_number=existing_count+1,
+at most five attempts, failed_at>=delivery_succeeded_at, and failed_at<expires_at.
+The fifth-failure trigger alone sets locked_at and scrubs the email; deferred
+integrity requires sequential attempts, nondecreasing times, and the lock time
+to equal the fifth failure. These functions and their protections are unchanged.
+
+runtime_record_every8d_settings_challenge_delivery_v1 delegates to the frozen
+C3b-1 delivery function, which persists clock_timestamp(), not created_at.
+The 7b305000...8004 helper fixture instead used the older captured creation
+baseline, placing failures five to six minutes before actual delivery. This
+is a proof-fixture defect; no runtime defect was found in the failing path.
+
+All four manual append sites in the C3b-3 SQL and the complete shell harness
+were audited. The later 7b360000...0002 concurrency fixture also subtracted ten
+seconds from the current clock after fresh delivery and a two-second sleep;
+it could fail the same chronology predicate. Both used set-based inserts
+whose attempt order should not be relied on. The runtime F3 and R05/F2 parity
+fixtures already used bounded sequential loops and post-delivery wall time;
+no pre-delivery defect was found there. They now share the same row-derived
+fixture mechanism to make the chronology explicit at every C3b-3 append site.
+The C3b-3 shell harness contains no manual failure appends.
+
+The other manual appends in the retained C3b-1 SQL/shell were inspected:
+its SQL intentionally rejects delivery-minus-one-second, then accepts exact
+delivery time; its shell intentionally rejects malformed chronology within
+an expected-failure transaction, and its concurrency setup records historical
+delivery (created_at+10 seconds) before its four historical failures. These
+are established proofs, not additional C3b-3 defects; they were not changed.
+
+### Smallest safe correction and proof preservation
+
+Only the C3b-3 SQL proof and this log changed. A pg_temp invoker helper reads
+and locks the actual challenge row, asserts LIVE state and delivery before
+expiry, and appends each next attempt in a separate loop statement, capped
+at five. Each failed_at equals the actual persisted delivery_succeeded_at.
+C3b-1 explicitly permits equality and nondecreasing timestamps; this avoids
+inventing pre-delivery or future times that could interfere with later
+verification races. Postconditions assert exact sequential attempts, valid
+expiry chronology, and the database-owned fifth lock/email scrub.
+
+The frozen helper baseline now explicitly checks nine failures as allowed,
+then appends only the fifth attempt to the second challenge and checks ten
+as refused at the same frozen rate baseline. Existing runtime login/enrollment
+nine/ten assertions, F3 wrapper boundary, R05 enrollment v1/v2 F2 parity,
+and fifth-failure concurrency proof remain intact. No trigger is bypassed,
+disabled, or altered by the correction; no locked_at is forced.
+
+### Local remediation validation
+
+| Local gate | Result |
+| --- | --- |
+| npm run typecheck | PASS |
+| node --test test/every8dSettingsAuthOrchestration.test.cjs | PASS, 15/15 |
+| npm test | PASS, 696/696 |
+| npm run build | PASS |
+| git diff --check | PASS |
+| bash -n test/postgres/every8dSettingsAuthOrchestration.sh | PASS |
+
+All requested gates passed. Diff inspection then caught and corrected a
+text-replacement error in the new helper's dollar-quote delimiters; the full
+local gate set was repeated after that correction. A static delimiter/manual-
+append audit also passed; it is not an executable PostgreSQL result.
+Implementation correction loops used for this follow-up: one. No independent
+reviewer correction loop or PostgreSQL retest was performed in this task.
+The exact final delta is ready for the separately requested independent review.
+Local PostgreSQL 17 executable proof remains UNAVAILABLE: the previously
+inspected installation lacks the server catalog needed for a disposable
+cluster. No PostgreSQL connection, external database, or production access
+was attempted for this remediation. Static and Node checks do not establish
+PostgreSQL migration/rollback/concurrency success.
+
+HOSTED POSTGRESQL 17 EXECUTABLE PROOF:
+FAILED_INITIAL_RUN / REMEDIATION_PENDING_RETEST
+
+### Review, rollback, and safety
+
+One focused new commit is authorized after the requested local gates pass.
+Do not amend the pushed commit or push this follow-up before independent delta
+review. No CI rerun is authorized in this task. Rollback consists only of
+reverting these two test/documentation file changes; no runtime/schema/data
+rollback is needed. The original hosted failure remains unresolved by
+executable proof until a later separately authorized hosted retest.
+
+No production DB access, external migration, Railway change, key creation,
+settings-auth activation, feature-flag change, email/SMS, LINE change, C3c,
+merge, deployment, branch deletion, or worktree deletion occurred.
