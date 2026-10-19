@@ -507,7 +507,7 @@ begin
       else 'k1:'||pg_catalog.repeat('2',63)||'b' end;
     perform public.issue_every8d_settings_operator_enrollment_grant_v1(
       '7b300000-0000-4000-8000-000000000002',1,email,token_hash,
-      'operator_initial',pg_catalog.clock_timestamp()+interval '20 minutes',
+      'operator_initial',pg_catalog.clock_timestamp()+interval '14 minutes',
       'c3b3-issuer','c3b3-approver','C3B3-RECENT-FAILURE-'||token_n,
       'recent failure login boundary'
     );
@@ -518,13 +518,13 @@ $$;
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,
   'recent-failure-enroll-pass@example.com',decode(lpad(to_hex(3003),64,'0'),'hex'),
-  'operator_initial',clock_timestamp()+interval '20 minutes','c3b3-issuer',
+  'operator_initial',clock_timestamp()+interval '14 minutes','c3b3-issuer',
   'c3b3-approver','C3B3-RECENT-FAILURE-3003','recent failure enrollment boundary')
   \gset recent_failure_enroll_pass_
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,
   'recent-failure-enroll-refuse@example.com',decode(lpad(to_hex(3004),64,'0'),'hex'),
-  'operator_initial',clock_timestamp()+interval '20 minutes','c3b3-issuer',
+  'operator_initial',clock_timestamp()+interval '14 minutes','c3b3-issuer',
   'c3b3-approver','C3B3-RECENT-FAILURE-3004','recent failure enrollment boundary')
   \gset recent_failure_enroll_refuse_
 
@@ -845,12 +845,12 @@ select clock_timestamp() captured_at \gset parity_enroll_window_
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,'parity-enroll-long-v1@example.com',
   decode(lpad(to_hex(2101),64,'0'),'hex'),'operator_initial',
-  :'parity_enroll_window_captured_at'::timestamptz+interval '20 minutes',
+  clock_timestamp()+interval '14 minutes',
   'c3b3-issuer','c3b3-approver','C3B3-PARITY-ENROLL-LONG-V1','enrollment parity') \gset parity_enroll_long_v1_
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,'parity-enroll-long-v2@example.com',
   decode(lpad(to_hex(2102),64,'0'),'hex'),'operator_initial',
-  :'parity_enroll_window_captured_at'::timestamptz+interval '20 minutes',
+  clock_timestamp()+interval '14 minutes',
   'c3b3-issuer','c3b3-approver','C3B3-PARITY-ENROLL-LONG-V2','enrollment parity') \gset parity_enroll_long_v2_
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,'parity-enroll-short-v1@example.com',
@@ -1671,11 +1671,11 @@ select pg_temp.assert_true(
 -- and proves equivalent supersession/new-row behavior.
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,'parity-enroll-resend-v1@example.com',
-  decode(lpad(to_hex(2201),64,'0'),'hex'),'operator_initial',clock_timestamp()+interval '20 minutes',
+  decode(lpad(to_hex(2201),64,'0'),'hex'),'operator_initial',clock_timestamp()+interval '14 minutes',
   'c3b3-issuer','c3b3-approver','C3B3-PARITY-ENROLL-RESEND-V1','enrollment resend parity') \gset parity_enroll_resend_v1_
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,'parity-enroll-resend-v2@example.com',
-  decode(lpad(to_hex(2202),64,'0'),'hex'),'operator_initial',clock_timestamp()+interval '20 minutes',
+  decode(lpad(to_hex(2202),64,'0'),'hex'),'operator_initial',clock_timestamp()+interval '14 minutes',
   'c3b3-issuer','c3b3-approver','C3B3-PARITY-ENROLL-RESEND-V2','enrollment resend parity') \gset parity_enroll_resend_v2_
 select * from public.request_every8d_settings_enrollment_challenge_v1(
   :'parity_enroll_resend_v1_grant_id'::uuid,'parity-enroll-resend-v1@example.com',

@@ -533,3 +533,214 @@ executable proof until a later separately authorized hosted retest.
 No production DB access, external migration, Railway change, key creation,
 settings-auth activation, feature-flag change, email/SMS, LINE change, C3c,
 merge, deployment, branch deletion, or worktree deletion occurred.
+
+## Hosted grant-expiry correction (2026-10-20)
+
+This section supersedes earlier hosted-proof and next-action status statements.
+PR: #114 (https://github.com/hugolamcloser/win-crm.ai-lineconnect/pull/114).
+Retest run: 39339894456; failed postgres-concurrency job: 118358549603.
+
+- validate: SUCCESS.
+- postgres-concurrency: FAILURE.
+- Failed step: Prove EVERY8D settings auth orchestration, ACLs, and guarded rollback.
+- Terminating C3b-3 error: EVERY8D operator enrollment grant expiry is invalid.
+- Exit code: 3. Hosted failed-step metadata and the exact error/exit evidence
+  were independently inspected read-only; no CI rerun occurred.
+
+Before editing, fetch and local/remote PR checks confirmed clean worktree,
+branch codex/c3b3-settings-auth-orchestration-implementation, pushed/local HEAD
+5f0441f0d820ce84600810f0cbb9df954befb07e, two commits over authoritative base
+64d2418ab592e710d92eaa58ddd6b570f7473585, and an OPEN, unmerged PR #114.
+The failure was discovered by actual hosted PostgreSQL 17 execution, not by
+any production access or deployment.
+
+### New explicit owner authorization and exhaustion
+
+The owner explicitly authorizes ONE additional C3b-3 hosted-CI correction cycle,
+limited strictly to fixing the PostgreSQL proof-fixture grant-expiry failures
+discovered in PR #114 retest. This authorization DOES NOT permit runtime
+authority changes, production changes, migration authority changes, rollback
+authority changes, deployment, merge, Railway changes, settings-auth activation,
+key creation, GHL_SMS_PHASE_2F_ENABLED changes, email or SMS, LINE changes,
+C3c work, or any later correction cycle.
+
+This is a NEW authorization, not an extension of the old F1-F4 exception.
+It is exhausted when this one grant-expiry correction cycle is completed;
+no carry-forward authority is inferred. One new local commit is authorized
+only after local checks; push, CI rerun, merge, and deployment are not authorized.
+Independent delta review must precede any separately authorized push.
+
+### Authoritative contract and confirmed fixture-only root cause
+
+The unchanged C3a issue_every8d_settings_operator_enrollment_grant_v1 checks
+finite input_expires_at and, after parent eligibility and tuple locking, captures
+its OWN issued_at := clock_timestamp(). It requires issued_at<input_expires_at
+and input_expires_at<=issued_at+interval '15 minutes'. The retained row check
+also bounds expiry against created_at, which is the persisted issued_at.
+The unchanged C3b-1/v2 enrollment request requires at least two minutes of
+remaining grant lifetime and sets challenge expiry to the exact minimum of
+created_at+10 minutes and the actual grant expiry.
+
+Root cause: positive proof fixtures requested operator enrollment grants beyond
+the authoritative 15-minute maximum. No runtime or contract defect was found;
+no source, production migration, rollback, workflow, or shell file changed.
+
+### Complete issuer audit and decision matrix
+
+All 51 SQL issuer call sites were parsed with balanced arguments and inspected,
+including loops and the variable expiry expression. The complete shell proof
+has ZERO operator issuer calls. Loops expand these sites into 121 grant
+issuances; seven invalid positive call sites generate eight invalid grants.
+No deliberate invalid-ISSUER-expiry negative calls exist in these two files.
+Tokens 2405/2406 intentionally issue valid one-minute grants, then expect
+ENROLLMENT REQUEST rejection for less than two minutes remaining; they are
+not invalid grant-issuance setup and remain unchanged.
+
+Every row below is subject to the same authoritative requirement:
+finite expiry and 0<expires_at-issued_at<=15 minutes. Lines refer to the
+pre-correction SQL; no lines were added to or removed from that SQL file.
+
+| SQL line | Fixture/case | Original expiry expression | Issuer classification | Why the value exists / preserved proof purpose | Minimum safe replacement |
+| --- | --- | --- | --- | --- | --- |
+| 343 | 'C3B3-ENROLL' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'orchestration proof' | Unchanged |
+| 347 | 'C3B3-LOGIN' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'login identity proof' | Unchanged |
+| 428 | 'C3B3-RATE-GRANT' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'grant rate boundary' | Unchanged |
+| 508 | 'C3B3-RECENT-FAILURE-'\|\|token_n | pg_catalog.clock_timestamp()+interval '20 minutes' | INVALID positive | 'recent failure login boundary' | pg_catalog.clock_timestamp()+interval '14 minutes' |
+| 518 | 'C3B3-RECENT-FAILURE-3003' | clock_timestamp()+interval '20 minutes' | INVALID positive | 'recent failure enrollment boundary' | clock_timestamp()+interval '14 minutes' |
+| 524 | 'C3B3-RECENT-FAILURE-3004' | clock_timestamp()+interval '20 minutes' | INVALID positive | 'recent failure enrollment boundary' | clock_timestamp()+interval '14 minutes' |
+| 664 | 'C3B3-WRAPPER-RATE-'\|\|i | pg_catalog.clock_timestamp()+interval '12 minutes' | VALID issuer input | 'wrapper rate identity' | Unchanged |
+| 746 | 'C3B3-WRAPPER-GRANT-PASS' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'grant wrapper boundary' | Unchanged |
+| 750 | 'C3B3-WRAPPER-GRANT-REFUSE' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'grant wrapper boundary' | Unchanged |
+| 789 | 'C3B3-PARITY-V1' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'v1 parity identity' | Unchanged |
+| 796 | 'C3B3-PARITY-V2' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'v2 parity identity' | Unchanged |
+| 845 | 'C3B3-PARITY-ENROLL-LONG-V1' | :'parity_enroll_window_captured_at'::timestamptz+interval '20 minutes' | INVALID positive | 'enrollment parity' | clock_timestamp()+interval '14 minutes' |
+| 850 | 'C3B3-PARITY-ENROLL-LONG-V2' | :'parity_enroll_window_captured_at'::timestamptz+interval '20 minutes' | INVALID positive | 'enrollment parity' | clock_timestamp()+interval '14 minutes' |
+| 855 | 'C3B3-PARITY-ENROLL-SHORT-V1' | :'parity_enroll_window_captured_at'::timestamptz+interval '5 minutes' | VALID issuer input | 'enrollment parity' | Unchanged |
+| 860 | 'C3B3-PARITY-ENROLL-SHORT-V2' | :'parity_enroll_window_captured_at'::timestamptz+interval '5 minutes' | VALID issuer input | 'enrollment parity' | Unchanged |
+| 1101 | 'C3B3-PARITY-ALIAS-V1' | clock_timestamp()+interval '14 minutes' | VALID issuer input | 'alias parity' | Unchanged |
+| 1105 | 'C3B3-PARITY-ALIAS-V2' | clock_timestamp()+interval '14 minutes' | VALID issuer input | 'alias parity' | Unchanged |
+| 1133 | 'C3B3-PARITY-ELIGIBILITY-'\|\|token_n | expiry | VALID issuer input | 'eligibility parity' | Unchanged |
+| 1328 | 'C3B3-PARITY-RATE-'\|\|token_n | pg_catalog.clock_timestamp()+interval '14 minutes' | VALID issuer input | 'matched enrollment rate parity' | Unchanged |
+| 1340 | 'C3B3-PARITY-RATE-HISTORY-'\|\|token_n | pg_catalog.clock_timestamp()+interval '14 minutes' | VALID issuer input | 'isolated hourly parity history' | Unchanged |
+| 1353 | 'C3B3-PARITY-RATE-HISTORY-'\|\|token_n | pg_catalog.clock_timestamp()+interval '14 minutes' | VALID issuer input | 'isolated daily parity history' | Unchanged |
+| 1581 | 'C3B3-PARITY-FAILURE-2521' | clock_timestamp()+interval '14 minutes' | VALID issuer input | 'failure parity' | Unchanged |
+| 1586 | 'C3B3-PARITY-FAILURE-2522' | clock_timestamp()+interval '14 minutes' | VALID issuer input | 'failure parity' | Unchanged |
+| 1672 | 'C3B3-PARITY-ENROLL-RESEND-V1' | clock_timestamp()+interval '20 minutes' | INVALID positive | 'enrollment resend parity' | clock_timestamp()+interval '14 minutes' |
+| 1676 | 'C3B3-PARITY-ENROLL-RESEND-V2' | clock_timestamp()+interval '20 minutes' | INVALID positive | 'enrollment resend parity' | clock_timestamp()+interval '14 minutes' |
+| 1698 | 'C3B3-PARITY-RESEND-V1' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'resend parity' | Unchanged |
+| 1705 | 'C3B3-PARITY-RESEND-V2' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'resend parity' | Unchanged |
+| 1815 | 'C3B3-ORPHAN-EXPLICIT' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'orphan supersession' | Unchanged |
+| 1852 | 'C3B3-DISCOVER-GRANT' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'discover mutate verify' | Unchanged |
+| 1876 | 'C3B3-DISCOVER-ADMIN' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'discover mutate verify' | Unchanged |
+| 1937 | 'C3B3-FIVE' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'failure ledger identity' | Unchanged |
+| 1969 | 'C3B3-COLLISION' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'collision identity' | Unchanged |
+| 2048 | 'C3B3-LIFECYCLE-ONLY' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'independent invalidation' | Unchanged |
+| 2075 | 'C3B3-GENERATION-ONLY' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'independent invalidation' | Unchanged |
+| 2105 | 'C3B3-EXPIRY-BEFORE' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'expiry boundary' | Unchanged |
+| 2131 | 'C3B3-CONCURRENT-CORRECT' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'v2 concurrency proof' | Unchanged |
+| 2138 | 'C3B3-CONCURRENT-FIFTH' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'v2 fifth failure proof' | Unchanged |
+| 2145 | 'C3B3-ADMIN-RACE' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'v2 admin race proof' | Unchanged |
+| 2152 | 'C3B3-LIFECYCLE-RACE' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'v2 lifecycle race proof' | Unchanged |
+| 2159 | 'C3B3-GRANT-RACE' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'v2 grant race proof' | Unchanged |
+| 2163 | 'C3B3-GRANT-CONSUME' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'v2 grant consume race' | Unchanged |
+| 2167 | 'C3B3-REQUEST-DISCOVERY' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'request discovery race' | Unchanged |
+| 2174 | 'C3B3-RESEND-RACE' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'resend serialization race' | Unchanged |
+| 2181 | 'C3B3-EXPIRY-RACE' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'expiry scrub race' | Unchanged |
+| 2188 | 'C3B3-CONCURRENT-WRONG' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'wrong/wrong race' | Unchanged |
+| 2195 | 'C3B3-CONCURRENT-MIXED' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'correct/wrong race' | Unchanged |
+| 2202 | 'C3B3-RESEND-VERIFY' | clock_timestamp()+interval '12 minutes' | VALID issuer input | 'resend/verify race' | Unchanged |
+| 2292 | 'C3B3-PARITY-CONCURRENCY-'\|\|token_n | pg_catalog.clock_timestamp()+interval '14 minutes' | VALID issuer input | 'matched enrollment concurrency parity' | Unchanged |
+| 2310 | 'C3B3-PARITY-DELIVERY-RESEND-'\|\|token_n | pg_catalog.clock_timestamp()+interval '14 minutes' | VALID issuer input | 'matched delivery resend concurrency parity' | Unchanged |
+| 2385 | 'C3B3-PARENT-ORDER-V1' | clock_timestamp()+interval '14 minutes' | VALID issuer input | 'parent ordering parity' | Unchanged |
+| 2390 | 'C3B3-PARENT-ORDER-V2' | clock_timestamp()+interval '14 minutes' | VALID issuer input | 'parent ordering parity' | Unchanged |
+
+The affected groups and their preserved semantics are:
+
+| Fixture | Original expiry | Why it exists | Minimum safe replacement | Proof semantic preserved |
+| --- | --- | --- | --- | --- |
+| 3001..3002 login identities | fresh clock+20m | Redeem administrator authority for failure-boundary identities | fresh clock+14m | Valid redemption; nine allowed / ten refused login wrapper requests |
+| 3003..3004 enrollment | fresh clock+20m | Keep grant LIVE during historical challenge/failure setup and request boundary | fresh clock+14m | Two-minute usable grant minimum; F3 enrollment nine/ten boundary and F2/R05 parity |
+| 2101/2102 long-grant pair | shared captured clock+20m | Ensure grant outlives challenge's ten-minute TTL | fresh clock+14m | Exact challenge expiry=created_at+10m AND least(created_at+10m,grant.expires_at) |
+| 2201/2202 resend pair | fresh clock+20m | Authority for initial request and explicit resend after 60 seconds | fresh clock+14m | Resend supersession/scrub, new authoritative PENDING challenge, exact expiry formula |
+
+### Captured timestamps, minimum lifetimes, and unchanged proof claims
+
+Only the seven invalid issuer expiry arguments changed. The long-grant pair
+now uses a fresh clock for each issuer call: the shared captured timestamp
+is still the creation-window lower bound, but its age is no longer part of
+the long-grant lifetime. Four minutes separate the intended fourteen-minute
+grant from the ten-minute challenge TTL under normal bounded local setup.
+The exact equality assertions at the long-grant and least(...) comparisons
+are byte-for-byte unchanged; the proof still rejects a grant-bounded result
+for the long pair.
+
+The short pair 2103/2104 retains the common captured clock+5m intentionally:
+matching grant-expiry instants are useful shared-window evidence. It is captured
+immediately before four issuer calls and the four request calls, without a
+sleep or concurrent lock holder in between. The five-minute window leaves
+three minutes above the two-minute usable-request minimum under normal setup,
+and stays below the ten-minute challenge TTL and fifteen-minute issuer maximum.
+The exact grant-bound and least(...) assertions are unchanged.
+The whole SQL proof runs through one psql_db invocation bounded by 60 seconds
+(with a 55-second statement timeout). A successful proof invocation therefore
+leaves the short pair more than four minutes after its fresh five-minute
+capture, safely above the two-minute request minimum; the fourteen-minute
+long pair retains more than thirteen minutes, above the ten-minute TTL.
+
+All other positive sites use fresh +12m or +14m, or the per-iteration expiry
+variable set immediately before each issuer call to +14m (or deliberately +1m
+for the request-negative pair). The issuer captures its own later time, so
+normal statement delay reduces these effective lifetimes rather than exceeding
+the maximum; none uses an exact fifteen-minute upper boundary. Source review
+establishes these intended margins, not an executable timing guarantee.
+
+The repaired recent-failure grants leave fourteen minutes for immediate
+redemption/setup, the at-least-two-minute enrollment minimum, and actual
+persisted delivery/failure chronology. Their historical challenge expiries
+continue to use least(created_at+10m,grant.expires_at); all ledger logic,
+counts, and F3/F2 R05 assertions are unchanged.
+The resend grants leave roughly thirteen minutes after the existing 61-second
+shell wait, retaining margin above two minutes and above the challenge's TTL.
+The shell's 60-second rule, bounded commands, resend requests, supersession
+checks, and all concurrency fixtures are unchanged. No assertion or proof
+claim was weakened; no old history interval of 20 minutes was replaced.
+A reverse-replacement audit recovered the exact original SQL, confirming that
+only these seven expiry arguments differ from the pushed version.
+
+### Local validation and truthful executable-proof status
+
+| Local gate | Result |
+| --- | --- |
+| npm run typecheck | PASS |
+| node --test test/every8dSettingsAuthOrchestration.test.cjs | PASS, 15/15 |
+| npm test | PASS, 696/696 |
+| npm run build | PASS |
+| git diff --check | PASS |
+| bash -n test/postgres/every8dSettingsAuthOrchestration.sh | PASS |
+
+All six local gates passed. Final source/argument audit passed for all 51 SQL
+call sites, their loop bounds, and the zero shell calls. The eight issuer-loop
+multiplicities are 2, 6, 18, 16, 4, 16, 12, and 4: together with the other
+43 single calls, they account for 121 grant issuances.
+No implementation correction loop or independent reviewer correction was
+needed within this one authorized grant-expiry cycle.
+No local or external PostgreSQL connection was attempted. Local executable
+PostgreSQL 17 proof remains UNAVAILABLE for the previously recorded missing
+server catalog/disposable-cluster limitation. Node tests, static source audit,
+and Bash syntax do not establish PostgreSQL migration/rollback/concurrency
+success. No hosted success is claimed after this local correction.
+
+HOSTED POSTGRESQL 17 EXECUTABLE PROOF:
+FAILED_RETEST / GRANT_EXPIRY_REMEDIATION_PENDING_RETEST
+
+### Review, rollback, and safety
+
+Only test/postgres/every8dSettingsAuthOrchestration.sql and this run log changed.
+Rollback is a revert of this focused follow-up; no runtime, schema, rollback
+authority, or data rollback is needed. This single grant-expiry cycle stops
+for independent delta review with one unpushed new commit. At the completed local handoff, this ONE grant-expiry correction cycle's
+write authority is exhausted. Any later correction requires NEW explicit owner
+authorization; the old exception is not extended.
+No production access, external migration, Railway change, key creation,
+settings-auth activation, GHL_SMS_PHASE_2F_ENABLED change, email/SMS, LINE
+change, C3c, merge, deployment, CI rerun, or push occurred in this cycle.
