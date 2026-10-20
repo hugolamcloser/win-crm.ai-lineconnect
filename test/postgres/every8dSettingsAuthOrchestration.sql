@@ -875,7 +875,7 @@ select * from public.runtime_request_every8d_settings_enrollment_challenge_v1(
   decode(lpad(to_hex(2122),64,'0'),'hex'),'otp-v1') \gset parity_enroll_long_v2_ch_
 select * from public.request_every8d_settings_enrollment_challenge_v1(
   :'parity_enroll_short_v1_grant_id'::uuid,'parity-enroll-short-v1@example.com',
-  'k1:'||repeat('a',63)||'1',array['k1:'||repeat('a',63)||'1'],
+  'k1:'||repeat('c3b3a001',8),array['k1:'||repeat('c3b3a001',8)],
   decode(lpad(to_hex(2113),64,'0'),'hex'),decode(lpad(to_hex(2123),64,'0'),'hex'),
   'otp-v1') \gset parity_enroll_short_v1_ch_
 select * from public.runtime_request_every8d_settings_enrollment_challenge_v1(
@@ -920,7 +920,7 @@ select pg_temp.assert_true((select count(*)=4 and bool_and(
   from (values
     (:'parity_enroll_long_v1_ch_challenge_id'::uuid,'parity-enroll-long-v1@example.com','k1:'||repeat('6',63)||'c'),
     (:'parity_enroll_long_v2_ch_challenge_id'::uuid,'parity-enroll-long-v2@example.com','k1:'||repeat('7',63)||'d'),
-    (:'parity_enroll_short_v1_ch_challenge_id'::uuid,'parity-enroll-short-v1@example.com','k1:'||repeat('a',63)||'1'),
+    (:'parity_enroll_short_v1_ch_challenge_id'::uuid,'parity-enroll-short-v1@example.com','k1:'||repeat('c3b3a001',8)),
     (:'parity_enroll_short_v2_ch_challenge_id'::uuid,'parity-enroll-short-v2@example.com','k1:'||repeat('b',63)||'2')
   ) expected(id,email,pseudonym)
   join public.every8d_settings_auth_challenges c on c.id=expected.id),
@@ -1107,8 +1107,8 @@ select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   decode(lpad(to_hex(2302),64,'0'),'hex'),'operator_initial',clock_timestamp()+interval '14 minutes',
   'c3b3-issuer','c3b3-approver','C3B3-PARITY-ALIAS-V2','alias parity') \gset parity_alias_v2_
 select * from public.request_every8d_settings_enrollment_challenge_v1(
-  :'parity_alias_v1_grant_id'::uuid,'parity-alias-v1@example.com','k1:'||repeat('1',64),
-  array['k0:'||repeat('2',64),'k1:'||repeat('1',64),'k1:'||repeat('1',64)],
+  :'parity_alias_v1_grant_id'::uuid,'parity-alias-v1@example.com','k1:'||repeat('c3b3e001',8),
+  array['k0:'||repeat('2',64),'k1:'||repeat('c3b3e001',8),'k1:'||repeat('c3b3e001',8)],
   decode(lpad(to_hex(2303),64,'0'),'hex'),decode(lpad(to_hex(2304),64,'0'),'hex'),'otp-v1')
   \gset parity_alias_v1_ch_
 select * from public.runtime_request_every8d_settings_enrollment_challenge_v1(

@@ -744,3 +744,134 @@ authorization; the old exception is not extended.
 No production access, external migration, Railway change, key creation,
 settings-auth activation, GHL_SMS_PHASE_2F_ENABLED change, email/SMS, LINE
 change, C3c, merge, deployment, CI rerun, or push occurred in this cycle.
+
+## Hosted alias-isolation correction (2026-10-20)
+
+This section supersedes earlier hosted status and next-action statements.
+PR: #114. Latest hosted run: 39359193572.
+Pushed/local starting HEAD: 70887e9001d9710d1fd13c641f75a478cb7f3077.
+Authoritative base: 64d2418ab592e710d92eaa58ddd6b570f7473585.
+Read-only identity checks without fetch confirmed the exact worktree, branch,
+clean worktree/index, matching remote HEAD, three pushed commits, ten changed
+PR files, and an OPEN, unmerged PR before editing.
+
+### Latest hosted evidence and diagnosis
+
+- validate: SUCCESS (job 118421080832).
+- postgres-concurrency: FAILURE (job 118421081414).
+- All PostgreSQL proof stages before the final C3b-3 proof: SUCCESS.
+- Failed step: Prove EVERY8D settings auth orchestration, ACLs, and guarded rollback.
+- Actual terminating error: no rows returned for \gset.
+- psql exit code: 3.
+- Hosted step results and narrowly filtered error/exit lines were independently
+  inspected read-only; no workflow was rerun.
+
+The previous grant-expiry remediation was effective: execution passed those
+issuer setups and reached the later main enrollment request. The remaining
+failure is proof fixture alias contamination; runtime/security authority is
+not implicated. The frozen rate helper rejects ANY challenge with a matching
+input alias in the preceding 60 seconds, without email, grant, purpose, or
+terminal-state scoping. The runtime core correctly catches the rate rejection
+and returns zero rows, which cannot populate the positive enrollment gset.
+No hosted PostgreSQL PASS exists yet.
+
+### Narrow new owner authorization
+
+Exactly ONE additional C3b-3 hosted-CI correction cycle is authorized ONLY for:
+(1) V12/main-enrollment alias isolation and (2) short-enrollment-parity/orphan-
+login alias isolation, including directly necessary synchronized fixture
+references/assertions, a shell value only if synchronization requires it,
+and this run-log update. Isolating either side of each collision is expressly
+allowed. Any NEW blocker outside these two confirmed collisions requires STOP
+FOR REVIEW without a fix.
+
+This does NOT authorize runtime authority, migration, rollback, contract,
+ACL/security, CI workflow, package/runtime configuration, unrelated cleanup,
+production, Railway, merge, deployment, settings-auth activation, HMAC key
+creation, GHL_SMS_PHASE_2F_ENABLED changes, email/SMS, LINE, C3c, or any later
+correction cycle. No production/merge/deployment authority is implied.
+This is not an extension of any prior exception. This new write authorization
+is exhausted once the one correction commit is created. No push or CI rerun
+is authorized; independent delta review must precede any separate push grant.
+
+### Confirmed collisions and smallest fixture-only changes
+
+| Collision | Earlier fixture alias before correction | Later positive fixture | Scoped correction |
+| --- | --- | --- | --- |
+| 1 | V12 v1 canonical k1: + repeat('1',64), duplicated in its alias array | Main enrollment uses the same canonical alias and expects one row via gset enrollment_ | Change ONLY the earlier V12 v1 canonical value and both duplicate array entries to k1: + repeat('c3b3e001',8) |
+| 2 | Short-enrollment v1 canonical k1: + repeat('a',63) + '1' | Orphan administrator and shell login request reuse that alias inside the 60-second window | Change ONLY the earlier short v1 request's canonical/array values and expected metadata to k1: + repeat('c3b3a001',8) |
+
+Each replacement digest is exactly 64 lowercase hexadecimal characters. The
+new aliases were absent from both proof sources before editing, including
+comparison with the existing repeated-hex literal values. After editing,
+each new expression appears exactly three times in its own earlier fixture
+reference set; neither appears in the shell or later main/orphan sequences.
+Dynamic numeric lpad/to_hex fixture values retain their separate zero-padded
+forms. This is a scoped namespace/reference audit, not a broad unrelated
+collision-cleanup exercise. No third independent blocker was discovered in
+this scoped audit.
+
+V12 retains its unchanged k0 historical alias, both identical k1 duplicate
+entries, valid normalization grammar, grant/token/OTP inputs, and matched
+acceptance assertion. The short-grant parity fixture retains its exact grant,
+challenge inputs, expected metadata structure, exact ten-minute/least(...)
+formula tests and exact grant-bounded expiry assertion.
+
+The later main enrollment request and every dependent delivery/discovery/
+verification/replay reference remain byte-for-byte unchanged, including its
+fixed UUID, one-row success/gset expectation, capability/OTP inputs and grant
+authority. The orphan SQL administrator redemption, shell initial login,
+pending-delivery verification, explicit resend and supersession assertions
+also remain byte-for-byte unchanged and synchronized with each other. The
+existing sleep 30 plus sleep 31 (61 seconds) and frozen 60-second resend rule
+are unchanged. No shell edit is necessary because the earlier colliding
+short-enrollment alias was isolated instead.
+
+A reverse-replacement audit recovers the exact original SQL by restoring just
+the six changed alias expressions. This proves no other SQL expression,
+assertion, gset, UUID, token/OTP value, grant authority, or behavior was edited.
+No runtime, rate-limit, migration, rollback, ACL/security, contract, or CI
+workflow changed. No assertion was weakened, no positive path was converted
+to a negative path, no gset was removed, and no collision-wait sleep was added.
+
+### Local validation and executable-proof status
+
+| Local gate | Actual result |
+| --- | --- |
+| node --test test/every8dSettingsAuthOrchestration.test.cjs | PASS, 15/15 |
+| npm test | PASS, 696/696 |
+| npm run typecheck | PASS |
+| npm run build | PASS |
+| git diff --check | PASS |
+| bash -n test/postgres/every8dSettingsAuthOrchestration.sh | PASS |
+| Scoped alias/reference and reverse-replacement audit | PASS |
+
+All requested local gates passed. The static audit found exactly three new
+references per corrected fixture, no stale alias in either corrected reference
+set, no new alias outside those sets, and byte-for-byte preservation of every
+other SQL expression and the entire synchronized shell harness. The whole
+correction cycle used no additional implementation or reviewer correction
+loop. This one write authorization is exhausted at creation of the correction
+commit; no later correction authority carries forward. The local handoff stops
+for independent delta review and a separately authorized hosted retest.
+Local PostgreSQL executable proof remains UNAVAILABLE for the previously
+recorded missing server-catalog/disposable-cluster limitation. No local or
+external PostgreSQL connection was attempted. Node tests, source checks and
+shell syntax do not establish PostgreSQL migration/rollback/concurrency PASS.
+
+HOSTED POSTGRESQL 17 EXECUTABLE PROOF:
+FAILED_RETEST / ALIAS_ISOLATION_REMEDIATION_PENDING_RETEST
+
+HOSTED_POSTGRESQL_PROOF:
+RETEST_REQUIRED
+
+### Review, rollback, and safety
+
+Only test/postgres/every8dSettingsAuthOrchestration.sql and this run log changed.
+Rollback is a revert of these scoped fixture/documentation changes; no schema,
+runtime, rollback authority or external data action is needed. One focused
+local commit follows passing validation, then STOP for independent delta review.
+Remote PR HEAD must remain 70887e9001d9710d1fd13c641f75a478cb7f3077.
+No push, CI rerun, amend, force push, merge, deployment, production access,
+external migration, Railway change, settings activation, key creation, feature-
+flag change, email/SMS, LINE change, or C3c occurred in this correction cycle.
