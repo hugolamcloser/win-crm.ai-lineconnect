@@ -875,3 +875,146 @@ Remote PR HEAD must remain 70887e9001d9710d1fd13c641f75a478cb7f3077.
 No push, CI rerun, amend, force push, merge, deployment, production access,
 external migration, Railway change, settings activation, key creation, feature-
 flag change, email/SMS, LINE change, or C3c occurred in this correction cycle.
+
+## Hosted grant-token namespace correction (2026-10-20)
+
+This section supersedes earlier hosted-proof status and next-action statements.
+Latest hosted run: 39363082107. PR #114 pushed HEAD:
+f26caa051fe0d7e2463a4b78e524741cb9358bd4.
+Authoritative base: 64d2418ab592e710d92eaa58ddd6b570f7473585.
+Before editing, read-only checks without fetch confirmed the exact worktree,
+branch, matching local/remote/PR HEAD, clean worktree/index, four pushed commits,
+and an OPEN, unmerged PR. No subsequent local commit existed.
+
+### Hosted evidence and confirmed same-class root cause
+
+- validate: SUCCESS (job 118433526443).
+- postgres-concurrency: FAILURE (job 118433526189).
+- Failed step: Prove EVERY8D settings auth orchestration, ACLs, and guarded rollback.
+- First terminating error: duplicate key value violates unique constraint
+  every8d_settings_enrollment_grants_token_hash_key.
+- Observed duplicate: decode(repeat('d2',32),'hex'), C3B3-ADMIN-RACE.
+- Confirmed latent collisions: d3/C3B3-LIFECYCLE-RACE and d4/C3B3-GRANT-RACE.
+- psql exit code: 3. All preceding PostgreSQL proof stages succeeded.
+
+Hosted step outcomes and narrowly filtered error/exit evidence were independently
+inspected read-only. The previous alias-isolation correction was effective: the proof
+progressed beyond the prior main enrollment gset failure to this later issuance.
+No hosted PostgreSQL PASS exists yet.
+
+The shared hosted database retains intentionally committed C3a concurrency
+consumed/revoked grant history. Global uniqueness on
+public.every8d_settings_enrollment_grants.token_hash correctly includes those
+historical rows. The later C3b-3 fixtures incorrectly reused three grant tokens.
+This is a C3b-3 proof namespace defect; no runtime/database-authority defect
+was found. Earlier rows, global uniqueness, and all frozen authority remain
+untouched. No history deletion, cleanup, or truncation was added.
+
+### Exact one-cycle owner authorization
+
+Exactly ONE additional correction cycle is authorized only for the d2, d3,
+and d4 C3b-3 enrollment-grant token collisions: ADMIN-RACE issuance/redemption,
+LIFECYCLE-RACE issuance/redemption, and GRANT-RACE issuance/runtime request/
+shell revocation selector. Table-specific collision verification and this run
+log are also authorized. Only those seven token references may change.
+
+No runtime authority, unique constraint, migration, rollback, C3a/C3b-1,
+contract, ACL/security/definer, CI workflow, unrelated fixture, production,
+Railway, merge state, deployment, C3c, settings activation, key creation,
+GHL_SMS_PHASE_2F_ENABLED, email/SMS, LINE, or later correction cycle is
+authorized. A new blocker requiring any other change means STOP FOR REVIEW.
+This is a new narrow authorization, not a carry-forward exception. It is
+exhausted once the single correction commit is created. No push or CI rerun
+is authorized, and no merge/deployment/production authority is implied.
+
+### Dedicated deterministic grant-token namespace and exact synchronization
+
+| Fixture | Old grant hash | New synthetic 32-byte grant hash | Authorized references |
+| --- | --- | --- | --- |
+| C3B3-ADMIN-RACE | decode(repeat('d2',32),'hex') | decode(repeat('c3b300d2',8),'hex') | SQL issuer + SQL redemption (2) |
+| C3B3-LIFECYCLE-RACE | decode(repeat('d3',32),'hex') | decode(repeat('c3b300d3',8),'hex') | SQL issuer + SQL redemption (2) |
+| C3B3-GRANT-RACE | decode(repeat('d4',32),'hex') | decode(repeat('c3b300d4',8),'hex') | SQL issuer + SQL runtime request + shell grant-revocation selector (3) |
+
+Each seed is eight hex digits repeated eight times: 64 hex characters, exactly
+32 bytes. All three are distinct and absent from both pre-correction grant
+sets. Replacement is anchored to the exact grant-authority contexts rather
+than a global d2/d3/d4 replacement. The new expressions occur only at the
+2+2+3 authorized references. Restoring just those expressions recovers the
+exact original SQL and shell bytes, proving all unrelated byte-pattern uses
+are unchanged, including the shell rollback challenge's d2 OTP HMAC.
+All emails, UUIDs, administrator aliases, request-token hashes, OTP/session
+values, ordering, transaction boundaries, advisory locks, waits, lifecycle
+behavior, and assertions remain identical.
+
+### Complete table-specific token audit
+
+Only public.every8d_settings_enrollment_grants.token_hash is compared. Matching
+values in request-token, OTP, session, or other namespaces are not collisions.
+All 51 C3b-3 operator issuer sites are parsed for their token argument and the
+eight numeric loops expanded, including local token_hash assignments. This
+produces 121 planned grant hashes, all distinct. There are no other C3b-3
+direct grant inserts or shell issuer calls.
+
+Earlier retained set: 26 distinct grant hashes, reconstructed from the earlier
+proof sources and their committed successful shell paths:
+
+- C3a repeated-byte grant values (13): a1, b1, c9, ca, cb, d2, d3, d4, cd,
+  cf, da, db, f8. The d2/d3/d4 operation-first races commit consumed history;
+  lifecycle-first e5/e6/e7 calls fail, and the delayed cc issuance fails.
+- C3b-1 repeated-byte grant values (7): 71 through 77.
+- C3b-1 zero-padded numeric grant values (6): to_hex(101) through to_hex(106),
+  each left-padded to 64 hex digits.
+- Both earlier standalone SQL proofs end in rollback, so their transactional
+  rows are not incorrectly added to the retained set. Other byte values in
+  earlier sessions/OTPs/challenges are excluded by table identity.
+
+The pre-correction intersection is EXACTLY d2, d3, d4, matching the authorized
+scope; no fourth collision or intra-C3b-3 duplicate was found. The selected
+namespaced replacements are absent from all 121 planned and 26 retained
+pre-correction hashes. Final reconstruction after the seven changes confirms:
+121 planned hashes, 121 distinct; 26 retained earlier hashes; cross-stage
+intersection ZERO; intra-C3b-3 duplicates ZERO. Each replacement is issued
+exactly once and used only at its authorized synchronized references. The
+complete table-specific collision audit passed; no new blocker was found.
+
+### Local validation and truthful executable status
+
+| Local gate | Actual result |
+| --- | --- |
+| node --test test/every8dSettingsAuthOrchestration.test.cjs | PASS, 15/15 |
+| npm test | PASS, 696/696 |
+| npm run typecheck | PASS |
+| npm run build | PASS |
+| git diff --check | PASS |
+| bash -n test/postgres/every8dSettingsAuthOrchestration.sh | PASS |
+| Exact seven-reference synchronization audit | PASS, 2+2+3 references |
+| Complete grant-table intersection audit | PASS, 121 vs 26, intersection 0 |
+| Unrelated d2/d3/d4 uses / reverse-source audit | PASS, all other source bytes unchanged |
+
+All requested local gates passed. No implementation correction loop or
+independent reviewer correction was needed within this one authorized cycle.
+Creation of the one local correction commit exhausts this write authorization;
+no later correction authority carries forward. Stop for independent delta
+review and a separately authorized push/retest.
+Local PostgreSQL executable proof remains UNAVAILABLE for the previously
+recorded missing server-catalog/disposable-cluster limitation. No local or
+external PostgreSQL connection was attempted. Local Node/static/shell checks
+do not establish executable PostgreSQL migration/rollback/concurrency success.
+
+HOSTED POSTGRESQL 17 EXECUTABLE PROOF:
+FAILED_RETEST / GRANT_TOKEN_NAMESPACE_REMEDIATION_PENDING_RETEST
+
+HOSTED_POSTGRESQL_PROOF:
+RETEST_REQUIRED
+
+### Review, rollback, and safety
+
+Only the C3b-3 SQL proof, its synchronized shell selector, and this run log
+changed. Rollback is a revert of these three scoped files, not a database,
+runtime, migration-authority, or rollback-authority change. One local commit
+follows passing checks and zero intersection, then STOP for independent delta
+review. Remote PR HEAD must remain f26caa051fe0d7e2463a4b78e524741cb9358bd4;
+no new hosted CI run is triggered because this correction is not pushed.
+No production access, external migration, Railway change, HMAC key creation,
+settings activation, feature-flag change, email/SMS, LINE, C3c, merge,
+deployment, force push, amend, CI rerun, or push occurred in this cycle.

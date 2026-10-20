@@ -1301,7 +1301,7 @@ psql_app "$owner_role" "$first_app" -Atq <<'SQL' \
 begin;
 update public.every8d_settings_enrollment_grants
 set revoked_at=clock_timestamp(),revocation_reason='c3b3_race'
-where token_hash=decode(repeat('d4',32),'hex');
+where token_hash=decode(repeat('c3b300d4',8),'hex');
 select pg_advisory_xact_lock(993304);
 commit;
 SQL

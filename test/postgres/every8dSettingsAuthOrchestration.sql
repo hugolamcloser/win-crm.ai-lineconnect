@@ -2144,21 +2144,21 @@ select administrator_id from public.redeem_every8d_settings_enrollment_grant_v1(
   'k1:'||repeat('8',64)) \gset cf_admin_
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,'admin-race@example.com',
-  decode(repeat('d2',32),'hex'),'operator_initial',clock_timestamp()+interval '12 minutes',
+  decode(repeat('c3b300d2',8),'hex'),'operator_initial',clock_timestamp()+interval '12 minutes',
   'c3b3-issuer','c3b3-approver','C3B3-ADMIN-RACE','v2 admin race proof') \gset ar_
 select administrator_id from public.redeem_every8d_settings_enrollment_grant_v1(
-  decode(repeat('d2',32),'hex'),'admin-race@example.com',
+  decode(repeat('c3b300d2',8),'hex'),'admin-race@example.com',
   'k1:'||repeat('9',64)) \gset ar_admin_
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,'lifecycle-race@example.com',
-  decode(repeat('d3',32),'hex'),'operator_initial',clock_timestamp()+interval '12 minutes',
+  decode(repeat('c3b300d3',8),'hex'),'operator_initial',clock_timestamp()+interval '12 minutes',
   'c3b3-issuer','c3b3-approver','C3B3-LIFECYCLE-RACE','v2 lifecycle race proof') \gset lr_
 select administrator_id from public.redeem_every8d_settings_enrollment_grant_v1(
-  decode(repeat('d3',32),'hex'),'lifecycle-race@example.com',
+  decode(repeat('c3b300d3',8),'hex'),'lifecycle-race@example.com',
   'k1:'||repeat('a',64)) \gset lr_admin_
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,'grant-race@example.com',
-  decode(repeat('d4',32),'hex'),'operator_initial',clock_timestamp()+interval '12 minutes',
+  decode(repeat('c3b300d4',8),'hex'),'operator_initial',clock_timestamp()+interval '12 minutes',
   'c3b3-issuer','c3b3-approver','C3B3-GRANT-RACE','v2 grant race proof') \gset gr_
 select grant_id from public.issue_every8d_settings_operator_enrollment_grant_v1(
   '7b300000-0000-4000-8000-000000000002',1,'grant-consume-race@example.com',
@@ -2276,7 +2276,7 @@ select pg_sleep(2);
 select pg_temp.append_challenge_failures('7b360000-0000-4000-8000-000000000002',4);
 
 select * from public.runtime_request_every8d_settings_enrollment_challenge_v1(
-  decode(repeat('d4',32),'hex'),'7b360000-0000-4000-8000-000000000005',
+  decode(repeat('c3b300d4',8),'hex'),'7b360000-0000-4000-8000-000000000005',
   'grant-race@example.com','k1:'||repeat('b',64),array['k1:'||repeat('b',64)],
   decode(repeat('e9',32),'hex'),decode(repeat('ea',32),'hex'),'otp-v1') \gset gr_ch_
 select pg_temp.assert_true(public.runtime_record_every8d_settings_challenge_delivery_v1(
