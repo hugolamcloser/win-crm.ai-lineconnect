@@ -461,7 +461,7 @@ assert_query "select
     (select count(*)=2 and bool_and(purpose='enrollment'
       and superseded_at is null and delivery_succeeded_at is null
       and delivery_failed_at is null
-      and expires_at=least(created_at+interval '10 minutes',g.expires_at))
+      and c.expires_at=least(c.created_at+interval '10 minutes',g.expires_at))
      from public.every8d_settings_auth_challenges c
      join public.every8d_settings_enrollment_grants g on g.id=c.enrollment_grant_id
      where c.request_token_hash in (

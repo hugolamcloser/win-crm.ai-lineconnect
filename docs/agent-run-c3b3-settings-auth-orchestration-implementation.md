@@ -1018,3 +1018,118 @@ no new hosted CI run is triggered because this correction is not pushed.
 No production access, external migration, Railway change, HMAC key creation,
 settings activation, feature-flag change, email/SMS, LINE, C3c, merge,
 deployment, force push, amend, CI rerun, or push occurred in this cycle.
+
+## Hosted ambiguous-column correction (2026-10-20)
+
+This section supersedes earlier hosted-proof and next-action status statements.
+PR #114 pushed/local starting HEAD: be01423d30e3d0d00c793bcdc9ea498cdddedcda.
+Authoritative base: 64d2418ab592e710d92eaa58ddd6b570f7473585.
+Before editing, read-only checks without fetch verified the exact worktree,
+branch, matching local/remote/PR HEAD, clean worktree/index, no later local
+commit, and an OPEN, unmerged PR containing five pushed commits.
+
+### Latest hosted failure and confirmed diagnosis
+
+- Latest hosted run: 39366597465.
+- validate: SUCCESS (job 118444752531).
+- postgres-concurrency: FAILURE (job 118444752704).
+- Failed step: Prove EVERY8D settings auth orchestration, ACLs, and guarded rollback.
+- Terminating error: column reference "expires_at" is ambiguous at character 612.
+- Failing assertion: v1/v2 enrollment resends preserve supersession, scrub,
+  insertion, and expiry semantics.
+- Process exit code: 1.
+
+The exact error, assertion label and exit evidence were independently inspected
+from narrowly filtered hosted logs, read-only. Diagnosis: one proof assertion
+qualification defect. The joined challenge c and enrollment grant g relations
+both expose created_at and expires_at; the unqualified expression cannot bind
+them uniquely. Both intended challenge-column references require c qualification.
+Runtime authority and migration/rollback authority are not implicated. The
+previous alias-isolation and d2/d3/d4 grant-token corrections were effective:
+the proof progressed to this later shell resend assertion. No hosted PASS is
+claimed; actual PostgreSQL execution remains RETEST_REQUIRED after correction.
+
+### Exact one-cycle authorization and source delta
+
+The owner authorizes exactly ONE additional correction cycle only for this
+single joined assertion in test/postgres/every8dSettingsAuthOrchestration.sh,
+plus this truthful run log and necessary local validation. Exactly two source
+qualifications are allowed: expires_at -> c.expires_at and created_at ->
+c.created_at in that expression only.
+
+Old expression:
+expires_at=least(created_at+interval '10 minutes',g.expires_at)
+
+New expression:
+c.expires_at=least(c.created_at+interval '10 minutes',g.expires_at)
+
+No other shell proof, SQL proof, runtime/source service, migration, rollback,
+contract, ACL, CI workflow, production, merge, deployment, Railway, C3c,
+settings activation, HMAC key, Phase2F, email/SMS, LINE, or later correction
+cycle is authorized. A new blocker requiring any other change means STOP
+FOR REVIEW. No push or CI rerun is authorized. This narrow write authorization
+is exhausted once the single correction commit is created; no carry-forward
+exception or merge/deployment/production authority is implied.
+
+### Exact-delta, semantics, and same-class recheck
+
+The shell source edit changes ONE line by adding exactly two c. prefixes
+(four characters). Reversing that single expression replacement reproduces
+the original shell byte-for-byte. All query structure, joins, filters,
+bool_and/count assertions, request/grant fixture values, shell helpers,
+transaction/concurrency ordering, advisory locks and waits remain unchanged.
+
+The assertion still requires count(*)=2 for the v1/v2 replacement enrollment
+challenges, purpose enrollment, no supersession, no delivery outcome, and
+exact challenge expiry equal to least(challenge creation+10m,grant expiry).
+The preceding supersession/scrub assertion also remains unchanged. No success
+became optional and no assertion was weakened.
+
+The independent same-class audit found zero additional defective SQL statements
+and precisely two ambiguous references in this one shell expression, with no
+latent same-class failures. The local recheck confirms zero unqualified
+created_at/expires_at identifiers remain in this joined subquery. Existing
+matching SQL parity formulas already qualify the challenge columns. SQL proof
+is unchanged; every other shell byte is unchanged, so this correction introduces
+no additional ambiguity. No unrelated qualification cleanup was performed.
+
+### Local validation and truthful executable-proof status
+
+| Local gate | Actual result |
+| --- | --- |
+| node --test test/every8dSettingsAuthOrchestration.test.cjs | PASS, 15/15 |
+| npm test | PASS, 696/696 |
+| npm run typecheck | PASS |
+| npm run build | PASS |
+| git diff --check | PASS |
+| bash -n test/postgres/every8dSettingsAuthOrchestration.sh | PASS |
+| Exact two-qualification source audit | PASS, one line, two c. prefixes |
+| SQL proof unchanged | PASS, byte-for-byte |
+| No unrelated shell change / joined ambiguity recheck | PASS, zero other byte changes; zero remaining unqualified shared timestamps |
+
+All requested local checks passed. No additional implementation or reviewer
+correction loop was needed. Creation of this one correction commit exhausts
+the narrow write authorization. Stop for independent delta review and a
+separately authorized push/retest; no later correction authority carries forward.
+Local PostgreSQL executable proof remains UNAVAILABLE for the previously
+recorded missing server-catalog/disposable-cluster limitation. No local or
+external PostgreSQL connection was attempted. Node tests, static source audit,
+and Bash syntax are not executable PostgreSQL migration/rollback/concurrency
+proof and do not establish hosted success.
+
+HOSTED POSTGRESQL 17 EXECUTABLE PROOF:
+FAILED_RETEST / AMBIGUOUS_COLUMN_REMEDIATION_PENDING_RETEST
+
+HOSTED_POSTGRESQL_PROOF:
+RETEST_REQUIRED
+
+### Review, rollback, and safety
+
+Only the C3b-3 shell proof's one expression and this run log changed. Rollback
+is a revert of these two files; no runtime/schema/data or authority rollback
+is needed. One focused unpushed local commit follows exact-scope validation,
+then STOP for independent delta review. Remote PR HEAD must remain
+be01423d30e3d0d00c793bcdc9ea498cdddedcda; no automatic CI run is triggered
+for the new local commit. No production/Railway access, external migration,
+key creation, settings activation, Phase2F change, email/SMS, LINE, C3c,
+merge, deployment, amend, force push, manual CI rerun, or push occurred.
