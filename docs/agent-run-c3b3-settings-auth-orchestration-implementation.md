@@ -1133,3 +1133,123 @@ be01423d30e3d0d00c793bcdc9ea498cdddedcda; no automatic CI run is triggered
 for the new local commit. No production/Railway access, external migration,
 key creation, settings activation, Phase2F change, email/SMS, LINE, C3c,
 merge, deployment, amend, force push, manual CI rerun, or push occurred.
+
+## Hosted login-expiry fixture correction (2026-10-20)
+
+This section supersedes earlier hosted-proof and next-action status statements.
+Latest hosted run: 39379546801.
+PR #114 starting pushed/local HEAD: 5011e84f1747c30f21a42e60be34523695c0a472.
+Authoritative base: 64d2418ab592e710d92eaa58ddd6b570f7473585.
+Read-only identity checks without fetch confirmed the exact worktree, branch,
+matching local/remote/PR HEAD, clean worktree/index, no later local commit,
+and an OPEN, unmerged PR containing six pushed commits before editing.
+
+### Hosted failure and exact execution evidence
+
+- validate: SUCCESS (job 118485248460).
+- postgres-concurrency: FAILURE (job 118485248097).
+- Failed step: Prove EVERY8D settings auth orchestration, ACLs, and guarded rollback.
+- Terminating error: EVERY8D login challenge expiry is invalid.
+- Enforcing function: protect_every8d_settings_auth_challenge_v1(), INSERT/login
+  branch (independent hosted context: PL/pgSQL line 25 at RAISE).
+- Failing fixture: three direct pending-delivery login challenge rows using
+  7b330000-0000-4000-8000-* IDs, from generate_series(1,3).
+- psql exit code: 3.
+
+The exact error/exit evidence was independently inspected from narrowly filtered
+hosted logs, read-only. Trigger source confirms the frozen equality:
+expires_at=created_at+interval '10 minutes'. Separate volatile clock_timestamp()
+evaluations can produce creation t1 and expiry t2+10m, violating that exact
+rule whenever t1 differs from t2. This is a proof-fixture construction defect;
+runtime authority is not defective, the trigger/constraint are correct, and
+migration/rollback authority is not implicated. No hosted PASS is claimed.
+
+This latest run stops in the SQL delivery fixture around line 1921, BEFORE
+the later grant-token block around line 2145 and BEFORE the standalone SQL
+proof completes. The shell's ON_ERROR_STOP SQL invocation occurs before the
+later qualified resend assertion around line 464. Thus this run does NOT
+establish execution/success of the prior ambiguous-column assertion or the
+later grant-token block. Those corrections remain unchanged in source.
+
+### Exact new one-cycle authorization
+
+Exactly ONE cycle is authorized only for two function-name substitutions in
+this single direct login fixture, plus truthful run-log updates and necessary
+local validation. No other SQL or shell proof, runtime/source service, trigger,
+constraint, migration, rollback, contract, ACL, CI workflow, production, Railway,
+merge, deployment, C3c, settings activation, HMAC key, Phase2F, email/SMS,
+LINE, or later correction cycle is authorized. Any new blocker requiring
+another change means STOP FOR REVIEW. No push or CI rerun is authorized.
+Authorization is exhausted once the one correction commit is created; no
+carry-forward or merge/deployment/production authority is implied.
+
+### Exact correction, semantics, and same-class recheck
+
+Old construction:
+clock_timestamp(),clock_timestamp()+interval '10 minutes'
+
+New construction:
+statement_timestamp(),statement_timestamp()+interval '10 minutes'
+
+Exactly two function names change on ONE SQL source line. Both new calls
+use the same statement-stable timestamp, preserving expires_at=created_at+10m
+exactly. The unchanged generate_series(1,3) still creates exactly three rows.
+All IDs, request tokens, purpose, email values, pseudonyms, OTP HMACs, key
+version, delivery outcome classification, duplicate-delivery behavior, and
+surrounding assertions remain identical. No trigger/constraint was weakened.
+
+The independent audit's 23 constructions comprise 22 SQL proof inserts and
+one shell proof insert. The local source audit reconciled that split and
+confirmed exactly one same-class defective adjacent volatile-clock pair,
+producing these three rows; after correction no equivalent pair remains.
+Other captured-baseline constructions are unchanged, including the shell's
+single captured-at login fixture. No additional equivalent defect was found.
+An initial local guard incorrectly expected 23 SQL-only constructions and
+stopped before any write; read-only counting established 22+1 and the audit
+was corrected without broadening source scope. Restoring only this expression
+reproduces the original SQL bytes; no unrelated timestamp cleanup occurred.
+Shell proof remains byte-for-byte unchanged.
+
+### Local validation and truthful executable-proof status
+
+| Local gate | Actual result |
+| --- | --- |
+| node --test test/every8dSettingsAuthOrchestration.test.cjs | PASS, 15/15 |
+| npm test | PASS, 696/696 |
+| npm run typecheck | PASS |
+| npm run build | PASS |
+| git diff --check | PASS |
+| Exact two-function substitution/source audit | PASS, one SQL line |
+| Shell proof unchanged | PASS, byte-for-byte |
+| Unrelated timestamp constructions unchanged | PASS, exact reverse-source audit |
+| Fixture identities/three-row selection unchanged | PASS |
+
+All requested local gates passed. The source audit confirms two stable calls,
+zero volatile calls in this fixture, 22 SQL plus one shell construction,
+zero remaining equivalent adjacent volatile pairs, and no other source edits.
+The initial audit-count guard was reconciled before any write; no source
+correction beyond the authorized two substitutions was needed. Creation of
+this single correction commit exhausts the narrow write authorization. Stop
+for independent delta review and a separately authorized push/retest; no later
+correction authority carries forward.
+Local PostgreSQL executable proof remains UNAVAILABLE for the previously
+recorded missing server-catalog/disposable-cluster limitation. No local or
+external PostgreSQL connection was attempted. Node tests and source audits
+do not establish executable PostgreSQL migration/rollback/concurrency success.
+
+HOSTED POSTGRESQL 17 EXECUTABLE PROOF:
+FAILED_RETEST / LOGIN_EXPIRY_FIXTURE_REMEDIATION_PENDING_RETEST
+
+HOSTED_POSTGRESQL_PROOF:
+RETEST_REQUIRED
+
+### Review, rollback, and safety
+
+Only the single SQL proof line and this run log changed. Rollback is a revert
+of these two files, not a schema/runtime/data/authority rollback. One focused
+unpushed commit follows passing validation, then STOP for independent delta
+review. Remote PR HEAD must remain 5011e84f1747c30f21a42e60be34523695c0a472.
+No CI is triggered for the local-only commit. No production/Railway access,
+external migration, key creation, settings activation, Phase2F change,
+email/SMS, LINE, C3c, merge, deployment, amend, force push, CI rerun, or push
+occurred in this cycle.

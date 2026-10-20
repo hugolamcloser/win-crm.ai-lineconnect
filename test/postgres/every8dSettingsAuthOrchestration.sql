@@ -1918,7 +1918,7 @@ insert into public.every8d_settings_auth_challenges(
 select ('7b330000-0000-4000-8000-'||lpad(n::text,12,'0'))::uuid,
   decode(lpad(to_hex(160+n),64,'0'),'hex'),'login','delivery'||n||'@example.com',
   'k1:'||repeat(to_hex(n),64),decode(lpad(to_hex(176+n),64,'0'),'hex'),'otp-v1',
-  clock_timestamp(),clock_timestamp()+interval '10 minutes'
+  statement_timestamp(),statement_timestamp()+interval '10 minutes'
 from generate_series(1,3) n;
 select pg_temp.assert_true(public.runtime_record_every8d_settings_challenge_delivery_v1(
   decode(lpad(to_hex(161),64,'0'),'hex'),false,'provider_rejected'),
