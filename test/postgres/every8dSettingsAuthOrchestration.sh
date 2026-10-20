@@ -957,7 +957,7 @@ start_barrier "${app_prefix}_parent_order_barrier" 993325 \
   'matched parent-first lifecycle barrier'
 v1_lifecycle_app="${app_prefix}_v1_parent_lifecycle"
 v2_lifecycle_app="${app_prefix}_v2_parent_lifecycle"
-psql_app "$owner_role" "$v1_lifecycle_app" -Atq <<'SQL' \
+psql_app service_role "$v1_lifecycle_app" -Atq <<'SQL' \
   >"$tmp_dir/$v1_lifecycle_app.out" 2>"$tmp_dir/$v1_lifecycle_app.err" &
 begin;
 select 1 from public.ghl_marketplace_installations
@@ -972,7 +972,7 @@ where i.id='7b3c0000-0000-4000-8000-000000000002';
 commit;
 SQL
 v1_lifecycle_pid=$!; background_pids+=("$v1_lifecycle_pid")
-psql_app "$owner_role" "$v2_lifecycle_app" -Atq <<'SQL' \
+psql_app service_role "$v2_lifecycle_app" -Atq <<'SQL' \
   >"$tmp_dir/$v2_lifecycle_app.out" 2>"$tmp_dir/$v2_lifecycle_app.err" &
 begin;
 select 1 from public.ghl_marketplace_installations

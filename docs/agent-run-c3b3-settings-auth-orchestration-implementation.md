@@ -1253,3 +1253,148 @@ No CI is triggered for the local-only commit. No production/Railway access,
 external migration, key creation, settings activation, Phase2F change,
 email/SMS, LINE, C3c, merge, deployment, amend, force push, CI rerun, or push
 occurred in this cycle.
+
+## Hosted C07 lifecycle actor-role correction (2026-10-20)
+
+This section supersedes earlier hosted-proof and next-action status statements.
+Latest hosted run: 39386853780.
+PR #114 starting pushed/local HEAD: a6535c2a1307f4a55378437412eec311751b56ff.
+Authoritative base: 64d2418ab592e710d92eaa58ddd6b570f7473585.
+Read-only identity checks without fetch confirmed the exact worktree, branch,
+matching local/remote/PR HEAD, clean worktree/index, no later local commit,
+and an OPEN, unmerged PR containing seven pushed commits before editing.
+
+### Hosted evidence, progress, and failure classification
+
+- validate: SUCCESS (job 118508644711).
+- postgres-concurrency: FAILURE (job 118508644767).
+- Failed step: Prove EVERY8D settings auth orchestration, ACLs, and guarded rollback.
+- First shell failure: FAIL: v1 parent lifecycle actor failed.
+- Underlying PostgreSQL error in BOTH C07 lifecycle sessions:
+  permission denied for function apply_every8d_ghl_marketplace_lifecycle_v2.
+- Affected actors: C07 v1 lifecycle actor and C07 v2 lifecycle actor.
+- Process exit code: 1.
+
+The hosted first failure, both backend permission errors, and secondary stale-
+parent message were independently inspected in narrowly filtered logs, read-only.
+Classification: proof-harness actor-role defect. Both launches used owner_role,
+which is c3a_migration_owner, despite the lifecycle RPC's frozen EXECUTE grant
+belonging to service_role. Runtime authority is not implicated; migration and
+rollback are not implicated. No ACL widening is needed or performed.
+
+The later v1 stale parent authority was accepted message follows a failed
+UNINSTALL actor that never mutated the installation. It is a secondary effect,
+not independent evidence of runtime stale-authority acceptance.
+
+This run reached C07 after completing the full C3b-3 SQL proof, including the
+corrected login-expiry fixture, alias isolation, and grant-token fixtures.
+The corrected ambiguous-column shell assertion and C01-C06/C06b also preceded
+C07 in the fail-fast harness and were exercised before this failure. Prior
+corrections remain unchanged in source. C07 and later cases are NOT claimed
+to have passed, and no hosted PostgreSQL PASS exists yet.
+
+### Frozen caller authority and parent-row lock legality
+
+Source checks independently confirmed:
+
+- 202609230002_every8d_public_oauth_bootstrap.sql revokes lifecycle-v2 RPC
+  EXECUTE from PUBLIC/anon/authenticated/service_role, then explicitly grants
+  EXECUTE to service_role. c3a_migration_owner is not the function owner and
+  has no lifecycle-v2 EXECUTE grant.
+- The C3a harness creates c3a_migration_owner with NOINHERIT, NOSUPERUSER and
+  NOBYPASSRLS, and transfers table ownership without transferring ownership
+  of the pre-existing lifecycle RPC.
+- 202609170001_ghl_marketplace_ownership.sql grants SELECT/INSERT/UPDATE on
+  ghl_marketplace_installations to service_role and provides SELECT USING true
+  and UPDATE USING true/WITH CHECK true RLS policies. Thus service_role can
+  perform the preceding parent SELECT FOR UPDATE as well as execute the RPC.
+- No SET ROLE statement, ACL grant, policy edit, function edit, trigger edit,
+  or authority change is added. Only existing legal caller selection changes
+  inside these two proof actors.
+
+### Exact new one-cycle scope and preserved proof strength
+
+Exactly ONE correction cycle is authorized only for these launch-role changes:
+
+psql_app "$owner_role" "$v1_lifecycle_app"
+-> psql_app service_role "$v1_lifecycle_app"
+
+psql_app "$owner_role" "$v2_lifecycle_app"
+-> psql_app service_role "$v2_lifecycle_app"
+
+Truthful run-log updates and necessary validation are also authorized. No other
+shell or SQL proof, ACL, runtime authority, lifecycle RPC, trigger, constraint,
+migration, rollback, contract, CI workflow, production, Railway, merge,
+deployment, C3c, settings activation, HMAC key, Phase2F, email/SMS, LINE, or
+later correction cycle is authorized. Any new blocker needing other changes
+means STOP FOR REVIEW. No push or CI rerun is authorized. This narrow write
+authorization is exhausted when the one correction commit is created; no
+carry-forward or merge/deployment/production authority is implied.
+
+Exactly TWO shell lines change, one role argument on each. Both unchanged
+transaction bodies still execute BEGIN, parent SELECT FOR UPDATE, advisory
+xact barrier 993325, apply_every8d_ghl_marketplace_lifecycle_v2(UNINSTALL,...),
+then COMMIT in that order. Restoring only the two launch arguments reproduces
+the entire original shell bytes. The SQL proof is unchanged.
+
+All installation/event IDs and timestamps, RPC arguments, transaction boundaries,
+request actors, parent-wait assertions, child grant NOWAIT probes, advisory
+barrier release, stale/uninstalled parent revalidation, v1 rejection/v2 zero-row
+expectations, grant-revocation state, final installation state and v1/v2 parity
+are unchanged. No assertion was weakened; no success became optional.
+
+### Narrow same-class role audit
+
+The pre-correction scan of direct owner_role/service_role psql_app SQL actor
+bodies found 33 runtime-function actor groups. Exactly two owner_role groups
+called a runtime-only function: these two lifecycle-v2 calls in C07. No other
+comparable direct owner-role runtime call was found. These are the only two
+lifecycle-v2 invocations in the shell proof; both must use service_role after
+correction. The final scan confirms both lifecycle actors use service_role,
+33 direct runtime actor groups remain, and ZERO owner-role lifecycle or
+comparable runtime-function mismatches remain. The reverse-source audit
+confirms every other shell byte and actor remains unchanged.
+No unrelated actor-role cleanup or other source change is authorized.
+
+### Local validation and truthful executable-proof status
+
+| Local gate | Actual result |
+| --- | --- |
+| node --test test/every8dSettingsAuthOrchestration.test.cjs | PASS, 15/15 |
+| npm test | PASS, 696/696 |
+| npm run typecheck | PASS |
+| npm run build | PASS |
+| git diff --check | PASS |
+| bash -n test/postgres/every8dSettingsAuthOrchestration.sh | PASS |
+| Exact two-role substitution/source audit | PASS, two shell lines |
+| SQL proof unchanged / no other shell actor changed | PASS, byte-for-byte reverse-source audit |
+| Narrow lifecycle/runtime actor-role recheck | PASS, 2 legal lifecycle actors, 33 direct runtime groups, 0 owner-role mismatches |
+| Parent-lock/barrier/RPC/commit transaction order | PASS, unchanged |
+
+All requested local checks passed. Prior alias, grant-token, qualification and
+login-expiry corrections remain unchanged. No implementation or independent
+reviewer correction loop was needed within this cycle. Creation of the one
+local correction commit exhausts this narrow write authorization. Stop for
+independent delta review and separately authorized push/retest; no later
+correction authority carries forward.
+Local PostgreSQL executable proof remains UNAVAILABLE for the previously
+recorded missing server-catalog/disposable-cluster limitation. No local or
+external PostgreSQL connection was attempted. Local Node/source/shell checks
+do not establish executable PostgreSQL migration/rollback/concurrency success.
+
+HOSTED POSTGRESQL 17 EXECUTABLE PROOF:
+FAILED_RETEST / C07_PARENT_LIFECYCLE_ROLE_REMEDIATION_PENDING_RETEST
+
+HOSTED_POSTGRESQL_PROOF:
+RETEST_REQUIRED
+
+### Review, rollback, and safety
+
+Only two shell actor launch roles and this run log changed. Rollback is a
+revert of these two files, not a schema/runtime/data/authority rollback.
+One focused unpushed commit follows passing validation, then STOP for
+independent delta review. Remote PR HEAD must remain
+a6535c2a1307f4a55378437412eec311751b56ff; no CI is triggered for the new
+local commit. No production/Railway access, external migration, key creation,
+settings activation, Phase2F change, email/SMS, LINE, C3c, merge, deployment,
+amend, force push, manual CI rerun, or push occurred in this cycle.
