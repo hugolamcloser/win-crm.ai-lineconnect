@@ -86,7 +86,9 @@ begin
       and p.prokind = 'f'
       and p.prorettype = expected.return_type::pg_catalog.regtype::oid
       and p.proretset = expected.returns_set
-      and p.proargtypes = expected.input_types::pg_catalog.oidvector
+      and array(
+        select pg_catalog.unnest(p.proargtypes::pg_catalog.oid[])
+      ) = expected.input_types
       and p.proallargtypes is not distinct from expected.all_types
       and p.proargmodes is not distinct from expected.argument_modes
       and p.proargnames is not distinct from expected.all_names

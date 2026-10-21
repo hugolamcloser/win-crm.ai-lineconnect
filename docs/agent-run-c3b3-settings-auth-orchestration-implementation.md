@@ -1398,3 +1398,137 @@ a6535c2a1307f4a55378437412eec311751b56ff; no CI is triggered for the new
 local commit. No production/Railway access, external migration, key creation,
 settings activation, Phase2F change, email/SMS, LINE, C3c, merge, deployment,
 amend, force push, manual CI rerun, or push occurred in this cycle.
+
+## Hosted rollback oidvector correction (2026-10-21)
+
+This section supersedes earlier hosted-proof and next-action status statements.
+Latest hosted run: 39539013863.
+PR #114 starting pushed/local HEAD: ca5a28443458cda8b2354441ffee99046290d31a.
+Authoritative base: 64d2418ab592e710d92eaa58ddd6b570f7473585.
+Read-only identity checks without fetch confirmed the exact worktree, branch,
+matching local/remote/PR HEAD, clean worktree/index, no later local commit,
+and an OPEN, unmerged PR containing eight pushed commits before editing.
+
+### Hosted failure, progress and exact execution limit
+
+- validate: SUCCESS (job 119022210888).
+- postgres-concurrency: FAILURE (job 119022211111).
+- Failed step: Prove EVERY8D settings auth orchestration, ACLs, and guarded rollback.
+- First terminating error: cannot cast type oid[] to oidvector at character 7476.
+- Process exit code: 3.
+- Classification: ROLLBACK IMPLEMENTATION DEFECT CONFIRMED.
+
+The exact error/exit evidence was independently inspected from narrowly filtered
+hosted logs, read-only. The rollback source confirms that its exact-function-
+definition guard attempted the unsupported expected.input_types oid[] ->
+pg_catalog.oidvector conversion while comparing against p.proargtypes.
+This is an implementation defect in the rollback guard, not a proof-fixture
+error. Forward migration and runtime authority are not implicated.
+
+Confirmed progress in this run: migration negative preflight cases passed,
+migration application passed, the complete C3b-3 SQL proof passed, prior fixture
+corrections were exercised, C01-C06/C06b passed, corrected C07 passed, and all
+subsequent concurrency races through lifecycle-only invalidation passed.
+The first clean rollback invocation was reached. That rollback did NOT
+complete; preservation assertions after clean rollback and the later reapply/
+tamper/refusal matrix were NOT reached. No success is claimed for those cases.
+
+The failing comparison executes in the preflight DO block before any REVOKE
+or DROP. The transaction failed closed: no REVOKE/DROP/destructive rollback
+action occurred before the failure. Only disposable hosted CI was involved;
+production was untouched. No hosted PostgreSQL PASS exists yet.
+
+### Exact narrow one-cycle authorization
+
+Exactly ONE correction cycle is authorized only for this unsupported input-
+signature comparison in the C3b-3 rollback file, plus truthful implementation
+run-log update and directly necessary validation. This does not authorize
+any other rollback predicate/statement, forward migration, proof SQL/shell,
+runtime, ACL/security, lifecycle RPC, trigger, constraint, contract, CI,
+production, Railway, merge, deployment, C3c, settings activation, HMAC key,
+GHL_SMS_PHASE_2F_ENABLED, email/SMS, LINE, or later correction cycle.
+Another issue means STOP FOR REVIEW without a fix. No push or CI rerun is
+authorized. This narrow write authorization is exhausted once the one correction
+commit is created; no merge/deployment/production authority is implied.
+
+### Exact correction and signature-preservation reasoning
+
+Old comparison:
+p.proargtypes = expected.input_types::pg_catalog.oidvector
+
+New comparison:
+array(select pg_catalog.unnest(p.proargtypes::pg_catalog.oid[])) = expected.input_types
+
+This is ONE logical source correction, formatted across three lines in the
+surrounding SQL style. Only the supported oidvector -> oid[] conversion is
+used. unnest emits the input OIDs in their existing order; ARRAY(SELECT ...)
+rebuilds an ordinary one-based oid[] matching the unchanged one-based expected
+literal arrays. No normalization of expected.input_types occurs.
+
+Array equality still compares every input type OID in order and rejects
+length, type, or ordering differences. No sorting, DISTINCT, text serialization,
+containment, cardinality-only check, or partial comparison is used. proargtypes
+still supplies precisely the input signature (including input/inout/variadic
+arguments as represented there); output-only arguments remain excluded.
+No input information is discarded. Separate all-argument types, argument modes,
+names, defaults, return/result metadata, ownership, SECURITY DEFINER, volatility,
+strictness, parallel/leakproof/cost/rows/support, search_path/language, body MD5,
+dependency and ACL checks remain byte-for-byte unchanged. Target inventory/count,
+REVOKE order, DROP order, refusal behavior and transaction boundaries are also
+unchanged. No rollback guard or proof was weakened.
+
+Restoring only this comparison recovers the exact original rollback bytes.
+Forward migration, proof SQL, proof shell, src, CI and frozen contracts are
+unchanged. All prior alias isolation, grant-token namespace, column qualification,
+login-expiry and C07 service_role corrections remain unchanged.
+
+### Four-file same-class conversion audit
+
+Audited the exact C3b-3 forward migration, rollback, SQL proof and shell proof.
+Before correction: exactly ONE oidvector occurrence, the unsupported inverse
+cast in this rollback comparison; no other same-class defect was found.
+After correction: ZERO oidvector occurrences in those four source files,
+ZERO casts to oidvector, and one explicit p.proargtypes::pg_catalog.oid[]
+conversion in the corrected rollback comparison. Its oid[] result is compared
+to the unchanged expected oid[]; no new catalog-type mismatch is introduced.
+No unrelated cleanup was performed.
+
+### Local validation and truthful executable-proof status
+
+| Local gate | Result |
+| --- | --- |
+| Focused C3b-3 tests | PASS, 15/15 |
+| Full npm test | PASS, 696/696 |
+| npm run typecheck | PASS |
+| npm run build | PASS |
+| git diff --check | PASS |
+| Bash syntax: every8dSettingsAuthOrchestration.sh | PASS |
+| Exact rollback source delta | PASS: one comparison, one old line replaced by three lines; reverse replacement restores original bytes |
+| Four-file oidvector/oid[] audit | PASS: zero remaining oidvector occurrences/casts; one supported proargtypes-to-oid[] conversion |
+| Forward migration, SQL proof and shell proof | Byte-for-byte unchanged |
+| Runtime, ACLs, CI, contracts and prior corrections | Unchanged |
+
+Read-only availability checks found no Docker command and no postgres.bki in
+the installed PostgreSQL 17 share directory, matching the previously recorded
+missing-catalog limitation. No already available disposable local PostgreSQL
+17 environment was established, so executable local proof remains UNAVAILABLE.
+No PostgreSQL connection, environment/infrastructure mutation, production or
+Railway access was attempted. Local Node/source/shell checks are not executable
+PostgreSQL migration/rollback/concurrency proof and do not establish hosted PASS.
+
+HOSTED POSTGRESQL 17 EXECUTABLE PROOF:
+FAILED_RETEST / ROLLBACK_OIDVECTOR_REMEDIATION_PENDING_RETEST
+
+HOSTED_POSTGRESQL_PROOF:
+RETEST_REQUIRED
+
+### Review, rollback and safety
+
+Only the rollback comparison and this run log changed. Reverting these two
+files removes this local correction; no external database action is involved.
+One focused unpushed commit follows passing exact-scope validation, then STOP
+for independent delta review. Remote PR HEAD must remain
+ca5a28443458cda8b2354441ffee99046290d31a; no CI is triggered for the local-only
+commit. No production/Railway access, external migration or rollback, key
+creation, settings activation, Phase2F change, email/SMS, LINE, C3c, merge,
+deployment, amend, force push, manual CI rerun, or push occurred in this cycle.
