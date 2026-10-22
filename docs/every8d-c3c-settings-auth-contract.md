@@ -390,32 +390,68 @@ terminal metadata for 24 hours initially.
 
 ## 17. Outbox state machine
 
-The initial send progression is:
+The complete send/retry cycle is frozen as:
 
 ```text
 PENDING -> LEASED -> SENDING
 
-SENDING outcomes:
-ACCEPTED
-RETRY_WAIT
-FAILED_TERMINAL
-DELIVERY_OUTCOME_UNKNOWN
+SENDING + accepted               -> ACCEPTED
+SENDING + rejected               -> FAILED_TERMINAL
+SENDING + outcome_unknown        -> DELIVERY_OUTCOME_UNKNOWN
+SENDING + not_accepted_retryable -> RETRY_WAIT (only when eligible)
+                                -> FAILED_TERMINAL (retry authority exhausted)
+
+SENDING -> RETRY_WAIT -> LEASED -> SENDING
 
 Never-sent unusable work:
 CANCELLED
 EXPIRED
 ```
 
-Require one outbox job per challenge, immutable request-hash/challenge/purpose
-linkage, encrypted recipient/display OTP only, fixed allowlisted templates,
-a stable non-secret job-derived idempotency key, fenced leases, database-controlled
-deadlines, and terminal ciphertext scrub.
+Provider adapter outcomes and durable outbox states are separate layers. A
+`not_accepted_retryable` result does not itself authorize another attempt.
+Every retry must traverse `RETRY_WAIT -> LEASED -> SENDING` with a fresh lease
+and fence; direct `RETRY_WAIT -> SENDING` and reuse of previous lease/fence
+authority are forbidden.
 
-`RETRY_WAIT` permits another attempt only under the proven-not-accepted rule and
-the bounds in section 19. An expired `SENDING` becomes
-`DELIVERY_OUTCOME_UNKNOWN` and is never automatically resent. `CANCELLED` and
-`EXPIRED` are permitted for never-sent unusable work, not as a way to relabel an
-ambiguous send as safe to retry.
+`SENDING -> RETRY_WAIT` is permitted only when all six conditions hold:
+
+1. The adapter returned exactly `not_accepted_retryable`.
+2. Positive evidence establishes that provider acceptance did not occur.
+3. The just-completed send attempt is below the maximum of three.
+4. The job/challenge remains usable.
+5. The next eligible retry time can occur before the applicable durable
+   delivery/challenge deadline.
+6. Current lease/fence/attempt ownership is valid.
+
+If any condition fails, do not enter `RETRY_WAIT`. A stale worker cannot
+schedule retry or terminalize work using invalid ownership; disposition requires
+valid database authority. Section 19 freezes truthful exhaustion behavior.
+
+`RETRY_WAIT` is nonterminal. Retain encrypted payload and immutable
+job/challenge/request/purpose linkage, persist the database-controlled next
+eligible retry time, and end/clear the completed attempt's active lease
+authority as appropriate. Do not scrub ciphertext, mark the job terminal, call
+`runtime_record_every8d_settings_challenge_delivery_v1`, or write an intermediate
+challenge delivery failure. The intermediate result belongs only to outbox retry
+scheduling, not to the C3b-3 terminal challenge-delivery taxonomy.
+
+Require one outbox job per challenge, encrypted recipient/display OTP only,
+fixed allowlisted templates, a stable non-secret job-derived idempotency key,
+fenced leases, and database-controlled deadlines.
+
+| Outbox state | Payload rule |
+| --- | --- |
+| `PENDING`, `LEASED`, `SENDING`, `RETRY_WAIT` | Retain encrypted delivery payload |
+| `ACCEPTED`, `FAILED_TERMINAL`, `DELIVERY_OUTCOME_UNKNOWN`, `CANCELLED`, `EXPIRED` | Scrub ciphertext immediately within the terminal transition |
+
+Those five terminal states are closed and non-reopenable. None may transition
+to `PENDING`, `LEASED`, `SENDING`, or `RETRY_WAIT`; a late provider result cannot
+reopen them. `DELIVERY_OUTCOME_UNKNOWN` remains terminal forever for automatic
+dispatch. An expired `SENDING` lease becomes `DELIVERY_OUTCOME_UNKNOWN`, never
+`RETRY_WAIT`, and is never reclaimed for another provider send. `CANCELLED` and
+`EXPIRED` apply to never-sent unusable work, not to relabeling ambiguous emission
+as safe to retry.
 
 ## 18. Provider-neutral delivery outcomes
 
@@ -446,29 +482,108 @@ Frozen initial operational values:
 | Claim batch | 10 |
 | Lease | 30 seconds |
 | Provider deadline | 10 seconds |
-| Maximum provider-send attempts | 3 |
-| Retry delays after proven-not-accepted failures | 5 seconds, then 20 seconds |
+| Maximum provider-send attempts | 3 total |
+| Eligible retry after attempt 1 | 5-second delay |
+| Eligible retry after attempt 2 | 20-second delay |
+| After attempt 3 | No further retry |
 
-Retry remains bounded by challenge/job usability. Claim does not increment the
-send-attempt count. Durable `SENDING` must commit before provider invocation.
-An ambiguous `SENDING` commit means **do not call the provider**.
+### Claim and send-start authority
 
-Never perform a network call with a database transaction or row lock open.
-Expired pre-send leases may be reclaimed; `SENDING` recovery never authorizes
-another send. A worker must not knowingly send after lease/deadline expiry.
+Attempt numbering corresponds to provider-send attempts: each provider
+invocation must have exactly one durable send-attempt number. Retry scheduling
+remains bounded by durable job/challenge usability. Attempts remaining alone
+are insufficient: do not schedule retry if its eligible execution time would
+violate the durable delivery/challenge deadline.
 
-Finalization must atomically:
+A due `RETRY_WAIT` job may become `LEASED` only when its database-controlled
+`available_at`/retry time has arrived, its attempt count is below three, it is
+nonterminal, its job/challenge remains usable, and the durable deadline permits
+another send attempt. Claim must establish a new lease token/hash, new lease
+expiry, and fresh fence generation or equivalent monotonically protected
+fencing authority. The old attempt's lease/fence cannot authorize retry.
+Competing workers must have only one current fenced claimant.
 
-1. Validate job, lease, fence, and attempt.
-2. Record the provider terminal result.
-3. Invoke existing challenge-delivery authority where permitted.
-4. Persist a truthful outbox terminal disposition.
-5. Scrub terminal payload.
+Before every provider invocation, including retries, a separately confirmed
+durable `LEASED -> SENDING` transition must revalidate job identity, fresh
+lease, fence, attempt budget, retry timing, job/challenge usability, and delivery
+deadline. The send-attempt counter increments exactly once when that new
+`SENDING`/send-start transition commits successfully. It does not increment at
+claim, while waiting in `RETRY_WAIT`, after a provider response, or in recovery.
 
-If the challenge delivery recorder returns false, record the truthful mismatch
-and disposition. Do not reopen the challenge or claim delivery was recorded.
-Duplicate compatible terminal finalization returns the existing receipt without
-a second challenge-delivery call. Conflicting terminal finalization is rejected.
+Provider invocation is allowed only after confirmed durable `SENDING` commit
+for that exact fresh attempt. An ambiguous send-start commit means **do not call
+the provider**. No provider call is permitted directly from `RETRY_WAIT`, from
+an expired lease or old fence, after deadline expiry or maximum attempts, or
+from a terminal outbox state. Never perform a network call with a database
+transaction or row lock open.
+
+Expired pre-send `LEASED` work may be reclaimed where safe. Recovery never
+reauthorizes an ambiguous/expired `SENDING` provider call: expired `SENDING`
+closes as `DELIVERY_OUTCOME_UNKNOWN`, without retry or terminal reopening.
+
+### Nonterminal retry scheduling
+
+`SENDING -> RETRY_WAIT` is nonterminal retry scheduling, not terminal
+finalization. Apply all admission conditions and retention/lease rules in
+section 17. Eligible `not_accepted_retryable` after attempt 1 schedules a
+5-second delay; after attempt 2 it schedules a 20-second delay. Attempt 3 has no
+further retry. Persist the database-controlled next eligible retry time.
+Intermediate retryable results never invoke challenge-delivery recording or
+write an intermediate challenge failure; payload remains encrypted and retained.
+
+### Retry exhaustion and truthful challenge recording
+
+If positively proven `not_accepted_retryable` exhausts the attempt budget,
+cannot schedule before the durable deadline, or loses durable job/challenge
+usability, do not enter `RETRY_WAIT`. With valid authority, terminalize the
+outbox truthfully; retry-budget/deadline exhaustion uses `FAILED_TERMINAL`,
+scrubs ciphertext immediately, and permits no further provider attempt.
+
+Retain a safe non-secret outbox terminal disposition distinguishing
+retry-budget/deadline exhaustion from provider acceptance, rejection, and
+unknown. Its exact internal representation may be frozen in C3c-3. This is
+outbox metadata, not a fifth adapter outcome or new challenge failure class.
+
+Existing C3b-3 failure classes remain exactly `provider_rejected`,
+`sender_unavailable`, and `delivery_outcome_unknown`. Record challenge delivery
+only when a truthful existing frozen result applies:
+
+| Truthful result | Existing challenge-delivery mapping |
+| --- | --- |
+| Unambiguous provider acceptance | Success |
+| Definitive provider rejection | `provider_rejected` |
+| No usable sender before an attempted send | `sender_unavailable` |
+| Possible provider-boundary crossing without authoritative result | `delivery_outcome_unknown` |
+
+A sequence of positively proven non-accepted attempts is not automatically
+provider rejection or sender unavailability, and is not unknown when
+non-acceptance is known. If exhaustion has no truthful existing class,
+terminalize the outbox, retain its safe disposition, scrub ciphertext, and do
+not call the challenge recorder with a fabricated class. Leave challenge
+authority to its existing expiry/supersession lifecycle. For unusable, expired,
+or cancelled work, record challenge delivery only if the exact existing
+challenge state and truthful frozen class permit it.
+
+If the challenge recorder returns false, preserve the truthful outbox
+disposition. Do not reopen the challenge, infer delivery state, retry the
+recorder, or resend provider work.
+
+### Terminal finalization
+
+Terminal finalization moves `SENDING` or another permitted nonterminal state
+to a terminal disposition, distinct from nonterminal retry scheduling. It must
+atomically:
+
+1. Validate current job/lease/fence/attempt authority where applicable.
+2. Persist the truthful final outbox disposition.
+3. Invoke existing challenge-delivery recording only when a truthful frozen
+   result applies.
+4. Preserve whether recording succeeded, returned false, or was not applicable.
+5. Scrub terminal payload and prevent reopening.
+
+Compatible duplicate terminal finalization returns the existing terminal
+receipt without a second challenge-delivery invocation. Conflicting finalization
+is rejected; a late provider result cannot reopen terminal work.
 
 ## 20. Strict configuration contract
 
@@ -565,10 +680,10 @@ runtime_purge_every8d_settings_auth_email_v1
 | Contract | Narrow purpose and boundary |
 | --- | --- |
 | Enqueue | Unique encrypted job for the committed challenge with immutable linkage; separate commit, no orphan reconstruction |
-| Claim | Bounded fenced pre-send lease; no send-attempt increment |
-| Begin send | Durable fenced `SENDING` transition before provider invocation |
-| Finalize | Atomic truthful result, permitted challenge-delivery recording, disposition, and terminal scrub |
-| Recover | Reclaim expired pre-send leases or close ambiguous `SENDING` as unknown; never authorize resend of unknown work |
+| Claim | Claim initial `PENDING` or due `RETRY_WAIT` work under section 19 usability/timing/deadline/budget checks; establish a fresh lease token/hash, expiry, and fence with one current claimant; no send-attempt increment |
+| Begin send | Require current fresh lease/fence; revalidate retry timing, deadline, usability, and attempt budget; increment send-attempt count exactly once at successful `LEASED -> SENDING` commit before provider invocation; ambiguous commit permits no provider call |
+| Finalize | Support `ACCEPTED`, definitive rejection, and unknown terminal finalization; eligible `not_accepted_retryable -> RETRY_WAIT` is nonterminal scheduling with payload retained and no challenge recorder; exhausted retry uses truthful `FAILED_TERMINAL` without fabricated challenge failure; terminal recording/scrub/receipt rules are in section 19 |
+| Recover | Reclaim expired pre-send `LEASED` work where safe; never reauthorize ambiguous/expired `SENDING` provider calls; close expired `SENDING` as `DELIVERY_OUTCOME_UNKNOWN`; never reopen terminal states |
 | Purge | Bounded retention/cleanup respecting terminal scrub, metadata retention, and existing challenge protections |
 
 Exact SQL parameter types for outbox operations may be frozen in C3c-3 contract
@@ -663,11 +778,27 @@ vendor evidence cannot be replaced with source inspection or mock-only claims.
 | HTTP parsing/security | 8 KiB actual limit, compression/media/charset rules, duplicate/unknown JSON members, query rejection, fixed errors, no redirects, headers, dedicated parser/error boundary, no global raw-body retention |
 | Outbox unique enqueue | One job per challenge; immutable linkage; duplicate/ambiguous enqueue does not create a second send path |
 | Orphan safety | Crash between challenge/enqueue commits leaves unsent/unverifiable work; no startup reconstruction; explicit supersession respects existing limits |
-| Lease fencing | Stale lease/fence/attempt cannot begin or finalize work; expired pre-send reclamation is bounded and does not bypass deadlines |
+| Lease fencing | Stale lease/fence/attempt cannot schedule retry, begin, or finalize work; each due retry claim has fresh authority; safe pre-send reclamation never bypasses deadlines |
 | Ambiguous send-start | Unconfirmed `SENDING` commit causes zero provider calls; no network call under a DB transaction/row lock |
 | Terminal unknown behavior | Possible emission, expired `SENDING`, timeout/reset, and insufficient 429/5xx evidence terminate unknown without automatic resend |
 | Worker retry bounds | Only positive non-acceptance evidence permits retry; batch 10, lease 30s, deadline 10s, maximum three sends, delays 5s/20s, usability bounds |
-| Atomic finalization | Truthful job result/disposition and allowed challenge delivery recording commit atomically; false recorder result preserved; compatible duplicate returns receipt without second recorder call; conflict rejected |
+| Retry attempt 1 | Eligible `not_accepted_retryable`: `SENDING -> RETRY_WAIT`, 5-second delay, encrypted payload retained, no challenge delivery recorder or intermediate failure |
+| Due retry send authority | `RETRY_WAIT -> LEASED -> SENDING` requires new lease/fence; no direct wait-to-send; attempt counter increments exactly once only at confirmed durable send-start, not claim/wait/response/recovery |
+| Competing due-retry claims | Concurrent workers claiming due `RETRY_WAIT` produce exactly one fresh fenced claimant; prior lease/fence cannot authorize retry |
+| Retry attempt 2 | Eligible non-acceptance schedules the database-controlled 20-second retry delay within durable usability/deadline bounds |
+| Retry attempt 3 | No further `RETRY_WAIT` or provider attempt; truthful terminal outbox disposition |
+| Retry deadline exhaustion | Positively proven non-acceptance terminalizes outbox as `FAILED_TERMINAL`, immediately scrubs ciphertext, retains safe exhaustion disposition, fabricates no challenge failure class, and leaves challenge to expiry/supersession when recording is inapplicable |
+| Retry budget exhaustion | Same conservative terminal/scrub/no-fabricated-class behavior as deadline exhaustion; no further provider send |
+| Definitive provider rejection | Terminal `FAILED_TERMINAL`; record `provider_rejected` only where exact existing challenge state permits |
+| No sender before first send | No provider invocation; `sender_unavailable` recorded only where exact existing challenge state permits |
+| Ambiguous send/provider result | Possible emission with no authoritative result is terminal `DELIVERY_OUTCOME_UNKNOWN`, with no retry; ambiguous send-start commit causes zero provider calls |
+| Expired SENDING lease | Close as `DELIVERY_OUTCOME_UNKNOWN`; never reclaim it for another send or return it to `RETRY_WAIT` |
+| Terminal reopening | All five terminal states reject transitions to `PENDING`/`LEASED`/`SENDING`/`RETRY_WAIT`; late provider results cannot reopen them |
+| Intermediate retry recorder prohibition | No `runtime_record_every8d_settings_challenge_delivery_v1` invocation or challenge failure write for intermediate `not_accepted_retryable` |
+| Payload retry/terminal lifetime | Retain encrypted payload through `PENDING`, `LEASED`, `SENDING`, and `RETRY_WAIT`; scrub immediately in every terminal transition |
+| Duplicate terminal finalization | Compatible duplicate returns existing terminal receipt with no second challenge recorder invocation |
+| Conflicting finalization | Reject conflict; no change to terminal disposition or second challenge recording |
+| Atomic finalization | Distinguish nonterminal retry scheduling from terminal finalization; final disposition, truthful permitted recorder result (success/false/not applicable), terminal scrub, and closure commit atomically; false never reopens challenge or retries recorder/provider work |
 | Failure injection | Crashes and disconnects at verification/consumption, enqueue, lease, begin-send, provider boundary, finalization, and cleanup commit boundaries preserve conservative authority and retry semantics |
 | Encrypted payload scrub | AES-256-GCM linkage/authentication, nonce/tag/envelope validation, substitution rejection, and immediate scrub on every terminal disposition |
 | Missing historical encryption key | Fail closed with no provider call, fallback, or payload disclosure |
