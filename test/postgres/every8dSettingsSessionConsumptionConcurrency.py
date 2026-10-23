@@ -619,9 +619,12 @@ class Harness:
             print('PASS rollback refuses ' + label + ' before destructive DDL', flush=True)
         tamper_cases = {
             'prior_body': "alter function public.redeem_every8d_settings_enrollment_grant_v1(bytea,text,text) cost 42",
+            'prior_source': "create or replace function public.is_every8d_settings_email_pseudonym_v1(input_value text) returns boolean language sql immutable strict parallel safe set search_path=pg_catalog,public as 'select false'",
+            'prior_owner': "alter function public.is_every8d_settings_email_pseudonym_v1(text) owner to postgres",
             'prior_trigger': "alter table public.every8d_settings_sessions disable trigger protect_every8d_settings_session",
             'table_acl': "grant select on public.every8d_settings_sessions to service_role",
             'rls': "alter table public.every8d_settings_auth_challenges disable row level security",
+            'policy_role': "alter policy marketplace_installations_server_select on public.ghl_marketplace_installations to anon",
             'schema': "grant create on schema public to anon",
             'target_conflict': "create function public.runtime_revoke_every8d_settings_session_v1(text) returns boolean language sql as 'select true'",
         }
@@ -653,7 +656,7 @@ class Harness:
                   (select jsonb_agg(to_jsonb(n) order by n.oid) from pg_namespace n where n.nspname in ('public','extensions')))::text)"""
                 conflict_before = self.boundary(db), self.sql(conflict_catalog, db)
             before = self.snapshot(db)
-            expected = '42501' if label in ('table_acl', 'schema') else ('42723' if label == 'target_conflict' else '55000')
+            expected = '42501' if label in ('table_acl', 'schema', 'prior_owner') else ('42723' if label == 'target_conflict' else '55000')
             self.sql(MIGRATION.read_text(encoding='utf-8'), db, OWNER, error=expected, label='preflight ' + label,
                      error_message='C3c-2a target function conflict' if label == 'target_conflict' else None)
             if self.snapshot(db) != before:

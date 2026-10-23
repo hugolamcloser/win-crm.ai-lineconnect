@@ -1,6 +1,353 @@
-# C3c-2a settings session database authority: implemented for review
+# C3c-2a settings session database authority: fingerprint portability validation
 
-## Current result: complete fresh PG17 proof and final regressions PASS
+## Current validation snapshot: canonical LF regressions 10/10 PASS
+
+**2026-10-23: local validation PASS; new hosted CI required after push.** The
+user authorized one final validation-only retry of the unchanged portability
+candidate. That retry is **1/1 used**, with all ten existing DB regression
+harnesses completing their SQL proofs and exiting zero. The prior CRLF launcher
+error occurred before SQL and was not a database regression failure.
+
+Only this evidence log changed during this retry. No application, migration,
+rollback or proof logic changed. The frozen candidate, its complete exact-image
+C3c-2a proof and its current application checks remain byte-identical and valid.
+Independent implementation review has not begun. The new hosted run must pass
+both jobs before that next gate is available; run #123 is not final evidence.
+
+### Canonical LF execution, without repository line-ending changes
+
+Before validation, fresh fetch and PR inspection confirmed branch/worktree,
+open/unmerged PR #116, authorized main/base
+`ef50706d0787bdb5414cc52d7b3f40898138fbd6`, and committed PR/local/remote head
+`d4c68fd16146442085aa5c5b3f80f2baee254895`. Only the expected four tracked files
+were modified, and the complete correction diff/candidate hashes were checked.
+
+For each unchanged regression script, Python read raw canonical bytes with
+`git show HEAD:<path>` and wrote those exact bytes to a temporary file outside
+the repository. Every temporary copy was checked for zero CR bytes, exact byte
+identity, committed blob identity and SHA-256. Linux rechecked these bytes before
+execution. Bash executed the temporary file while its cwd remained the current
+repository root, so relative migrations/proofs resolved to the current worktree.
+
+No tracked regression script was modified, no LF rewrite was committed, no
+.gitattributes/autocrlf setting changed, and no CRLF-tolerance code was added.
+No temporary copy or probe utility is included in the correction commit.
+
+### Fresh CI-equivalent regression environment
+
+A new disposable `postgres:17-bookworm` container with a fresh anonymous data
+volume was used, separate from every preceding C3c-2a environment. Runtime:
+**PostgreSQL 17.11 (Debian 17.11-1.pgdg12+2)**. Image digest:
+`sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27`,
+the exact hosted image. Runtime version number was asserted to equal 170011.
+
+The temporary runner extracted the literal synthetic-role and pre-harness
+migration-staging shell blocks from the unchanged CI workflow. It created anon,
+authenticated and service_role, applied the same migration chain/exclusions,
+then ran the ten harnesses in CI order. Subsequent owner/bootstrap state was
+established by the unchanged harnesses as in CI. The container had no external
+network and no production access. No previously mutated database was reused.
+
+| Actual script executed from canonical temporary bytes | SQL proof / exit |
+| --- | --- |
+| test/postgres/ghlSmsOutboundClaimConcurrency.sh | PASS / 0 |
+| test/postgres/ghlSmsControlledLiveAuthorizationConcurrency.sh | PASS / 0 |
+| test/postgres/ghlMarketplaceOwnership.sh | PASS / 0 |
+| test/postgres/ghlMarketplaceLifecycleOrdering.sh | PASS / 0 |
+| test/postgres/ghlPublicOAuthBootstrap.sh | PASS / 0 |
+| test/postgres/ghlOAuthRefreshFoundation.sh | PASS / 0 |
+| test/postgres/every8dProviderConfigurations.sh | PASS / 0 |
+| test/postgres/every8dSettingsAuthFoundation.sh | PASS / 0 |
+| test/postgres/every8dSettingsEmailChallengeFoundation.sh | PASS / 0 |
+| test/postgres/every8dSettingsAuthOrchestration.sh | PASS / 0 |
+
+**10/10 PASS.** Each individual log contains its actual SQL proof completion
+marker, and its process exit status is recorded separately. No CRLF launcher
+error, unexpected deadlock/lock timeout or process timeout occurred. All
+harnesses terminated cleanly. A final query verified no unwanted backends or
+clone databases before dropping wincrm_test, then returned:
+
+```json
+{"other_client_backends":0,"nonbuiltin_databases":0}
+```
+
+The EXIT trap removed the container and its anonymous volume. An independent
+Docker listing confirmed the validation container no longer exists.
+
+Evidence root:
+`C:\Users\User\AppData\Local\Temp\wincrm-c3c2a-lf-validation-20261023`:
+`canonical-scripts.json`, `tracked-before.json`, `regressions.log`,
+`results.tsv`, `regression-results.json`, ten individual `regression-*.log`
+files, `version.txt`, `final-cleanup.json` and the container cleanup log. All
+temporary runner/scripts and evidence remain outside the repository.
+
+### Frozen fingerprint correction and retained current-candidate validation
+
+Classification remains **FINGERPRINT_PORTABILITY_DEFECT**. Only
+`public.ghl_marketplace_installations` differed: old expected
+`b51b7119009f94ec32233dd2208e0619`, exact-image raw actual
+`ad6b58125b107a455ffcb60966eaa892`. The exact unstable field was polroles in
+its three server policies: Windows service_role OID 16386 versus Linux 16387.
+Both represent the same service_role. All 59 function and other seven relation
+fingerprints matched. Sorted exact role-name normalization yields the same
+portable hash `0ecccbc62f508531b12c8a1c67379292` on both environments.
+
+The existing correction normalizes only that representation in migration and
+rollback preflight/postflight; all other policy definition/security fields stay
+fingerprinted. Nine bodies/signatures, ACLs, lock order and runtime semantics are
+unchanged. The proven policy-role, prior-owner/source, lifecycle-owner, trigger,
+ACL, RLS/schema and target-conflict negatives remain intact.
+
+| Existing current-candidate result, preserved without rerun | Result |
+| --- | --- |
+| Complete fresh exact-image C3c-2a PG17 proof | PASS |
+| Runtime concurrency including both expiry cases | 28/28 PASS |
+| Isolation / creator-login / lifecycle-revocation / auth-logout | PASS |
+| Collision / deferred failure / complete rollback matrix | PASS |
+| Security negatives / no unexpected deadlock or timeout | PASS |
+| npm run typecheck | PASS |
+| npm test | 696/696 PASS; zero failed/cancelled/skipped/todo |
+| npm run build | PASS |
+
+All tracked files were hashed before this validation authorization and compared
+after the ten regressions: no tracked byte changed. Only this log is now updated.
+Under user section H, application checks were therefore retained, not repeated
+for noise. The complete C3c-2a suite was not rerun or redesigned under section I.
+
+### Correction commit artifacts and delivery gate
+
+The correction comprises exactly migration, rollback, focused Python negative
+proof and this log. CI staging, the ten regression scripts, SQL behavior proof,
+shell orchestration and TypeScript remain unchanged. Commit/push target is the
+existing branch and PR #116; no squash, new PR, merge, production operation or
+C3c-2b/C3c-3 work is authorized.
+
+| Artifact | Git blob SHA | Exact bytes | SHA-256 |
+| --- | --- | --- | --- |
+| supabase/migrations/202610220001_every8d_settings_session_consumption.sql | 16d26ea37d6e5c30688265fcc6e761201fd6b9f3 | 52699 | 146b747bdde1f2d1bdf1220c6e3ff09e9211d048a15066a770f46fab3f7496d7 |
+| supabase/rollback/202610220001_every8d_settings_session_consumption.sql | 5c82ab9360c5e7af00bd530ae98514fda02ab5ed | 33059 | 519ddb18875705291a24523f35bedfb3107e77eee0165b0dd45d00e1126bf243 |
+| test/postgres/every8dSettingsSessionConsumptionConcurrency.py | 0bf7076580ee5b409b872bc2313995b9d10b500f | 51039 | 2cf145b8ea84475a1248c46a49f47f031ea86cfd09ff094787fc33d9b55396b3 |
+
+These are the exact unchanged candidate values. The correction commit supersedes
+the previous PR migration blob d524df1908572dc08ccfc1b5fccfe2caba3cf95a and
+rollback blob 4a3933bb1ec06ba91963f2fc27e80b0cb213700a and their prior byte/hash
+evidence. Exact staged and committed Git bytes must match the table; any
+difference must be explained before delivery.
+
+This snapshot is recorded before committing/pushing. Final correction commit,
+new PR head, new hosted run ID, both job conclusions and the C3c-2a step result
+are reported in the delivery response/PR after observation; this avoids a
+self-referential commit identifier or claiming CI success before it happens.
+Both validate and postgres-concurrency must succeed at the new head. If either
+fails, stop without another correction. Independent review begins only at the
+next gate after green CI; no review has been started here.
+
+PRODUCTION_CHANGES: NONE. C3c-2b and C3c-3: NOT_STARTED_NOT_AUTHORIZED.
+
+Prior stopped attempts below are historical and superseded by this validation
+retry; the CRLF launcher failure is not evidence of a database regression.
+
+## Historical result: one hosted-CI correction cycle stopped at regression launch
+
+**2026-10-23: INCOMPLETE — STOP FOR REVIEW.** The single authorized hosted-CI
+correction cycle is **1/1 used**. The exact hosted manifest defect was reproduced,
+isolated, classified and narrowly corrected locally. The full fresh exact-image
+C3c-2a suite passes, including 28 concurrency cases and all rollback/security
+negatives. Typecheck, 696/696 application tests and build pass. However, the first
+existing DB regression could not launch because this agent invoked its existing
+Windows CRLF checkout directly with Linux Bash. User section L requires stopping
+at a failed regression gate. No retry, further correction, commit or push occurred.
+No new hosted run was triggered; independent review has not begun.
+
+### Coordinates and confirmed hosted failure
+
+- Repository hugolamcloser/win-crm.ai-lineconnect; PR #116 verified OPEN/unmerged.
+- Fresh fetch: origin/main/base remains
+  `ef50706d0787bdb5414cc52d7b3f40898138fbd6`.
+- Local HEAD, branch remote and PR head remain
+  `d4c68fd16146442085aa5c5b3f80f2baee254895` on
+  `codex/c3c2a-settings-session-db-authority`. Worktree was clean before this cycle.
+- Run 39897317702 / #123: validate SUCCESS; postgres-concurrency job
+  120230634115 FAILURE. All prior DB stages through C3b-3 succeeded. C3c-2a
+  reached both pgcrypto/common-owner bootstrap PASS markers, then raised 55000
+  `C3c-2a frozen prerequisite manifest mismatch` before target creation.
+
+### Exact hosted reproduction and machine-readable difference
+
+The existing WSL2 Docker engine ran a fresh isolated `postgres:17-bookworm`
+container. Its image digest exactly matches hosted run #123:
+`sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27`.
+Both runtimes report PostgreSQL **17.11 (Debian 17.11-1.pgdg12+2)**.
+
+The committed shell harness was invoked unchanged and reproduced the exact
+55000 failure (exit 3). Separate fresh prerequisite replays reused its exact
+template0/UTF8/LC_COLLATE=C/LC_CTYPE=C database creation, synthetic roles,
+non-superuser/non-BYPASSRLS common owner, privileged pgcrypto placement and
+migration order. Temporary read-only probes mechanically extracted the committed
+preflight SELECT expressions under its normal owner/search_path. No expected
+hash was changed before collecting the difference.
+
+Machine-readable original manifest difference:
+
+```json
+{
+  "relations": {
+    "expected_count": 8,
+    "actual_count": 8,
+    "missing": [],
+    "unexpected": [],
+    "differing": [{
+      "key": "ghl_marketplace_installations",
+      "expected": "b51b7119009f94ec32233dd2208e0619",
+      "actual": "ad6b58125b107a455ffcb60966eaa892"
+    }]
+  },
+  "functions": {
+    "expected_count": 59,
+    "actual_count": 59,
+    "missing": [],
+    "unexpected": [],
+    "differing": []
+  }
+}
+```
+
+A newly initialized Windows PG17.11 baseline independently reproduced all
+committed expected hashes. Comparing every underlying normalized field against
+the exact-image replay found ONLY `polroles[0]` in these three policies:
+
+| Policy | Windows stored OID | Exact-image stored OID | Actual role in both |
+| --- | --- | --- | --- |
+| marketplace_installations_server_insert | 16386 | 16387 | service_role |
+| marketplace_installations_server_select | 16386 | 16387 | service_role |
+| marketplace_installations_server_update | 16386 | 16387 | service_role |
+
+Both role mappings were queried directly; service_role is non-superuser and
+non-BYPASSRLS in both fixtures. The common owner also retains its required
+attributes. Numeric role OIDs are allocated by each cluster and do not express a
+different policy grantee. All remaining relation fields match exactly: kind,
+persistence, RLS/FORCE RLS, replica identity/options, normalized table/column
+ACLs, columns/types/defaults/collations, constraints, indexes, trigger definitions
+and enabled states, policy names/commands/permissiveness/qualifications/checks.
+All 59 function signatures and complete normalized function field arrays match.
+
+Classification: **FINGERPRINT_PORTABILITY_DEFECT**. The defect is raw role OIDs
+retained inside policy JSON, despite the intended exclusion of cluster-local
+object identifiers. No actual prerequisite authority drift was observed.
+
+### Narrow local correction
+
+Only `polroles` representation changes: each OID resolves to its exact role name,
+with explicit PUBLIC for OID zero, sorted under COLLATE C. The rest of each policy
+JSON remains intact. Migration and rollback preflight/postflight use the same
+normalization. Only the installation relation's expected hash changes to
+`0ecccbc62f508531b12c8a1c67379292`; the other seven relation hashes and all 59
+prerequisite function hashes remain unchanged.
+
+Before editing the SQL artifacts, temporary normalized probes from fresh Windows
+and exact-image prerequisite databases produced identical manifests AND every
+normalized field. No wholesale hash replacement or superficial existence check
+was used. A reverse-substitution check proves the SQL files otherwise exactly
+match the reviewed head: nine function bodies/signatures, owner/lifecycle guards,
+SECURITY DEFINER/search_path, lock graph, ACLs, READ COMMITTED/exact-one/expiry and
+session behavior are untouched. No prerequisite definitions were modified.
+
+Focused proof additions require real refusal for a policy grantee changed to
+anon, a prior settings function owned by postgres, and an actual prior helper
+body changed to return false. Existing metadata/trigger/ACL/RLS/schema/conflict,
+dependency, populated rollback and maintenance-lock negatives remain intact.
+No permanent diagnostic dump was added to production errors. Temporary catalog
+diagnostics contain object names/hashes/static catalog fields, no auth rows or
+credential data.
+
+### Fresh exact-image validation
+
+A new container/cluster, separate from diagnosis, ran the corrected complete
+C3c-2a shell path once. Runtime version was explicitly required to equal 170011.
+
+| Gate | Current result |
+| --- | --- |
+| Bootstrap / exact prerequisite manifest / structural / behavior | PASS |
+| Runtime concurrency | **28/28 PASS**; both expiry cases included |
+| Isolation / creator-login / lifecycle-revocation / auth-logout | PASS |
+| Deferred COMMIT and session collision atomicity | PASS |
+| Lifecycle-v2 wrong owner | PASS refusal for anon/authenticated/service_role/postgres; zero targets and unchanged prerequisites |
+| Prior settings wrong owner / actual prior source change | PASS refusal |
+| Disabled prerequisite trigger / widened auth ACL / RLS drift | PASS refusal |
+| Policy grantee changed to anon | PASS refusal: normalized role identities remain security-significant |
+| Untrusted schema CREATE / target conflict / target ACL tamper | PASS refusal |
+| Dependency / later dependency / populated rollback | PASS refusal |
+| Clean rollback/reapply / maintenance-lock refusal | PASS |
+| Unexpected SQL/deadlock/lock/statement/process/barrier timeout | None; only explicitly expected bounded maintenance 55P03 |
+| Full exact-image C3c-2a result | **PASS**; final harness PASS and zero surviving harness backends |
+| Ten existing DB regressions | **INCOMPLETE: 0/10 completed**, first script launch failed before SQL |
+| npm run typecheck | PASS |
+| npm test | **696 tests, 696 pass, 0 fail/cancelled/skipped/todo** |
+| npm run build | PASS |
+
+The first legacy regression was invoked from the physical Windows checkout
+under Linux Bash and failed before its PostgreSQL calls:
+
+```text
+test/postgres/ghlSmsOutboundClaimConcurrency.sh: line 2: $'\r': command not found
+test/postgres/ghlSmsOutboundClaimConcurrency.sh: line 3: set: pipefail
+: invalid option name
+```
+
+Diagnosis: the tracked legacy shell files have CRLF working-tree bytes on
+Windows, while hosted Git checkout supplies LF. This invocation did not use LF
+source bytes as a Linux checkout would. It is a local regression-launch setup
+defect, not evidence of a database SQL/security regression. It nevertheless
+leaves the required ten-regression gate unmet. No LF export/retry, unrelated file
+change or second correction was performed after this failure.
+
+Evidence root:
+`C:\Users\User\AppData\Local\Temp\wincrm-c3c2a-hosted-ci-20261023`:
+`manifest-diff.json`, `field-diff.json`, `normalized-diff.json`, Windows/Linux
+original and normalized manifest/field JSON, `linux-original.log`,
+`linux-final.log`, `exact-final.log`, the first regression log and npm logs.
+The final container EXIT trap removed its container and anonymous volume on
+failure. The diagnosis container/volume were explicitly removed; the comparison
+Windows server is stopped. No task containers/backends remain. No production
+access, deployment, environment change, credentials or provider action occurred.
+
+### Candidate immutable evidence and delivery state
+
+These are **uncommitted candidate** byte values, superseding the previous local
+artifact values only. The unchanged PR still contains the prior committed bytes
+at d4c68fd; no candidate value is represented as committed PR evidence.
+
+| Artifact | Candidate Git blob hash | Bytes | SHA-256 |
+| --- | --- | --- | --- |
+| supabase/migrations/202610220001_every8d_settings_session_consumption.sql | 16d26ea37d6e5c30688265fcc6e761201fd6b9f3 | 52699 | 146b747bdde1f2d1bdf1220c6e3ff09e9211d048a15066a770f46fab3f7496d7 |
+| supabase/rollback/202610220001_every8d_settings_session_consumption.sql | 5c82ab9360c5e7af00bd530ae98514fda02ab5ed | 33059 | 519ddb18875705291a24523f35bedfb3107e77eee0165b0dd45d00e1126bf243 |
+| test/postgres/every8dSettingsSessionConsumptionConcurrency.py | 0bf7076580ee5b409b872bc2313995b9d10b500f | 51039 | 2cf145b8ea84475a1248c46a49f47f031ea86cfd09ff094787fc33d9b55396b3 |
+
+The superseded local migration values were blob d524df1908572dc08ccfc1b5fccfe2caba3cf95a,
+51981 bytes, SHA-256 d8246cadfb9589f95cd8b56c269418f648b664eaeac080cd1e76912f77a2b354.
+The superseded local rollback values were blob 4a3933bb1ec06ba91963f2fc27e80b0cb213700a,
+32341 bytes, SHA-256 45353d8936b9d94207f9e7eb75911c8bcbccee0a30e8007b71804f84362646bb.
+Those prior values remain the current PR's immutable evidence until a reviewed
+candidate is committed and pushed.
+
+Exactly four local files differ: migration, rollback, focused Python proof and
+this evidence log. CI, shell orchestration, SQL behavior proof and TypeScript
+remain unchanged. Old/new PR head are both
+`d4c68fd16146442085aa5c5b3f80f2baee254895`; correction commit NONE; push NONE.
+PR #116 remains open/unmerged but **NOT_READY_FOR_REVIEW**. No new hosted run;
+39897317702 still has validate SUCCESS / postgres-concurrency FAILURE. Independent
+review, C3c-2b and C3c-3 were not started.
+
+```text
+C3C_2A_HOSTED_CI_CORRECTION: INCOMPLETE
+C3C_2A_PR: NOT_READY_FOR_REVIEW
+C3C_2B: NOT_AUTHORIZED
+PRODUCTION_CHANGES: NONE
+```
+
+STOP FOR REVIEW under the user's section L; no additional correction is inferred.
+
+## Historical result: complete fresh PG17 proof and final regressions PASS
 
 **2026-10-23: PASS — independent C3c-2a implementation review required.** The
 single additional target-conflict fixture correction is **1/1 used**. The fresh
