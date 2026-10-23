@@ -87,9 +87,18 @@ for source in supabase/migrations/*.sql; do
       echo 'PASS privileged disposable pgcrypto placement and exact digest dependency'
       ;;
   esac
-  psql_owner "$prerequisite" <"$source" >/dev/null
+  # Canonical Git-object bytes make stored literal prosrc identical on all hosts.
+  # Never normalize characters in stored function source to hide fixture drift.
+  git show "HEAD:$source" | psql_owner "$prerequisite" >/dev/null
 done
 echo 'PASS common-owner C3a/C3b prerequisite migrations'
+
+if [[ "${C3C2A_PROOF_MODE:-full}" == focused ]]; then
+  "${PYTHON_BIN:-python3}" test/postgres/every8dSettingsSessionConsumptionConcurrency.py \
+    --database "$prerequisite" --prerequisite "$prerequisite" --focused-maintenance
+  echo 'C3c-2a focused R1/R2/R3 maintenance proof PASS'
+  exit 0
+fi
 
 psql_db postgres -qc "create database $database owner $owner_role template $prerequisite"
 psql_owner "$database" <"$migration" >/dev/null

@@ -1,3 +1,275 @@
+# C3c-2a independent-review R1–R3 maintenance remediation
+
+## Current snapshot: local proof PASS; hosted re-review gate pending
+
+2026-10-23. One focused remediation cycle was explicitly authorized for R1 exact
+function source, R2 internal constraint-trigger state, and R3 cross-schema routine
+body callers. Focused proofs passed before the full matrix. Fresh exact-image
+C3c-2a, ten DB regressions, typecheck, 696/696 application tests (zero skipped),
+and build all passed. This records local evidence before commit/push; new hosted
+CI must still pass at the correction head. PR #116 remains DO NOT MERGE pending
+hosted proof and independent re-review. No independent re-review started here.
+
+At entry, fetch/remote and PR checks pinned main/base to
+`ef50706d0787bdb5414cc52d7b3f40898138fbd6`, local/remote/PR reviewed head to
+`d6f7b4ae5bf2214f3ae39390bd54ac32038ad302`, the existing seven-file PR,
+open/unmerged PR #116, and a clean phase worktree on
+`codex/c3c2a-settings-session-db-authority`. The phase worktree is
+`C:\Users\User\.codex\worktrees\c3c2a-settings-session-db-authority\win-crm.ai-lineconnect-pilot00`.
+
+The correction changes only migration maintenance projections, rollback
+maintenance projections/body-reference guard, shell fixture replay/focused
+entry, Python proof transport/negatives, and this log. The nine complete CREATE
+FUNCTION blocks were compared byte-for-byte against the reviewed Git head and
+are unchanged. SQL behavior proof, CI, TypeScript, relation inventory, C3a
+redemption, runtime ACLs, lock graph and all runtime/session semantics are
+unchanged. No production access or changes. No C3c-2b/C3c-3 work.
+
+## R1: literal function source and semantic-CR proof
+
+All six migration/rollback prerequisite/target/pre-post projections changed from
+`replace(p.prosrc,chr(13),'')` to literal `p.prosrc`. `prosqlbody::text` remains
+separately fingerprinted. No CR/CRLF/LF source normalization remains in the
+production projections. The only unsafe projection retained in the proof helper
+is explicitly the OLD-contract counterexample, never the new contract.
+
+Prerequisite replay now pipes `git show HEAD:<migration>` canonical LF Git-object
+bytes to the synthetic non-superuser migration owner. The Python helper reads SQL
+as exact bytes, decodes UTF-8 without universal-newline conversion, and sends
+encoded bytes to psql without OS newline rewriting. Production preflight
+continues to reject different literal stored bodies; a future production body
+mismatch requires a future readiness decision, not normalization.
+
+The disposable `public.is_every8d_settings_email_pseudonym_v1(text)` negative
+inserts an ACTUAL chr(13) inside the regex immediately before `$`. It verifies
+stored source contains CR, removing CR reproduces the original source, a normal
+`k1:` plus 64 hex characters changes from accepted to rejected, and appending CR
+changes to accepted. This is not a backslash-r string. All metadata is retained.
+The old full unsafe fingerprint collides with the canonical baseline; the new
+exact full fingerprint differs:
+
+| Source fixture | Full function fingerprint |
+| --- | --- |
+| Canonical baseline / old unsafe projection of semantic-CR tamper | d3a726234333158db9649a6946611eb1 |
+| New exact projection of semantic-CR tamper | 747be7280ea5ba442f9d4439e6f45e18 |
+| Separate ordinary `select false` source tamper | 1ad05161bb6680d000ab237a846a5be5 |
+
+Both ordinary and semantic-CR variants were exercised against real migration
+and real rollback. Each refuses with SQLSTATE 55000 and exact sanitized message
+`C3c-2a frozen prerequisite manifest mismatch`. Apply leaves zero target
+functions; rollback retains all nine. Exact before/after authority/catalog/ACL,
+namespace and all eight prerequisite-relation row snapshots are unchanged;
+neither operation repairs source, ownership, ACL or data.
+
+## R2: complete internal-trigger inventory and portable projection
+
+Inventory ran before projection design on all eight relations. There are 36
+internal triggers, all with nonzero tgconstraint; none was silently omitted.
+All are foreign-key enforcement triggers, normally enabled `O`, nondeferrable,
+and not initially deferred. All have empty tgattr/tgargs, zero tgnargs, NULL
+qualification and transition tables. Existing noninternal trigger fingerprints,
+including application deferred integrity triggers, remain unchanged.
+
+The following is the complete inventory grouped into two-trigger pairs. All
+constraint schemas are public and trigger functions are in pg_catalog. A check
+pair is `"RI_FKey_check_ins"()` (tgtype=5) plus `"RI_FKey_check_upd"()` (17).
+A restrict pair is `"RI_FKey_restrict_del"()` (9) plus
+`"RI_FKey_restrict_upd"()` (17). Each listed row represents exactly two triggers.
+
+| Protected relation | Constraint | Function pair | Referenced-side/other relation |
+| --- | --- | --- | --- |
+| every8d_settings_administrators | every8d_settings_administrators_enrollment_grant_fk | check (5,17) | every8d_settings_enrollment_grants |
+| every8d_settings_administrators | every8d_settings_administrators_installation_fk | check (5,17) | ghl_marketplace_installations |
+| every8d_settings_administrators | every8d_settings_sessions_administrator_snapshot_fk | restrict (9,17) | every8d_settings_sessions |
+| every8d_settings_auth_challenge_failures | every8d_settings_auth_challenge_failures_challenge_fk | check (5,17) | every8d_settings_auth_challenges |
+| every8d_settings_auth_challenges | every8d_settings_auth_challenge_failures_challenge_fk | restrict (9,17) | every8d_settings_auth_challenge_failures |
+| every8d_settings_auth_challenges | every8d_settings_auth_challenges_grant_fk | check (5,17) | every8d_settings_enrollment_grants |
+| every8d_settings_enrollment_grants | every8d_settings_administrators_enrollment_grant_fk | restrict (9,17) | every8d_settings_administrators |
+| every8d_settings_enrollment_grants | every8d_settings_auth_challenges_grant_fk | restrict (9,17) | every8d_settings_auth_challenges |
+| every8d_settings_enrollment_grants | every8d_settings_enrollment_grants_installation_fk | check (5,17) | ghl_marketplace_installations |
+| every8d_settings_sessions | every8d_settings_sessions_administrator_snapshot_fk | check (5,17) | every8d_settings_administrators |
+| ghl_marketplace_app_registrations | ghl_marketplace_app_version_registrations_app_namespace_fkey | restrict (9,17) | ghl_marketplace_app_version_registrations |
+| ghl_marketplace_app_version_registrations | ghl_marketplace_app_version_registrations_app_namespace_fkey | check (5,17) | ghl_marketplace_app_registrations |
+| ghl_marketplace_installations | every8d_provider_configurations_installation_fk | restrict (9,17) | every8d_provider_configurations |
+| ghl_marketplace_installations | every8d_settings_administrators_installation_fk | restrict (9,17) | every8d_settings_administrators |
+| ghl_marketplace_installations | every8d_settings_enrollment_grants_installation_fk | restrict (9,17) | every8d_settings_enrollment_grants |
+| ghl_marketplace_installations | ghl_marketplace_installations_tenant_location_fkey | check (5,17) | tenants |
+| ghl_marketplace_installations | ghl_marketplace_oauth_bootstraps_claimed_installation_id_fkey | restrict (9,17) | ghl_marketplace_oauth_bootstraps |
+| ghl_marketplace_installations | ghl_marketplace_oauth_states_installation_id_fkey | restrict (9,17) | ghl_marketplace_oauth_states |
+
+The new component covers ALL internal triggers (LEFT JOIN to constraints, so an
+unexpected internal trigger without tgconstraint is also represented). Stable
+fields: constraint schema/name/type/definition; origin/referenced relation schema
+and name; trigger-function schema/name/identity arguments; tgtype, tgenabled,
+tgdeferrable, tginitdeferred; boolean constraint/parent presence; referenced
+relation and supporting index schema/name/definition; resolved attribute names;
+argument count/bytes; qualification expression; transition-table names. Complete
+identity arrays are deterministically sorted using C collation.
+
+No trigger/constraint/relation/index OID or generated internal trigger name is
+hashed. OIDs are used only to resolve stable identity/definitions; presence flags
+are booleans. All four relation projections are byte-identical. The proof helper
+extracts the real projection rather than maintaining a divergent copy. Existing
+noninternal triggers, constraints, indexes, policies, ACLs and RLS remain covered.
+
+All eight relations have internal triggers, so these eight hashes legitimately
+change. Only these expected relation values were regenerated; all 59 expected
+function hashes and the nine target hashes remain unchanged.
+
+| Relation | Reviewed fingerprint | New fingerprint |
+| --- | --- | --- |
+| every8d_settings_administrators | c58ea3ff3db89c32b25ed161c37aa0f2 | 22310a057aae8c919d5f133686b06c12 |
+| every8d_settings_auth_challenge_failures | 7b5f0c6c56f2b797f22a1dd19d1e3c8f | 1c3aa7ad43c10fbeaa3da35919c5f603 |
+| every8d_settings_auth_challenges | 6f362a21a96a0f360aebb417b57ca9ef | ad3214c353186228d0f17e2f115f15fb |
+| every8d_settings_enrollment_grants | bf19608234370a50bca909698fcc7377 | 2bc87966915bd44aa80793cc9bb1b3d7 |
+| every8d_settings_sessions | 0e5ac76c83c5f7808766beda9b28468e | 3ea40301cf1743c7fc3f33e754db1705 |
+| ghl_marketplace_app_registrations | f48407c15dd6a42693863a1c76bf152b | 0360ec6e4309027f40c03b1087c17b53 |
+| ghl_marketplace_app_version_registrations | 85926308542ac4083b81298e36c44c29 | 5b6cc4f57acd2edd376949b63d579574 |
+| ghl_marketplace_installations | 0ecccbc62f508531b12c8a1c67379292 | b29aca9663dc2fefce200a5b21518ec9 |
+
+Negative: programmatically locate the internal INSERT check on
+`public.every8d_settings_sessions`, constraint
+`every8d_settings_sessions_administrator_snapshot_fk`, function
+`pg_catalog."RI_FKey_check_ins"()`, tgtype=5. Assert internal/nonzero constraint
+and normal `O`, disable exactly its catalog-resolved generated name as disposable
+postgres, confirm `D`, then run real apply or rollback. The sessions fingerprint
+changes from `3ea40301cf1743c7fc3f33e754db1705` to
+`fb74c97615d7e8f2538f096ecae8ca4b`. Both operations refuse 55000 with the exact
+prerequisite-manifest message. Apply creates zero targets; rollback retains nine.
+Trigger stays D until fixture disposal; no authority/data/ACL repair or partial
+DDL occurs. Other prerequisite state remains byte-identical by catalog snapshot.
+
+## R3: conservative cross-schema later-routine refusal
+
+The original pg_depend guard is retained unchanged. Before any REVOKE/DROP,
+rollback also scans pg_proc.prosrc for every non-target routine in every schema
+except information_schema and names matching `^pg_` (catalog, temp/toast/system).
+This includes public, extensions, and any later user schema; there is no public
+allowlist. All pg_proc kinds/languages are included, covering functions,
+procedures and PL/pgSQL dynamic strings. Only the nine exact public target
+regprocedure identities are excluded, allowing wrappers to call cores.
+
+The search uses C-collation lowercase source and literal substring matching of
+each of all nine complete target names. Quoted/uppercase direct names are caught;
+conservative textual false-positive refusal is intentional. It does not claim
+to infer arbitrary obfuscated/generated routine names. Fixed refusal is 55000,
+`C3c-2a rollback refused: later routine body reference`; no bodies/catalog dumps
+appear in runtime errors.
+
+| Real later fixture in NON-public c3c2a_later_guard | Explicit pg_depend target edge | Refusal |
+| --- | --- | --- |
+| atomic_caller(), SQL BEGIN ATOMIC | present | Existing unexpected-dependency guard, 55000 |
+| string_body_caller(), SQL string-literal body | ABSENT | New later-routine-body guard, 55000 |
+| dynamic_caller(), PL/pgSQL procedure with uppercase dynamic direct name | ABSENT | New later-routine-body guard, 55000 |
+
+Each calls/references runtime_revoke_every8d_settings_session_v1(bytea). Catalog
+edge proof explicitly checks pg_proc caller objid -> pg_proc target refobjid.
+Every refusal retains all nine targets and caller; full source/owner/ACL/catalog
+and prerequisite row snapshots remain unchanged, with no partial DROP. The
+original public BEGIN ATOMIC later-dependency test is also retained and passes.
+
+## Focused, cross-platform and complete current validation
+
+Focused mode ran first in a FRESH network-isolated postgres:17-bookworm container
+and passed all nine new maintenance scenarios before the expensive matrix.
+Then full mode ran in ANOTHER FRESH container. Both report PostgreSQL 17.11
+(Debian 17.11-1.pgdg12+2), image digest
+`sha256:858bb5e98eed02eb8cafbcdc007f9a65d1b613972028944a8ec2133ccaf80d27`.
+Synthetic roles and non-superuser/non-BYPASSRLS common owner, template0, UTF8,
+C collate/ctype, privileged pgcrypto placement and prior migration ordering
+match the existing harness. pgcrypto/digest remain postgres-owned in extensions.
+
+Separate fresh Windows native PostgreSQL 17.11 and exact-image Linux fixtures
+replayed the SAME canonical Git SQL. Complete normalized relation/function
+fields and hashes are identical across platforms, including all 36 internal
+trigger identities/states. All 59 function hashes equal the reviewed canonical
+baseline. Meaningful literal-CR and internal-enabled-state differences are
+explicitly distinguished by the new executable negatives above. No equality is
+claimed for fixtures that intentionally store different literal source bytes.
+
+| Current validation | Result |
+| --- | --- |
+| Bootstrap / exact prerequisite manifests / structural behavior | PASS |
+| Lifecycle normal common owner + anon/authenticated/service_role/postgres tamper | PASS; mismatches reject, zero targets |
+| Prior function source/body/owner, ordinary trigger, table ACL, RLS/policy role, schema CREATE, target conflict negatives | PASS |
+| Enrollment/login exact-one/auth/logout behavior | PASS |
+| Runtime concurrency matrix | 28/28 PASS (including both expiry cases; two isolation case groups separate) |
+| Both real login/session expiry after deterministic wait | PASS; current DB time revalidated, authority unchanged after rejection |
+| READ COMMITTED; RR/SERIALIZABLE | RC succeeds; both unsupported levels refuse without mutation |
+| Creator/login both orders; same/different installations | PASS |
+| Lifecycle/administrator revocation/auth/logout races, both orders | PASS |
+| Actual deferred COMMIT failure / session collision | PASS; no partial authority |
+| Clean empty rollback / exact nine drops / reapply | PASS |
+| Definition / owner / ACL / unexpected dependency / later dependency rollback refusals | PASS |
+| Populated administrator / session / consumed challenge rollback refusals | PASS |
+| Bounded maintenance-lock refusal | PASS, expected 55P03, no destructive DDL/data change |
+| R1 exact-source and semantic-CR apply/rollback negatives | 4/4 PASS |
+| R2 internal session-FK trigger apply/rollback negatives | 2/2 PASS |
+| R3 tracked SQL / untracked SQL / untracked PL/pgSQL later callers | 3/3 PASS |
+| Unexpected SQL error/deadlock/lock/statement/process timeout or retry | NONE |
+| Surviving proof backends / clone databases after focused and full runs | 0 / 0 |
+| npm run typecheck | PASS, fresh |
+| npm test | 696/696 PASS; zero failed/cancelled/skipped/todo, fresh |
+| npm run build | PASS, fresh |
+
+After complete PG17 PASS, ten regressions ran from another fresh exact-image
+PG17.11 container with literal CI pre-harness staging and CI order. Canonical
+LF Git-object scripts were copied to temporary files OUTSIDE the repository,
+asserted CR-free and SHA-256-identical, and run with cwd at the current worktree.
+Tracked old scripts, Git line-ending settings and .gitattributes are unchanged.
+
+| Existing script actually executed; SQL proof completed | Exit/result |
+| --- | --- |
+| test/postgres/ghlSmsOutboundClaimConcurrency.sh | 0 / PASS |
+| test/postgres/ghlSmsControlledLiveAuthorizationConcurrency.sh | 0 / PASS |
+| test/postgres/ghlMarketplaceOwnership.sh | 0 / PASS |
+| test/postgres/ghlMarketplaceLifecycleOrdering.sh | 0 / PASS |
+| test/postgres/ghlPublicOAuthBootstrap.sh | 0 / PASS |
+| test/postgres/ghlOAuthRefreshFoundation.sh | 0 / PASS |
+| test/postgres/every8dProviderConfigurations.sh | 0 / PASS |
+| test/postgres/every8dSettingsAuthFoundation.sh | 0 / PASS |
+| test/postgres/every8dSettingsEmailChallengeFoundation.sh | 0 / PASS |
+| test/postgres/every8dSettingsAuthOrchestration.sh | 0 / PASS |
+
+10/10 PASS; no unexpected deadlock, lock/process timeout or launcher failure.
+Final regression query: {"other_client_backends":0,"nonbuiltin_databases":0}.
+Every temporary Linux container/anonymous volume was removed; the Windows
+comparison server was stopped. Probe scripts, canonical copies and raw evidence
+remain outside Git under
+`C:\Users\User\AppData\Local\Temp\wincrm-c3c2a-r123-20261023`.
+Principal logs: inventory.json, linux/windows-hashes.json, linux/windows-fields.json,
+relation-diff.json, focused.log, full.log, both clean-state files, ten regression
+logs/results.tsv/final-cleanup.json, typecheck.log, npm-test.log, build.log.
+
+## Correction artifacts and delivery boundary
+
+Only five existing C3c-2a files change in this correction: migration, rollback,
+shell proof, Python proof and this evidence log. The full PR still contains
+exactly its existing seven authorized files. No temporary utility is staged.
+The nine runtime/core CREATE FUNCTION blocks are exact reviewed Git bytes.
+The expected relation values below supersede the reviewed migration/rollback
+immutable evidence. Staged/committed Git bytes must equal these candidates:
+
+| Artifact path | Git blob SHA | Exact bytes | SHA-256 |
+| --- | --- | ---: | --- |
+| supabase/migrations/202610220001_every8d_settings_session_consumption.sql | 315cc15888adc1edd96cf1ca2b8f0ef2b0171375 | 55648 | 616917fc8bc64221689b6c804939dc555777af355e866095a136355bb247153b |
+| supabase/rollback/202610220001_every8d_settings_session_consumption.sql | 2b47b98e2460e92d557423b8d64a3663ca7cba45 | 37832 | 3b7edf499e855fdb9efe2743422218517633f196d9b266444849333624f50d9b |
+| test/postgres/every8dSettingsSessionConsumption.sh | 0d4c96627e3ad4ba7c41ed03bb4f1736bff51b3d | 5360 | a126d097ff90f3bed572d285960b2b9c1a5b21343cfabcec5763a77449d08e3c |
+| test/postgres/every8dSettingsSessionConsumption.sql | 7333539900f6c8121d46e39bfa69db015adad19a | 22611 | b84470d32f66e753a4732e635476620e36c2b6518f1d6d7a757350cc1cf67cb1 |
+| test/postgres/every8dSettingsSessionConsumptionConcurrency.py | ab2aaffaeaa54e3ec2d6cadbc9c739984c019960 | 61127 | 150f9cb3532349bdd0aff9f805d9cf29246c80135e8b2b17fabc2ecc6377d04c |
+
+No merge/deployment/production migration/manual live smoke test was authorized
+or performed. Correction commit/push updates SAME PR #116. New head, committed
+artifact verification, hosted run ID and both job/step conclusions will be
+reported after observation in the PR/delivery response; this local snapshot
+does not claim future CI success. If hosted CI fails, STOP FOR REVIEW with no
+additional correction. Success next gate is INDEPENDENT_C3C_2A_RE_REVIEW.
+C3c-2b and C3c-3 remain NOT_STARTED_NOT_AUTHORIZED. PRODUCTION_CHANGES: NONE.
+
+---
+
+The following evidence is historical and superseded by the current snapshot.
+
 # C3c-2a settings session database authority: fingerprint portability validation
 
 ## Current validation snapshot: canonical LF regressions 10/10 PASS

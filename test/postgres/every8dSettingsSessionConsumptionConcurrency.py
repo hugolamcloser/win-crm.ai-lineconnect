@@ -78,10 +78,12 @@ class Harness:
         if error_message is not None:
             statement = '\\set VERBOSITY verbose\n' + statement
         try:
-            result = subprocess.run(cmd, input=statement, text=True, encoding='utf-8',
+            result = subprocess.run(cmd, input=statement.encode('utf-8'),
                                     capture_output=True, env=env, timeout=60)
         except subprocess.TimeoutExpired as exc:
             raise Failure(label + ': process timeout') from exc
+        result.stdout = result.stdout.decode('utf-8')
+        result.stderr = result.stderr.decode('utf-8')
         state = re.search(r'ERROR:\s+([0-9A-Z]{5})\b', result.stderr)
         if error:
             if result.returncode == 0 or not state or state[1] != error:
@@ -173,7 +175,7 @@ class Harness:
         return name
 
     def install(self, db):
-        self.sql(MIGRATION.read_text(encoding='utf-8'), db, OWNER, label='migration apply')
+        self.sql(MIGRATION.read_bytes().decode('utf-8'), db, OWNER, label='migration apply')
 
     def boundary(self, db):
         # Independent whole-public-schema/ACL/default-ACL projection. Only the
@@ -200,6 +202,127 @@ class Harness:
         self.check("select count(*)=" + str(count) + " from pg_proc where pronamespace='public'::regnamespace and proname in ("
                    + ','.join(map(quote, TARGETS)) + ')', 'exact target count ' + str(count), db)
 
+    def maintenance_state(self, db):
+        # Exact within-database snapshots include all target/caller owners and ACLs,
+        # all internal triggers, and prerequisite rows. No cross-host OID hashing.
+        catalog = self.sql("""select md5(jsonb_build_array(
+          (select jsonb_agg(to_jsonb(p) order by p.oid) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+            where n.nspname<>'information_schema' and n.nspname !~ '^pg_'),
+          (select jsonb_agg(to_jsonb(n) order by n.oid) from pg_namespace n
+            where n.nspname<>'information_schema' and n.nspname !~ '^pg_'),
+          (select jsonb_agg(to_jsonb(t) order by t.id) from public.ghl_marketplace_installations t),
+          (select jsonb_agg(to_jsonb(t) order by t.app_namespace) from public.ghl_marketplace_app_registrations t),
+          (select jsonb_agg(to_jsonb(t) order by t.app_namespace,t.marketplace_version_id)
+            from public.ghl_marketplace_app_version_registrations t))::text)""", db)
+        return self.snapshot(db), self.boundary(db), catalog
+
+    def maintenance_fingerprint(self, kind, key, db, unsafe_cr_projection=False):
+        source = MIGRATION.read_bytes().decode('utf-8')
+        field = 'signature' if kind == 'functions' else 'relname'
+        query = re.search(r'select jsonb_object_agg\(v\.' + field
+                          + r',v\.fingerprint\) into actual_' + kind + r' from \(.*?\) v;', source, re.S)[0]
+        query = query.replace(' into actual_' + kind, '', 1).rstrip(';')
+        if unsafe_cr_projection:
+            # Deliberate OLD-contract counterexample only; never the new contract.
+            assert kind == 'functions' and query.count('p.prosrc,(') == 1
+            query = query.replace('p.prosrc,(', "replace(p.prosrc,chr(13),''),(", 1)
+        return self.sql('select (' + query + ') ->> ' + quote(key), db, OWNER)
+
+    def maintenance_guards(self):
+        clean = self.clone('maintenance_clean')
+        self.install(clean)
+        signature = 'public.is_every8d_settings_email_pseudonym_v1(text)'
+        for phase in ('migration', 'rollback'):
+            for variant in ('source', 'semantic_cr'):
+                db = self.clone('r1_' + phase + '_' + variant, clean if phase == 'rollback' else None)
+                old = self.maintenance_fingerprint('functions', signature[7:], db)
+                if variant == 'semantic_cr':
+                    self.sql("""do $proof$ declare original text; altered text; begin
+                      select prosrc into original from pg_proc where oid='public.is_every8d_settings_email_pseudonym_v1(text)'::regprocedure;
+                      if position(chr(13) in original)<>0 or not public.is_every8d_settings_email_pseudonym_v1('k1:'||repeat('a',64)) then
+                        raise exception 'invalid canonical source fixture'; end if;
+                      execute replace(pg_get_functiondef('public.is_every8d_settings_email_pseudonym_v1(text)'::regprocedure),
+                        '[0-9a-f]{64}$','[0-9a-f]{64}'||chr(13)||'$');
+                      select prosrc into altered from pg_proc where oid='public.is_every8d_settings_email_pseudonym_v1(text)'::regprocedure;
+                      if position(chr(13) in altered)=0 or altered=original or replace(altered,chr(13),'')<>original
+                        or public.is_every8d_settings_email_pseudonym_v1('k1:'||repeat('a',64)) is not false
+                        or public.is_every8d_settings_email_pseudonym_v1('k1:'||repeat('a',64)||chr(13)) is not true then
+                        raise exception 'semantic CR counterexample not established'; end if;
+                    end; $proof$;""", db)
+                    if self.maintenance_fingerprint('functions', signature[7:], db, True) != old:
+                        raise Failure('R1 old projection collision not established')
+                else:
+                    self.sql("create or replace function public.is_every8d_settings_email_pseudonym_v1(input_value text) "
+                             "returns boolean language sql immutable strict parallel safe set search_path=pg_catalog,public as 'select false'", db)
+                new = self.maintenance_fingerprint('functions', signature[7:], db)
+                if new == old:
+                    raise Failure('R1 literal source fingerprint failed to distinguish tamper')
+                before = self.maintenance_state(db)
+                artifact = ROLLBACK if phase == 'rollback' else MIGRATION
+                self.sql(artifact.read_bytes().decode('utf-8'), db, OWNER, error='55000',
+                         error_message='C3c-2a frozen prerequisite manifest mismatch', label='R1 ' + phase + ' ' + variant)
+                self.target_count(9 if phase == 'rollback' else 0, db)
+                if self.maintenance_state(db) != before:
+                    raise Failure('R1 refusal changed authority/data')
+                print('PASS R1 ' + phase + ' ' + variant + ': exact source differs; no repair/data mutation; '
+                      + json.dumps({'old': old, 'new': new, 'old_cr_collision': variant == 'semantic_cr'}), flush=True)
+
+        trigger_query = """select t.tgenabled from pg_trigger t join pg_constraint k on k.oid=t.tgconstraint
+          where t.tgrelid='public.every8d_settings_sessions'::regclass and t.tgisinternal
+            and k.conname='every8d_settings_sessions_administrator_snapshot_fk'
+            and t.tgfoid='pg_catalog."RI_FKey_check_ins"()'::regprocedure and t.tgtype=5"""
+        for phase in ('migration', 'rollback'):
+            db = self.clone('r2_' + phase, clean if phase == 'rollback' else None)
+            if self.sql(trigger_query, db) != 'O':
+                raise Failure('R2 exact internal FK trigger is not normally enabled')
+            old = self.maintenance_fingerprint('relations', 'every8d_settings_sessions', db)
+            self.sql("""do $proof$ declare trigger_name name; begin
+              select t.tgname into strict trigger_name from pg_trigger t join pg_constraint k on k.oid=t.tgconstraint
+              where t.tgrelid='public.every8d_settings_sessions'::regclass and t.tgisinternal and t.tgconstraint<>0
+                and k.conname='every8d_settings_sessions_administrator_snapshot_fk'
+                and t.tgfoid='pg_catalog."RI_FKey_check_ins"()'::regprocedure and t.tgtype=5 and t.tgenabled='O';
+              execute format('alter table public.every8d_settings_sessions disable trigger %I',trigger_name);
+            end; $proof$;""", db)
+            if self.sql(trigger_query, db) != 'D':
+                raise Failure('R2 single trigger disable not established')
+            new = self.maintenance_fingerprint('relations', 'every8d_settings_sessions', db)
+            if new == old:
+                raise Failure('R2 enforcement-state fingerprint did not change')
+            before = self.maintenance_state(db)
+            artifact = ROLLBACK if phase == 'rollback' else MIGRATION
+            self.sql(artifact.read_bytes().decode('utf-8'), db, OWNER, error='55000',
+                     error_message='C3c-2a frozen prerequisite manifest mismatch', label='R2 ' + phase)
+            self.target_count(9 if phase == 'rollback' else 0, db)
+            if self.sql(trigger_query, db) != 'D' or self.maintenance_state(db) != before:
+                raise Failure('R2 refusal repaired trigger or changed authority/data')
+            print('PASS R2 ' + phase + ': internal session composite-FK check O->D; remains D; no partial DDL/data; '
+                  + json.dumps({'old': old, 'new': new}), flush=True)
+
+        for kind in ('atomic', 'string', 'procedure'):
+            db = self.clone('r3_' + kind, clean)
+            self.sql('create schema c3c2a_later_guard', db)
+            if kind == 'atomic':
+                fixture = "create function c3c2a_later_guard.atomic_caller() returns boolean language sql begin atomic select public.runtime_revoke_every8d_settings_session_v1(decode(repeat('00',32),'hex')); end"
+                caller = 'c3c2a_later_guard.atomic_caller()'
+            elif kind == 'string':
+                fixture = "create function c3c2a_later_guard.string_body_caller() returns boolean language sql as $body$ select public.runtime_revoke_every8d_settings_session_v1(decode(repeat('00',32),'hex')) $body$"
+                caller = 'c3c2a_later_guard.string_body_caller()'
+            else:
+                fixture = "create procedure c3c2a_later_guard.dynamic_caller() language plpgsql as $body$ begin execute 'select public.RUNTIME_REVOKE_EVERY8D_SETTINGS_SESSION_V1(decode(repeat(''00'',32),''hex''))'; end; $body$"
+                caller = 'c3c2a_later_guard.dynamic_caller()'
+            self.sql(fixture, db)
+            dependency = "select exists(select 1 from pg_depend where classid='pg_proc'::regclass and objid=" + quote(caller) + "::regprocedure and refclassid='pg_proc'::regclass and refobjid='public.runtime_revoke_every8d_settings_session_v1(bytea)'::regprocedure)"
+            if self.sql(dependency, db) != ('t' if kind == 'atomic' else 'f'):
+                raise Failure('R3 catalog dependency fixture not established: ' + kind)
+            before = self.maintenance_state(db)
+            message = 'C3c-2a rollback refused: unexpected dependency' if kind == 'atomic' else 'C3c-2a rollback refused: later routine body reference'
+            self.sql(ROLLBACK.read_bytes().decode('utf-8'), db, OWNER, error='55000', error_message=message, label='R3 ' + kind)
+            self.target_count(9, db)
+            if self.maintenance_state(db) != before:
+                raise Failure('R3 refusal dropped/repaired caller/targets or changed data')
+            print('PASS R3 ' + kind + ': ' + caller + '; pg_depend=' + str(kind == 'atomic')
+                  + '; exact refusal; nine targets/caller/ACL/data retained', flush=True)
+
     def prerequisite_owners(self):
         signature = 'public.apply_every8d_ghl_marketplace_lifecycle_v2(text,text,text,uuid,text,text,text,text,timestamptz,text)'
         parent_state = """select md5(jsonb_build_array(
@@ -221,7 +344,7 @@ class Harness:
             # Disposable negative fixture only; the migration never repairs ownership.
             self.sql(f'alter function {signature} owner to {role}', db)
             before, boundary, parents = self.snapshot(db), self.boundary(db), self.sql(parent_state, db)
-            self.sql(MIGRATION.read_text(encoding='utf-8'), db, OWNER, error='42501', label='lifecycle owner ' + role)
+            self.sql(MIGRATION.read_bytes().decode('utf-8'), db, OWNER, error='42501', label='lifecycle owner ' + role)
             self.target_count(0, db)
             if (self.snapshot(db), self.boundary(db), self.sql(parent_state, db)) != (before, boundary, parents):
                 raise Failure('owner refusal changed prerequisite authority: ' + role)
@@ -570,7 +693,7 @@ class Harness:
         self.install(empty)
         if self.snapshot(empty) != before or self.boundary(empty) != boundary:
             raise Failure('migration changed prior schema/privileges or created data')
-        self.sql(ROLLBACK.read_text(encoding='utf-8'), empty, OWNER, label='empty pre-use rollback')
+        self.sql(ROLLBACK.read_bytes().decode('utf-8'), empty, OWNER, label='empty pre-use rollback')
         self.target_count(0, empty)
         if self.boundary(empty) != boundary:
             raise Failure('empty rollback changed prior authority or privileges')
@@ -580,7 +703,7 @@ class Harness:
             'rollback retains C3a/C3b/lifecycle authority', empty)
         self.install(empty)  # Reapply rechecks every frozen prerequisite manifest.
         print('PASS separate clean database: apply, empty rollback, exact nine removed, reapply', flush=True)
-        fixtures = PROOF.read_text(encoding='utf-8').split('\\if :{?fixtures_only}')[0] + '\ncommit;'
+        fixtures = PROOF.read_bytes().decode('utf-8').split('\\if :{?fixtures_only}')[0] + '\ncommit;'
         self.sql(fixtures, empty)
         cases = {
             'definition': "alter function public.runtime_revoke_every8d_settings_session_v1(bytea) cost 42",
@@ -599,7 +722,7 @@ class Harness:
             if label == 'owner':
                 function_catalog = "select md5(jsonb_agg(to_jsonb(p) order by p.oid)::text) from pg_proc p where p.pronamespace='public'::regnamespace"
                 authority_before = self.boundary(db), self.sql(function_catalog, db)
-            self.sql(ROLLBACK.read_text(encoding='utf-8'), db, OWNER,
+            self.sql(ROLLBACK.read_bytes().decode('utf-8'), db, OWNER,
                      error='42501' if label == 'owner' else '55000', label='rollback refuses ' + label,
                      error_message='C3c-2a prior settings authority owner mismatch' if label == 'owner' else None)
             if self.snapshot(db) != before:
@@ -657,7 +780,7 @@ class Harness:
                 conflict_before = self.boundary(db), self.sql(conflict_catalog, db)
             before = self.snapshot(db)
             expected = '42501' if label in ('table_acl', 'schema', 'prior_owner') else ('42723' if label == 'target_conflict' else '55000')
-            self.sql(MIGRATION.read_text(encoding='utf-8'), db, OWNER, error=expected, label='preflight ' + label,
+            self.sql(MIGRATION.read_bytes().decode('utf-8'), db, OWNER, error=expected, label='preflight ' + label,
                      error_message='C3c-2a target function conflict' if label == 'target_conflict' else None)
             if self.snapshot(db) != before:
                 raise Failure('preflight refusal changed data: ' + label)
@@ -678,7 +801,7 @@ class Harness:
             holder.ready()
             before = self.snapshot()
             # Explicitly expected maintenance refusal, never a runtime domain result.
-            self.sql(ROLLBACK.read_text(encoding='utf-8'), role=OWNER, error='55P03', label='expected maintenance lock refusal')
+            self.sql(ROLLBACK.read_bytes().decode('utf-8'), role=OWNER, error='55P03', label='expected maintenance lock refusal')
             holder.finish()
             if self.snapshot() != before:
                 raise Failure('maintenance refusal mutated data')
@@ -770,6 +893,7 @@ def main():
     parser.add_argument('--container', default=os.environ.get('POSTGRES_CONTAINER_ID'))
     parser.add_argument('--native-psql', default=os.environ.get('C3C2A_NATIVE_PSQL'))
     parser.add_argument('--native-port', type=int, default=55432)
+    parser.add_argument('--focused-maintenance', action='store_true')
     args = parser.parse_args()
     if not args.container and not args.native_psql:
         parser.error('disposable container or native loopback runtime required')
@@ -778,6 +902,9 @@ def main():
     harness = Harness(args)
     try:
         harness.check("select current_setting('server_version_num')::integer/10000=17", 'PostgreSQL 17 required')
+        harness.maintenance_guards()
+        if args.focused_maintenance:
+            return
         harness.prerequisite_owners()
         harness.creator_login()
         harness.consume_races()
