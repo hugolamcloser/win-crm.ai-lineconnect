@@ -32,6 +32,8 @@ export type Every8dSettingsAuthHmacConfig = {
 
 export type Every8dSettingsAuthConfig = {
   readonly enabled: boolean;
+  readonly httpEnabled: boolean;
+  readonly emailDispatchEnabled: boolean;
   readonly emailPseudonymHmac: Every8dSettingsAuthHmacConfig | null;
   readonly otpHmac: Every8dSettingsAuthHmacConfig | null;
 };
@@ -240,13 +242,17 @@ export function readEvery8dSettingsAuthConfig(
   source: NodeJS.ProcessEnv = process.env
 ): Every8dSettingsAuthConfig {
   const enabled = parseFeatureFlag(source.EVERY8D_SETTINGS_AUTH_CHALLENGES_ENABLED);
+  const httpEnabled = parseFeatureFlag(source.EVERY8D_SETTINGS_AUTH_HTTP_ENABLED);
+  const emailDispatchEnabled = parseFeatureFlag(source.EVERY8D_SETTINGS_AUTH_EMAIL_DISPATCH_ENABLED);
   const suppliedCount = hmacEnvironmentNames.filter((name) =>
     hasOwnEnvironmentProperty(source, name)
   ).length;
 
   if (suppliedCount === 0) {
     if (enabled) invalidConfig("incomplete_hmac_configuration");
-    return Object.freeze({ enabled: false, emailPseudonymHmac: null, otpHmac: null });
+    return Object.freeze({
+      enabled: false, httpEnabled, emailDispatchEnabled, emailPseudonymHmac: null, otpHmac: null
+    });
   }
   if (suppliedCount !== hmacEnvironmentNames.length) {
     return invalidConfig("incomplete_hmac_configuration");
@@ -261,5 +267,5 @@ export function readEvery8dSettingsAuthConfig(
     source.EVERY8D_SETTINGS_OTP_HMAC_KEYS
   );
 
-  return Object.freeze({ enabled, emailPseudonymHmac, otpHmac });
+  return Object.freeze({ enabled, httpEnabled, emailDispatchEnabled, emailPseudonymHmac, otpHmac });
 }

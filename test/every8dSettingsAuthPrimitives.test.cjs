@@ -69,7 +69,7 @@ test("feature flag rejects uppercase and whitespace variants", () => {
 
 test("disabled mode accepts no HMAC variables", () => {
   const config = readEvery8dSettingsAuthConfig({});
-  assert.deepEqual(config, { enabled: false, emailPseudonymHmac: null, otpHmac: null });
+  assert.deepEqual(config, { enabled: false, httpEnabled: false, emailDispatchEnabled: false, emailPseudonymHmac: null, otpHmac: null });
 });
 
 test("disabled mode validates a complete HMAC configuration without enabling", () => {
