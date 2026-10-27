@@ -1,0 +1,6 @@
+# Preserve frozen artifact bytes and literal PostgreSQL function-source evidence.
+docs/every8d-c3c3-email-outbox-contract.md -text
+supabase/migrations/202610230001_every8d_settings_auth_email_outbox.sql -text
+supabase/rollback/202610230001_every8d_settings_auth_email_outbox.sql -text
+test/postgres/every8dSettingsEmailOutbox* -text
+test/fixtures/every8dSettingsEmailOutboxAad.json -text

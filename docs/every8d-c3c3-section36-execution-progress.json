@@ -1,0 +1,365 @@
+{
+  "phase": "STOP_ON_ACTUAL_DIRECT_OWNER_GUARD_DEFECT",
+  "current_cycle_unique_scenarios": 19,
+  "current_cycle_passing_scenarios": 18,
+  "current_cycle_failed_scenarios": 1,
+  "current_cycle_independent_session_races": 4,
+  "unexpected_deadlocks": 0,
+  "unexpected_timeouts": 0,
+  "expected_maintenance_lock_timeouts": 2,
+  "full_updated_clean_run_performed": false,
+  "all_resources_removed": true,
+  "events": [
+    {
+      "scenario_id": "maintenance.apply_timeout",
+      "obligations": [
+        "S36-104",
+        "S36-105"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: maintenance.apply_timeout",
+      "final_authority_assertions": [
+        "independent physical sessions",
+        "exact relation/lock wait observed",
+        "real frozen 5s lock_timeout returns 55P03",
+        "zero partial CREATE/DROP/GRANT/REVOKE/guard/row mutation",
+        "subsequent clean apply/postflight/rollback works",
+        "exact prerequisite baseline restored"
+      ]
+    },
+    {
+      "scenario_id": "maintenance.rollback_timeout",
+      "obligations": [
+        "S36-104",
+        "S36-105"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: maintenance.rollback_timeout",
+      "final_authority_assertions": [
+        "independent physical sessions",
+        "exact relation/lock wait observed",
+        "real frozen 5s lock_timeout returns 55P03",
+        "zero partial CREATE/DROP/GRANT/REVOKE/guard/row mutation",
+        "subsequent clean apply/postflight/rollback works",
+        "exact prerequisite baseline restored"
+      ]
+    },
+    {
+      "scenario_id": "sequence.concurrent_and_fresh_generation",
+      "obligations": [
+        "S36-019",
+        "S36-020",
+        "S36-023",
+        "S36-082"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.concurrent_and_fresh_generation",
+      "final_authority_assertions": [
+        "two real concurrent open allocating transactions",
+        "distinct increasing committed fences 1/2",
+        "real claims allocate 3/4",
+        "fresh lease UUID",
+        "stale UUID-only/fence-only/prior tuple rejected without mutation"
+      ]
+    },
+    {
+      "scenario_id": "sequence.aborted_gap",
+      "obligations": [
+        "S36-083"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.aborted_gap",
+      "final_authority_assertions": [
+        "real enqueue transaction allocated fence then rolled back",
+        "outbox remained empty after abort",
+        "subsequent supported enqueue uses next fence",
+        "no reset or guard mutation"
+      ]
+    },
+    {
+      "scenario_id": "sequence.tamper_properties",
+      "obligations": [
+        "S36-085",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_properties",
+      "final_authority_assertions": [
+        "real administrative tamper",
+        "metadata postflight refusal for definition/owner/ACL drift; direct state drift assertion for values",
+        "rollback exact refusal",
+        "tampered catalog/ACL/sequence state remains unchanged",
+        "no partial drop/revoke/repair"
+      ]
+    },
+    {
+      "scenario_id": "sequence.tamper_owner",
+      "obligations": [
+        "S36-085",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_owner",
+      "final_authority_assertions": [
+        "real administrative tamper",
+        "metadata postflight refusal for definition/owner/ACL drift; direct state drift assertion for values",
+        "rollback exact refusal",
+        "tampered catalog/ACL/sequence state remains unchanged",
+        "no partial drop/revoke/repair"
+      ]
+    },
+    {
+      "scenario_id": "sequence.tamper_acl",
+      "obligations": [
+        "S36-085",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_acl",
+      "final_authority_assertions": [
+        "real administrative tamper",
+        "metadata postflight refusal for definition/owner/ACL drift; direct state drift assertion for values",
+        "rollback exact refusal",
+        "tampered catalog/ACL/sequence state remains unchanged",
+        "no partial drop/revoke/repair"
+      ]
+    },
+    {
+      "scenario_id": "sequence.tamper_state",
+      "obligations": [
+        "S36-085",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_state",
+      "final_authority_assertions": [
+        "real administrative tamper",
+        "metadata postflight refusal for definition/owner/ACL drift; direct state drift assertion for values",
+        "rollback exact refusal",
+        "tampered catalog/ACL/sequence state remains unchanged",
+        "no partial drop/revoke/repair"
+      ]
+    },
+    {
+      "scenario_id": "fingerprint.constraint",
+      "obligations": [
+        "S36-096",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.constraint",
+      "final_authority_assertions": [
+        "actual disposable catalog/body tamper observable",
+        "real full postflight rejects",
+        "real guarded rollback rejects",
+        "no partial DDL/ACL/row/guard/sequence change",
+        "no repair"
+      ]
+    },
+    {
+      "scenario_id": "fingerprint.owner",
+      "obligations": [
+        "S36-096",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.owner",
+      "final_authority_assertions": [
+        "actual disposable catalog/body tamper observable",
+        "real full postflight rejects",
+        "real guarded rollback rejects",
+        "no partial DDL/ACL/row/guard/sequence change",
+        "no repair"
+      ]
+    },
+    {
+      "scenario_id": "fingerprint.acl",
+      "obligations": [
+        "S36-096",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.acl",
+      "final_authority_assertions": [
+        "actual disposable catalog/body tamper observable",
+        "real full postflight rejects",
+        "real guarded rollback rejects",
+        "no partial DDL/ACL/row/guard/sequence change",
+        "no repair"
+      ]
+    },
+    {
+      "scenario_id": "fingerprint.body",
+      "obligations": [
+        "S36-096",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.body",
+      "final_authority_assertions": [
+        "actual disposable catalog/body tamper observable",
+        "real full postflight rejects",
+        "real guarded rollback rejects",
+        "no partial DDL/ACL/row/guard/sequence change",
+        "no repair"
+      ]
+    },
+    {
+      "scenario_id": "claim.deadline",
+      "obligations": [
+        "S36-015"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.deadline",
+      "final_authority_assertions": [
+        "real claim returns zero with unchanged row",
+        "separate recovery produces truthful never-sent terminal state",
+        "atomic envelope/lease/availability scrub",
+        "no attempt/recorder invention"
+      ]
+    },
+    {
+      "scenario_id": "claim.unusable",
+      "obligations": [
+        "S36-015"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.unusable",
+      "final_authority_assertions": [
+        "real claim returns zero with unchanged row",
+        "separate recovery produces truthful never-sent terminal state",
+        "atomic envelope/lease/availability scrub",
+        "no attempt/recorder invention"
+      ]
+    },
+    {
+      "scenario_id": "claim.batch_order",
+      "obligations": [
+        "S36-016"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.batch_order",
+      "final_authority_assertions": [
+        "invalid bounds refused atomically",
+        "three equal-availability real jobs",
+        "exact secondary UUID order",
+        "only bounded two then remaining one",
+        "fresh distinct leases; counts unchanged"
+      ]
+    },
+    {
+      "scenario_id": "claim.bounded_skip",
+      "obligations": [
+        "S36-016",
+        "S36-017",
+        "S36-018"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.bounded_skip",
+      "final_authority_assertions": [
+        "two physical sessions; actual row lock",
+        "bounded prefix skips held first without refill",
+        "no mutation of held/ineligible candidate",
+        "post-release remaining jobs claimed in order"
+      ]
+    },
+    {
+      "scenario_id": "direct_owner.sending_sender_unavailable",
+      "status": "FAIL",
+      "executed": true,
+      "obligations": [
+        "S36-048",
+        "S36-077"
+      ],
+      "supported_rpc_refused": true,
+      "guards_enabled": true,
+      "trigger_or_constraint_disabled": false,
+      "owner_operation_context": "finalize",
+      "source_state": "SENDING",
+      "source_attempt_count": 1,
+      "actual_state": "FAILED_TERMINAL",
+      "actual_attempt_count": 1,
+      "actual_terminal_disposition": "sender_unavailable_pre_send",
+      "actual_resolution_kind": "pre_send",
+      "forbidden_update_committed": true,
+      "lease_cleared": true,
+      "payload_scrubbed": true
+    },
+    {
+      "scenario_id": "rollback.used_but_purged",
+      "obligations": [
+        "S36-100"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: rollback.used_but_purged",
+      "final_authority_assertions": [
+        "real enqueue/claim/begin/finalize/purge",
+        "retention respected by existing full-timeline fixture",
+        "empty outbox still used sequence",
+        "exact pre-use refusal",
+        "complete authority snapshot unchanged"
+      ]
+    },
+    {
+      "scenario_id": "rollback.populated",
+      "status": "PASS",
+      "executed": true,
+      "obligations": [
+        "S36-099"
+      ],
+      "recorded_from": "Actual Codex execution transcript, populated slice session 93644; stdout COVERAGE_PASS rollback.populated S36-099",
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: populated",
+      "final_authority_assertions": [
+        "supported enqueue populated outbox",
+        "exact pre-use rollback refusal",
+        "row retained; complete catalog/ACL/prerequisite/guard/sequence snapshot unchanged"
+      ]
+    },
+    {
+      "scenario_id": "sender_unavailable.rpc_sending_control",
+      "status": "PASS",
+      "executed": true,
+      "obligations": [
+        "S36-048"
+      ],
+      "recorded_from": "Control assertion inside failed direct_owner.sending_sender_unavailable proof",
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: direct_owner_sender",
+      "final_authority_assertions": [
+        "legitimate SENDING/count 1",
+        "supported finalize sender-unavailable returns zero",
+        "complete source row unchanged before owner-negative probe"
+      ]
+    },
+    {
+      "scenario_id": "prior66.retries",
+      "status": "PASS",
+      "executed": true,
+      "preserved_only": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: retries",
+      "final_authority_assertions": [
+        "old retry finalization returns zero after fresh claim",
+        "exact retry arithmetic, attempt bounds and scrub"
+      ],
+      "evidence_location": "Prior fresh 66/25 execution, c3c3-section36-full.log"
+    }
+  ],
+  "historical": true,
+  "superseded_by": "docs/every8d-c3c3-section36-coverage-final.json"
+}

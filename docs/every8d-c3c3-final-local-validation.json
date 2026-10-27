@@ -1,0 +1,53 @@
+{
+  "node": "v24.14.0",
+  "section36_pass": 107,
+  "results": [
+    {
+      "check": "build_for_focused_proofs",
+      "status": "PASS",
+      "exit_code": 0
+    },
+    {
+      "check": "focused_c3c3_application",
+      "status": "PASS",
+      "exit_code": 0,
+      "tests": 564,
+      "pass": 564,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    {
+      "check": "typecheck",
+      "status": "PASS",
+      "exit_code": 0
+    },
+    {
+      "check": "npm_test",
+      "status": "PASS",
+      "exit_code": 0,
+      "tests": 1525,
+      "pass": 1525,
+      "fail": 0,
+      "cancelled": 0,
+      "skipped": 0,
+      "todo": 0
+    },
+    {
+      "check": "build",
+      "status": "PASS",
+      "exit_code": 0
+    }
+  ],
+  "sql_typescript_aad": {
+    "sql_vectors": 2,
+    "typescript_vectors": 2,
+    "direct_byte_equalities": 2,
+    "status": "PASS",
+    "helper_remaining": 0,
+    "sequence_allocated": false,
+    "remaining_clients": 0,
+    "container_removed": true
+  }
+}

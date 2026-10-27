@@ -1,3 +1,5 @@
+import { readEvery8dSettingsEmailOutboxEncryptionConfig } from "./every8dSettingsEmailOutbox";
+import type { Every8dSettingsEmailOutboxEncryptionConfig } from "./every8dSettingsEmailOutbox";
 import { isEvery8dSettingsAuthKeyVersion } from "../utils/every8dSettingsAuthKeyVersion";
 
 export const every8dSettingsAuthConfigurationErrorMessage =
@@ -36,6 +38,7 @@ export type Every8dSettingsAuthConfig = {
   readonly emailDispatchEnabled: boolean;
   readonly emailPseudonymHmac: Every8dSettingsAuthHmacConfig | null;
   readonly otpHmac: Every8dSettingsAuthHmacConfig | null;
+  readonly emailOutboxEncryption?: Every8dSettingsEmailOutboxEncryptionConfig;
 };
 
 const encodedKeyPattern = /^[A-Za-z0-9_-]{43}$/;
@@ -250,8 +253,10 @@ export function readEvery8dSettingsAuthConfig(
 
   if (suppliedCount === 0) {
     if (enabled) invalidConfig("incomplete_hmac_configuration");
+    const encryption = readOutboxEncryption(source, []);
     return Object.freeze({
-      enabled: false, httpEnabled, emailDispatchEnabled, emailPseudonymHmac: null, otpHmac: null
+      enabled: false, httpEnabled, emailDispatchEnabled, emailPseudonymHmac: null, otpHmac: null,
+      ...(encryption ? { emailOutboxEncryption: encryption } : {})
     });
   }
   if (suppliedCount !== hmacEnvironmentNames.length) {
@@ -267,5 +272,14 @@ export function readEvery8dSettingsAuthConfig(
     source.EVERY8D_SETTINGS_OTP_HMAC_KEYS
   );
 
-  return Object.freeze({ enabled, httpEnabled, emailDispatchEnabled, emailPseudonymHmac, otpHmac });
+  const encryption = readOutboxEncryption(source, [emailPseudonymHmac, otpHmac]);
+  return Object.freeze({ enabled, httpEnabled, emailDispatchEnabled, emailPseudonymHmac, otpHmac,
+    ...(encryption ? { emailOutboxEncryption: encryption } : {}) });
+}
+
+function readOutboxEncryption(
+  source: NodeJS.ProcessEnv, hmacDomains: readonly (Every8dSettingsAuthHmacConfig | null)[]
+): Every8dSettingsEmailOutboxEncryptionConfig | null {
+  try { return readEvery8dSettingsEmailOutboxEncryptionConfig(source, hmacDomains); }
+  catch { return invalidConfig("invalid_keyring"); }
 }

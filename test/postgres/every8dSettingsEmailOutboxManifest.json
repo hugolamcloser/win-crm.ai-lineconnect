@@ -1,0 +1,25 @@
+{
+  "functions": {
+    "begin_every8d_settings_auth_email_send_core_v1(uuid,uuid,bigint)": "e9a7076daab955c850cf9bc76684a0e7",
+    "claim_every8d_settings_auth_email_core_v1(integer)": "dcbb3f0998e661a39939b7cd08c280dd",
+    "enqueue_every8d_settings_auth_email_core_v1(uuid,uuid,bytea,text,smallint,smallint,smallint,text,bytea,bytea,bytea)": "4bed6d8eb9bc8970580b1c1ca74d14e4",
+    "every8d_settings_auth_email_aad_v1(uuid,uuid,bytea,text,smallint,smallint,smallint,text)": "2d304f40ad341c56a5293413d0082714",
+    "finalize_every8d_settings_auth_email_core_v1(uuid,uuid,bigint,smallint,text,text,boolean,text)": "1f9e21a914860e043616a7e0dbd8455d",
+    "protect_every8d_settings_auth_email_outbox_guard_v1()": "a59b3ea30158360cc32582202fee6dd2",
+    "protect_every8d_settings_auth_email_outbox_v1()": "748d827b62aeab8dd2eb867544a2eb84",
+    "purge_every8d_settings_auth_email_core_v1(integer)": "b4322c026a88fa0332b6ee157268e0e6",
+    "recover_every8d_settings_auth_email_core_v1(integer)": "7671507688f703bb0cf0febaf98e2049",
+    "runtime_begin_every8d_settings_auth_email_send_v1(uuid,uuid,bigint)": "80110ff167bc0d14e8931cac3490c05d",
+    "runtime_claim_every8d_settings_auth_email_v1(integer)": "0e846c855f5a1be1ebd930643a612df2",
+    "runtime_enqueue_every8d_settings_auth_email_v1(uuid,uuid,bytea,text,smallint,smallint,smallint,text,bytea,bytea,bytea)": "7cbd9772a31c3e2ee57b8eedc590fd71",
+    "runtime_finalize_every8d_settings_auth_email_v1(uuid,uuid,bigint,smallint,text,text,boolean,text)": "87f569eaa6963a23ac843fe61059d757",
+    "runtime_purge_every8d_settings_auth_email_v1(integer)": "f4c2a3df839d212a5f8420c9ee02b64f",
+    "runtime_recover_every8d_settings_auth_email_v1(integer)": "42cdea65696409b32dba396039cdfb1b"
+  },
+  "relations": {
+    "every8d_settings_auth_challenges": "8f5cf5a11741535af40d0654728d0760",
+    "every8d_settings_auth_email_outbox": "c397c27fecf869b9507a868f5cc25fbe",
+    "every8d_settings_auth_email_outbox_installation_guard": "3fffc07cca6af241d10b17e509e04e2b"
+  },
+  "source": "Exact draft SQL in disposable postgres:17-bookworm PostgreSQL 17.11; metadata only"
+}
