@@ -1,0 +1,1972 @@
+{
+  "source_contract_sha256": "c3ff909bc66fb19398694cb16cc1ad07505e68c2603e73e780c67eaa83c0aeba",
+  "source_section": 36,
+  "derivation": "Every frozen matrix row, split at every semicolon; compound obligations require all subcases",
+  "phase": "STOP_ON_ACTUAL_DIRECT_OWNER_GUARD_DEFECT",
+  "closure_certificate_produced": false,
+  "SECTION36_TOTAL_OBLIGATIONS": 107,
+  "SECTION36_PASS": 57,
+  "SECTION36_MISSING": 3,
+  "SECTION36_PARTIAL": 47,
+  "initial_reconciliation": {
+    "pass": 44,
+    "missing": 9,
+    "partial": 54
+  },
+  "newly_completed_obligations": 13,
+  "actual_counterexamples": 1,
+  "latest_complete_preserved_pg17": {
+    "scenarios": 66,
+    "races": 25
+  },
+  "current_cycle_execution": {
+    "scenarios": 19,
+    "pass": 18,
+    "fail": 1,
+    "races": 4
+  },
+  "obligations": [
+    {
+      "id": "S36-001",
+      "area": "Enqueue",
+      "exact_frozen_obligation": "Uniqueness",
+      "scenario_ids": [
+        "prior66.basic/races/purge"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/purge",
+      "executed": true,
+      "expected_authority_outcome": "Uniqueness; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-002",
+      "area": "Enqueue",
+      "exact_frozen_obligation": "exact duplicate",
+      "scenario_ids": [
+        "prior66.basic"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/purge",
+      "executed": true,
+      "expected_authority_outcome": "exact duplicate; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-003",
+      "area": "Enqueue",
+      "exact_frozen_obligation": "concurrent duplicate",
+      "scenario_ids": [
+        "prior66.basic/races/purge"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/purge",
+      "executed": true,
+      "expected_authority_outcome": "concurrent duplicate; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-004",
+      "area": "Enqueue",
+      "exact_frozen_obligation": "conflicts",
+      "scenario_ids": [
+        "prior66.basic/races/purge"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/purge",
+      "executed": true,
+      "expected_authority_outcome": "conflicts; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-005",
+      "area": "Enqueue",
+      "exact_frozen_obligation": "enqueue vs supersession",
+      "scenario_ids": [
+        "prior66.basic/races/purge"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/purge",
+      "executed": true,
+      "expected_authority_outcome": "enqueue vs supersession; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-006",
+      "area": "Enqueue",
+      "exact_frozen_obligation": "enqueue vs cleanup",
+      "scenario_ids": [
+        "prior66.enqueue_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.enqueue_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "enqueue vs cleanup; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-007",
+      "area": "Enqueue",
+      "exact_frozen_obligation": "terminal-scrub duplicate",
+      "scenario_ids": [
+        "prior66.basic/races/purge"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/purge",
+      "executed": true,
+      "expected_authority_outcome": "terminal-scrub duplicate; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-008",
+      "area": "Enqueue",
+      "exact_frozen_obligation": "post-purge duplicate/new enqueue refusal",
+      "scenario_ids": [
+        "prior66.purge"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/purge",
+      "executed": true,
+      "expected_authority_outcome": "post-purge duplicate/new enqueue refusal; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-009",
+      "area": "Orphan",
+      "exact_frozen_obligation": "Challenge-only commit",
+      "scenario_ids": [
+        "prior66.new/enqueue_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: new/enqueue_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "Challenge-only commit; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-010",
+      "area": "Orphan",
+      "exact_frozen_obligation": "no reconstruction/send",
+      "scenario_ids": [
+        "prior66.new/enqueue_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: new/enqueue_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "no reconstruction/send; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-011",
+      "area": "Orphan",
+      "exact_frozen_obligation": "explicit supersession under existing limits",
+      "scenario_ids": [
+        "prior66.new/enqueue_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: new/enqueue_cleanup",
+      "executed": false,
+      "expected_authority_outcome": "explicit supersession under existing limits; required final authority state asserted without protected output",
+      "status": "MISSING",
+      "evidence_location": null,
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-012",
+      "area": "Claim",
+      "exact_frozen_obligation": "PENDING",
+      "scenario_ids": [
+        "prior66.basic"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries/races",
+      "executed": true,
+      "expected_authority_outcome": "PENDING; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-013",
+      "area": "Claim",
+      "exact_frozen_obligation": "due retry",
+      "scenario_ids": [
+        "prior66.retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries/races",
+      "executed": true,
+      "expected_authority_outcome": "due retry; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-014",
+      "area": "Claim",
+      "exact_frozen_obligation": "non-due retry",
+      "scenario_ids": [
+        "prior66.retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries/races",
+      "executed": true,
+      "expected_authority_outcome": "non-due retry; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-015",
+      "area": "Claim",
+      "exact_frozen_obligation": "unusable/deadline refusal",
+      "scenario_ids": [
+        "claim.deadline",
+        "claim.unusable"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries/races",
+      "executed": true,
+      "expected_authority_outcome": "unusable/deadline refusal; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "claim.deadline",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "claim.unusable",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.deadline",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.unusable"
+      ]
+    },
+    {
+      "id": "S36-016",
+      "area": "Claim",
+      "exact_frozen_obligation": "batch bounds/order",
+      "scenario_ids": [
+        "prior66.basic/retries/races"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries/races",
+      "executed": true,
+      "expected_authority_outcome": "batch bounds/order; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "New multi-row order and bounded-prefix proofs PASS; valid maximum batch-size 10 is still unexecuted before stop",
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "claim.batch_order",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "claim.bounded_skip",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.batch_order",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.bounded_skip"
+      ]
+    },
+    {
+      "id": "S36-017",
+      "area": "Claim",
+      "exact_frozen_obligation": "SKIP LOCKED",
+      "scenario_ids": [
+        "prior66.races"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries/races",
+      "executed": true,
+      "expected_authority_outcome": "SKIP LOCKED; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "claim.bounded_skip",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.bounded_skip"
+      ]
+    },
+    {
+      "id": "S36-018",
+      "area": "Claim",
+      "exact_frozen_obligation": "concurrent claims",
+      "scenario_ids": [
+        "prior66.races"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries/races",
+      "executed": true,
+      "expected_authority_outcome": "concurrent claims; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "claim.bounded_skip",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.bounded_skip"
+      ]
+    },
+    {
+      "id": "S36-019",
+      "area": "Lease/fence",
+      "exact_frozen_obligation": "Fresh UUID/generation",
+      "scenario_ids": [
+        "sequence.concurrent_and_fresh_generation"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries",
+      "executed": true,
+      "expected_authority_outcome": "Fresh UUID/generation; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "sequence.concurrent_and_fresh_generation",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.concurrent_and_fresh_generation"
+      ]
+    },
+    {
+      "id": "S36-020",
+      "area": "Lease/fence",
+      "exact_frozen_obligation": "stale UUID/fence",
+      "scenario_ids": [
+        "sequence.concurrent_and_fresh_generation"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries",
+      "executed": true,
+      "expected_authority_outcome": "stale UUID/fence; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "sequence.concurrent_and_fresh_generation",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.concurrent_and_fresh_generation"
+      ]
+    },
+    {
+      "id": "S36-021",
+      "area": "Lease/fence",
+      "exact_frozen_obligation": "claim vs stale finalization",
+      "scenario_ids": [
+        "prior66.basic/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries",
+      "executed": true,
+      "expected_authority_outcome": "claim vs stale finalization; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-022",
+      "area": "Lease/fence",
+      "exact_frozen_obligation": "expired authority",
+      "scenario_ids": [
+        "prior66.basic/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries",
+      "executed": true,
+      "expected_authority_outcome": "expired authority; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-023",
+      "area": "Lease/fence",
+      "exact_frozen_obligation": "no prior-generation authorization",
+      "scenario_ids": [
+        "sequence.concurrent_and_fresh_generation",
+        "prior66.retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/retries",
+      "executed": true,
+      "expected_authority_outcome": "no prior-generation authorization; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "sequence.concurrent_and_fresh_generation",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.concurrent_and_fresh_generation"
+      ]
+    },
+    {
+      "id": "S36-024",
+      "area": "Begin",
+      "exact_frozen_obligation": "One increment",
+      "scenario_ids": [
+        "prior66.basic"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "One increment; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-025",
+      "area": "Begin",
+      "exact_frozen_obligation": "duplicate begin",
+      "scenario_ids": [
+        "prior66.basic"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "duplicate begin; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-026",
+      "area": "Begin",
+      "exact_frozen_obligation": "concurrent begin",
+      "scenario_ids": [
+        "prior66.races"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "concurrent begin; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-027",
+      "area": "Begin",
+      "exact_frozen_obligation": "begin vs lifecycle",
+      "scenario_ids": [
+        "prior66.races"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "begin vs lifecycle; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-028",
+      "area": "Begin",
+      "exact_frozen_obligation": "begin vs expiry",
+      "scenario_ids": [
+        "prior66.begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "begin vs expiry; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-029",
+      "area": "Begin",
+      "exact_frozen_obligation": "begin vs recovery",
+      "scenario_ids": [
+        "prior66.begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "begin vs recovery; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-030",
+      "area": "Begin",
+      "exact_frozen_obligation": "ambiguous acknowledgement",
+      "scenario_ids": [
+        "prior66.basic/races/begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/begin_recovery",
+      "executed": false,
+      "expected_authority_outcome": "ambiguous acknowledgement; required final authority state asserted without protected output",
+      "status": "MISSING",
+      "evidence_location": null,
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-031",
+      "area": "Begin",
+      "exact_frozen_obligation": "acknowledgement arriving after provider deadline",
+      "scenario_ids": [
+        "prior66.basic/races/begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/races/begin_recovery",
+      "executed": false,
+      "expected_authority_outcome": "acknowledgement arriving after provider deadline; required final authority state asserted without protected output",
+      "status": "MISSING",
+      "evidence_location": null,
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-032",
+      "area": "Accepted/rejected/unknown",
+      "exact_frozen_obligation": "Exact admission, state, recorder mapping, receipt and atomic scrub",
+      "scenario_ids": [
+        "prior66.outcomes"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "Exact admission, state, recorder mapping, receipt and atomic scrub; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-033",
+      "area": "Retry 1/2",
+      "exact_frozen_obligation": "Exact 5s/20s arithmetic",
+      "scenario_ids": [
+        "prior66.retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: retries",
+      "executed": true,
+      "expected_authority_outcome": "Exact 5s/20s arithmetic; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-034",
+      "area": "Retry 1/2",
+      "exact_frozen_obligation": "due equality",
+      "scenario_ids": [
+        "prior66.retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: retries",
+      "executed": true,
+      "expected_authority_outcome": "due equality; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-035",
+      "area": "Retry 1/2",
+      "exact_frozen_obligation": "fresh claim/begin",
+      "scenario_ids": [
+        "prior66.retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: retries",
+      "executed": true,
+      "expected_authority_outcome": "fresh claim/begin; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-036",
+      "area": "Retry 1/2",
+      "exact_frozen_obligation": "no recorder/scrub/intermediate attempt increment",
+      "scenario_ids": [
+        "prior66.retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: retries",
+      "executed": true,
+      "expected_authority_outcome": "no recorder/scrub/intermediate attempt increment; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-037",
+      "area": "Retry 3",
+      "exact_frozen_obligation": "Budget exhaustion",
+      "scenario_ids": [
+        "prior66.retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: retries",
+      "executed": true,
+      "expected_authority_outcome": "Budget exhaustion; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-038",
+      "area": "Retry 3",
+      "exact_frozen_obligation": "no fourth send",
+      "scenario_ids": [
+        "prior66.retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: retries",
+      "executed": true,
+      "expected_authority_outcome": "no fourth send; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-039",
+      "area": "Retry 3",
+      "exact_frozen_obligation": "no fabricated challenge class",
+      "scenario_ids": [
+        "prior66.retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: retries",
+      "executed": true,
+      "expected_authority_outcome": "no fabricated challenge class; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-040",
+      "area": "Deadline/unusable",
+      "exact_frozen_obligation": "Correct disposition precedence",
+      "scenario_ids": [
+        "prior66.loss_and_recovery/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery/retries",
+      "executed": true,
+      "expected_authority_outcome": "Correct disposition precedence; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-041",
+      "area": "Deadline/unusable",
+      "exact_frozen_obligation": "strict full-window equality refusal",
+      "scenario_ids": [
+        "prior66.loss_and_recovery/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery/retries",
+      "executed": true,
+      "expected_authority_outcome": "strict full-window equality refusal; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-042",
+      "area": "Deadline/unusable",
+      "exact_frozen_obligation": "scrub",
+      "scenario_ids": [
+        "prior66.loss_and_recovery/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery/retries",
+      "executed": true,
+      "expected_authority_outcome": "scrub; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-043",
+      "area": "Deadline/unusable",
+      "exact_frozen_obligation": "no recorder",
+      "scenario_ids": [
+        "prior66.loss_and_recovery/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery/retries",
+      "executed": true,
+      "expected_authority_outcome": "no recorder; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-044",
+      "area": "Sender unavailable",
+      "exact_frozen_obligation": "Count unchanged",
+      "scenario_ids": [
+        "prior66.outcomes"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "Count unchanged; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-045",
+      "area": "Sender unavailable",
+      "exact_frozen_obligation": "correct mapping",
+      "scenario_ids": [
+        "prior66.outcomes"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "correct mapping; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-046",
+      "area": "Sender unavailable",
+      "exact_frozen_obligation": "vs lease expiry",
+      "scenario_ids": [
+        "prior66.outcomes"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "vs lease expiry; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-047",
+      "area": "Sender unavailable",
+      "exact_frozen_obligation": "vs new claim",
+      "scenario_ids": [
+        "prior66.outcomes"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "vs new claim; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-048",
+      "area": "Sender unavailable",
+      "exact_frozen_obligation": "SENDING refusal",
+      "scenario_ids": [
+        "sender_unavailable.rpc_sending_control"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "SENDING refusal; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "direct_owner.sending_sender_unavailable",
+          "status": "FAIL"
+        },
+        {
+          "scenario_id": "sender_unavailable.rpc_sending_control",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: direct_owner.sending_sender_unavailable",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: direct_owner_sender"
+      ]
+    },
+    {
+      "id": "S36-049",
+      "area": "Duplicate resolution",
+      "exact_frozen_obligation": "Entire item-17 matrix",
+      "scenario_ids": [
+        "prior66.basic/outcomes/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/outcomes/retries",
+      "executed": true,
+      "expected_authority_outcome": "Entire item-17 matrix; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-050",
+      "area": "Duplicate resolution",
+      "exact_frozen_obligation": "retry duplicate before claim",
+      "scenario_ids": [
+        "prior66.basic/outcomes/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/outcomes/retries",
+      "executed": true,
+      "expected_authority_outcome": "retry duplicate before claim; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-051",
+      "area": "Duplicate resolution",
+      "exact_frozen_obligation": "retry duplicate after fresh claim",
+      "scenario_ids": [
+        "prior66.basic/outcomes/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/outcomes/retries",
+      "executed": true,
+      "expected_authority_outcome": "retry duplicate after fresh claim; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-052",
+      "area": "Duplicate resolution",
+      "exact_frozen_obligation": "late conflict",
+      "scenario_ids": [
+        "prior66.basic/outcomes/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/outcomes/retries",
+      "executed": true,
+      "expected_authority_outcome": "late conflict; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-053",
+      "area": "Duplicate resolution",
+      "exact_frozen_obligation": "resolved_at unchanged",
+      "scenario_ids": [
+        "prior66.basic/outcomes/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: basic/outcomes/retries",
+      "executed": true,
+      "expected_authority_outcome": "resolved_at unchanged; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-054",
+      "area": "Recorder",
+      "exact_frozen_obligation": "True",
+      "scenario_ids": [
+        "prior66.outcomes"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "True; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-055",
+      "area": "Recorder",
+      "exact_frozen_obligation": "false",
+      "scenario_ids": [
+        "prior66.outcomes"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "false; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-056",
+      "area": "Recorder",
+      "exact_frozen_obligation": "exception",
+      "scenario_ids": [
+        "prior66.outcomes"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "exception; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-057",
+      "area": "Recorder",
+      "exact_frozen_obligation": "exception rolls back everything",
+      "scenario_ids": [
+        "prior66.outcomes"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "exception rolls back everything; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-058",
+      "area": "Recorder",
+      "exact_frozen_obligation": "exception followed by expired-SENDING recovery",
+      "scenario_ids": [
+        "prior66.outcomes"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes",
+      "executed": true,
+      "expected_authority_outcome": "exception followed by expired-SENDING recovery; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-059",
+      "area": "Recovery",
+      "exact_frozen_obligation": "Initial/retry expired LEASED",
+      "scenario_ids": [
+        "prior66.loss_and_recovery/begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery/begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "Initial/retry expired LEASED; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-060",
+      "area": "Recovery",
+      "exact_frozen_obligation": "expired SENDING unknown",
+      "scenario_ids": [
+        "prior66.loss_and_recovery/begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery/begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "expired SENDING unknown; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-061",
+      "area": "Recovery",
+      "exact_frozen_obligation": "never-sent cancellation/expiry",
+      "scenario_ids": [
+        "prior66.loss_and_recovery/begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery/begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "never-sent cancellation/expiry; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-062",
+      "area": "Recovery",
+      "exact_frozen_obligation": "positive non-acceptance exhaustion",
+      "scenario_ids": [
+        "prior66.loss_and_recovery/begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery/begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "positive non-acceptance exhaustion; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-063",
+      "area": "Recovery",
+      "exact_frozen_obligation": "terminal non-selection",
+      "scenario_ids": [
+        "prior66.loss_and_recovery/begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery/begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "terminal non-selection; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-064",
+      "area": "Crypto-loss closure",
+      "exact_frozen_obligation": "Repeated claim/expired-lease recovery with no begin",
+      "scenario_ids": [
+        "prior66.loss_and_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery",
+      "executed": true,
+      "expected_authority_outcome": "Repeated claim/expired-lease recovery with no begin; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-065",
+      "area": "Crypto-loss closure",
+      "exact_frozen_obligation": "eventual deadline/unusable terminalization for count=0 and count>0",
+      "scenario_ids": [
+        "prior66.loss_and_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery",
+      "executed": true,
+      "expected_authority_outcome": "eventual deadline/unusable terminalization for count=0 and count>0; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-066",
+      "area": "Crypto-loss closure",
+      "exact_frozen_obligation": "scrub",
+      "scenario_ids": [
+        "prior66.loss_and_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery",
+      "executed": true,
+      "expected_authority_outcome": "scrub; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-067",
+      "area": "Crypto-loss closure",
+      "exact_frozen_obligation": "no recorder",
+      "scenario_ids": [
+        "prior66.loss_and_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: loss_and_recovery",
+      "executed": true,
+      "expected_authority_outcome": "no recorder; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-068",
+      "area": "Purge",
+      "exact_frozen_obligation": "Every terminal state",
+      "scenario_ids": [
+        "prior66.purge/races/purge_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: purge/races/purge_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "Every terminal state; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-069",
+      "area": "Purge",
+      "exact_frozen_obligation": "before/at/after retention",
+      "scenario_ids": [
+        "prior66.purge/races/purge_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: purge/races/purge_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "before/at/after retention; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-070",
+      "area": "Purge",
+      "exact_frozen_obligation": "linked challenge not yet expired refusal",
+      "scenario_ids": [
+        "prior66.purge/races/purge_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: purge/races/purge_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "linked challenge not yet expired refusal; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-071",
+      "area": "Purge",
+      "exact_frozen_obligation": "exact expiry equality",
+      "scenario_ids": [
+        "prior66.purge/races/purge_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: purge/races/purge_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "exact expiry equality; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-072",
+      "area": "Purge",
+      "exact_frozen_obligation": "purge vs duplicate finalize",
+      "scenario_ids": [
+        "prior66.purge/races/purge_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: purge/races/purge_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "purge vs duplicate finalize; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-073",
+      "area": "Purge",
+      "exact_frozen_obligation": "purge vs cleanup",
+      "scenario_ids": [
+        "prior66.purge/races/purge_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: purge/races/purge_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "purge vs cleanup; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-074",
+      "area": "Cleanup",
+      "exact_frozen_obligation": "FK refusal",
+      "scenario_ids": [
+        "prior66.purge_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: purge_cleanup/enqueue_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "FK refusal; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-075",
+      "area": "Cleanup",
+      "exact_frozen_obligation": "preceding failure-ledger deletion rolls back",
+      "scenario_ids": [
+        "prior66.purge_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: purge_cleanup/enqueue_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "preceding failure-ledger deletion rolls back; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-076",
+      "area": "Cleanup",
+      "exact_frozen_obligation": "normal recover/purge/cleanup succeeds",
+      "scenario_ids": [
+        "prior66.purge_cleanup"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: purge_cleanup/enqueue_cleanup",
+      "executed": true,
+      "expected_authority_outcome": "normal recover/purge/cleanup succeeds; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-077",
+      "area": "Direct owner DML",
+      "exact_frozen_obligation": "Every forbidden transition, immutable mutation, attempt jump/decrement, lease/envelope shape, terminal update, forged purge context, premature delete and TRUNCATE",
+      "scenario_ids": [
+        "prior66.negatives"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: negatives",
+      "executed": true,
+      "expected_authority_outcome": "Every forbidden transition, immutable mutation, attempt jump/decrement, lease/envelope shape, terminal update, forged purge context, premature delete and TRUNCATE; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "STOP: actual state-machine guard counterexample; other owner negatives unexecuted",
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "direct_owner.sending_sender_unavailable",
+          "status": "FAIL"
+        }
+      ],
+      "counterexample_id": "direct_owner.sending_sender_unavailable",
+      "observed_failure": "Owner update under finalize context accepted SENDING -> sender_unavailable_pre_send with protections enabled",
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: direct_owner.sending_sender_unavailable"
+      ]
+    },
+    {
+      "id": "S36-078",
+      "area": "Scrub",
+      "exact_frozen_obligation": "Every terminal path from finalize, begin, recovery, retry exhaustion and eventual crypto-failure closure",
+      "scenario_ids": [
+        "prior66.outcomes/loss_and_recovery/retries"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: outcomes/loss_and_recovery/retries",
+      "executed": true,
+      "expected_authority_outcome": "Every terminal path from finalize, begin, recovery, retry exhaustion and eventual crypto-failure closure; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-079",
+      "area": "Time authority",
+      "exact_frozen_obligation": "All equality boundaries",
+      "scenario_ids": [
+        "prior66.begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "All equality boundaries; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-080",
+      "area": "Time authority",
+      "exact_frozen_obligation": "lock wait crossing expiry/lease/deadline/retention",
+      "scenario_ids": [
+        "prior66.begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "lock wait crossing expiry/lease/deadline/retention; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-081",
+      "area": "Time authority",
+      "exact_frozen_obligation": "post-lock re-evaluation rather than transaction-start time",
+      "scenario_ids": [
+        "prior66.begin_recovery"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.begin_recovery",
+      "executed": true,
+      "expected_authority_outcome": "post-lock re-evaluation rather than transaction-start time; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "Needs obligation-specific executable assertion(s); no PASS inferred from source inspection",
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-082",
+      "area": "Sequence",
+      "exact_frozen_obligation": "Concurrent allocations",
+      "scenario_ids": [
+        "sequence.concurrent_and_fresh_generation"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance",
+      "executed": true,
+      "expected_authority_outcome": "Concurrent allocations; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "sequence.concurrent_and_fresh_generation",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.concurrent_and_fresh_generation"
+      ]
+    },
+    {
+      "id": "S36-083",
+      "area": "Sequence",
+      "exact_frozen_obligation": "abort gaps",
+      "scenario_ids": [
+        "sequence.aborted_gap"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance",
+      "executed": true,
+      "expected_authority_outcome": "abort gaps; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "sequence.aborted_gap",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.aborted_gap"
+      ]
+    },
+    {
+      "id": "S36-084",
+      "area": "Sequence",
+      "exact_frozen_obligation": "exhausted sequence fail-closed",
+      "scenario_ids": [
+        "prior66.maintenance"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance",
+      "executed": true,
+      "expected_authority_outcome": "exhausted sequence fail-closed; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-085",
+      "area": "Sequence",
+      "exact_frozen_obligation": "properties/owner/ACL/state tamper",
+      "scenario_ids": [
+        "sequence.tamper_properties",
+        "sequence.tamper_owner",
+        "sequence.tamper_acl",
+        "sequence.tamper_state"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance",
+      "executed": true,
+      "expected_authority_outcome": "properties/owner/ACL/state tamper; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "sequence.tamper_properties",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "sequence.tamper_owner",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "sequence.tamper_acl",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "sequence.tamper_state",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_properties",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_owner",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_acl",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_state"
+      ]
+    },
+    {
+      "id": "S36-086",
+      "area": "Sequence",
+      "exact_frozen_obligation": "decimal fences above `2^53−1`",
+      "scenario_ids": [
+        "prior66.maintenance"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance",
+      "executed": true,
+      "expected_authority_outcome": "decimal fences above `2^53−1`; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-087",
+      "area": "Guard/epoch",
+      "exact_frozen_obligation": "Exact singleton",
+      "scenario_ids": [
+        "prior66.restart"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.restart",
+      "executed": true,
+      "expected_authority_outcome": "Exact singleton; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-088",
+      "area": "Guard/epoch",
+      "exact_frozen_obligation": "no application access",
+      "scenario_ids": [
+        "prior66.negatives"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: negatives/maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "no application access; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-089",
+      "area": "Guard/epoch",
+      "exact_frozen_obligation": "mutation refusal",
+      "scenario_ids": [
+        "prior66.negatives"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: negatives/maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "mutation refusal; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-090",
+      "area": "Guard/epoch",
+      "exact_frozen_obligation": "fresh same-epoch rollback",
+      "scenario_ids": [
+        "prior66.restart"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.restart",
+      "executed": true,
+      "expected_authority_outcome": "fresh same-epoch rollback; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-091",
+      "area": "Guard/epoch",
+      "exact_frozen_obligation": "epoch mismatch refusal",
+      "scenario_ids": [
+        "prior66.maintenance"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: negatives/maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "epoch mismatch refusal; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-092",
+      "area": "Guard/epoch",
+      "exact_frozen_obligation": "post-restart rollback refusal",
+      "scenario_ids": [
+        "prior66.restart"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.restart",
+      "executed": true,
+      "expected_authority_outcome": "post-restart rollback refusal; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-093",
+      "area": "Fingerprints",
+      "exact_frozen_obligation": "Exact FK delta",
+      "scenario_ids": [
+        "prior66.postflight"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "Exact FK delta; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-094",
+      "area": "Fingerprints",
+      "exact_frozen_obligation": "unrelated internal trigger retained",
+      "scenario_ids": [
+        "prior66.maintenance"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "unrelated internal trigger retained; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-095",
+      "area": "Fingerprints",
+      "exact_frozen_obligation": "FK enabled-state tamper",
+      "scenario_ids": [
+        "prior66.maintenance"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "FK enabled-state tamper; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-096",
+      "area": "Fingerprints",
+      "exact_frozen_obligation": "constraint/owner/ACL/body drift",
+      "scenario_ids": [
+        "fingerprint.constraint",
+        "fingerprint.owner",
+        "fingerprint.acl",
+        "fingerprint.body"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "constraint/owner/ACL/body drift; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "fingerprint.constraint",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "fingerprint.owner",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "fingerprint.acl",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "fingerprint.body",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.constraint",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.owner",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.acl",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.body"
+      ]
+    },
+    {
+      "id": "S36-097",
+      "area": "Fingerprints",
+      "exact_frozen_obligation": "complete postflight fingerprint",
+      "scenario_ids": [
+        "prior66.postflight"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "complete postflight fingerprint; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-098",
+      "area": "Rollback",
+      "exact_frozen_obligation": "Fresh unused success",
+      "scenario_ids": [
+        "prior66.restart"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.restart",
+      "executed": true,
+      "expected_authority_outcome": "Fresh unused success; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-099",
+      "area": "Rollback",
+      "exact_frozen_obligation": "populated refusal",
+      "scenario_ids": [
+        "rollback.populated"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "populated refusal; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "rollback.populated",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: populated"
+      ]
+    },
+    {
+      "id": "S36-100",
+      "area": "Rollback",
+      "exact_frozen_obligation": "used-but-purged refusal",
+      "scenario_ids": [
+        "rollback.used_but_purged"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "used-but-purged refusal; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "rollback.used_but_purged",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: rollback.used_but_purged"
+      ]
+    },
+    {
+      "id": "S36-101",
+      "area": "Rollback",
+      "exact_frozen_obligation": "aborted allocation refusal",
+      "scenario_ids": [
+        "prior66.maintenance"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "aborted allocation refusal; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-102",
+      "area": "Rollback",
+      "exact_frozen_obligation": "later dependencies/body callers",
+      "scenario_ids": [
+        "prior66.maintenance"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "later dependencies/body callers; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-103",
+      "area": "Rollback",
+      "exact_frozen_obligation": "administrative drift",
+      "scenario_ids": [
+        "prior66.maintenance/restart"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "administrative drift; required final authority state asserted without protected output",
+      "status": "PARTIAL",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": "New sequence/fingerprint tamper variants PASS; complete remaining administrative-drift reconciliation not reached before stop",
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "sequence.tamper_properties",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "sequence.tamper_owner",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "sequence.tamper_acl",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "sequence.tamper_state",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "fingerprint.constraint",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "fingerprint.owner",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "fingerprint.acl",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "fingerprint.body",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_properties",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_owner",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_acl",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_state",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.constraint",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.owner",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.acl",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.body"
+      ]
+    },
+    {
+      "id": "S36-104",
+      "area": "Rollback",
+      "exact_frozen_obligation": "lock timeout",
+      "scenario_ids": [
+        "maintenance.apply_timeout",
+        "maintenance.rollback_timeout"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: maintenance/restart",
+      "executed": true,
+      "expected_authority_outcome": "lock timeout; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "maintenance.apply_timeout",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "maintenance.rollback_timeout",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: maintenance.apply_timeout",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: maintenance.rollback_timeout"
+      ]
+    },
+    {
+      "id": "S36-105",
+      "area": "Atomic maintenance",
+      "exact_frozen_obligation": "Lock timeout leaves no partial apply/drop/ACL change",
+      "scenario_ids": [
+        "maintenance.apply_timeout",
+        "maintenance.rollback_timeout"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: restart",
+      "executed": true,
+      "expected_authority_outcome": "Lock timeout leaves no partial apply/drop/ACL change; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/every8d-c3c3-section36-execution-progress.json",
+      "remaining": null,
+      "new_execution_witnesses": [
+        {
+          "scenario_id": "maintenance.apply_timeout",
+          "status": "PASS"
+        },
+        {
+          "scenario_id": "maintenance.rollback_timeout",
+          "status": "PASS"
+        }
+      ],
+      "new_harness_locations": [
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: maintenance.apply_timeout",
+        "test/postgres/every8dSettingsEmailOutboxClosure.py :: maintenance.rollback_timeout"
+      ]
+    },
+    {
+      "id": "S36-106",
+      "area": "Atomic maintenance",
+      "exact_frozen_obligation": "fresh migration never advances sequence",
+      "scenario_ids": [
+        "prior66.restart"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxSection36.py :: prior66.restart",
+      "executed": true,
+      "expected_authority_outcome": "fresh migration never advances sequence; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    },
+    {
+      "id": "S36-107",
+      "area": "Regression",
+      "exact_frozen_obligation": "Existing C3a/C3b/C3c-2 SQL authority/proof suites remain valid",
+      "scenario_ids": [
+        "prior66.existing legacy suites"
+      ],
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxConcurrency.py :: existing legacy suites",
+      "executed": true,
+      "expected_authority_outcome": "Existing C3a/C3b/C3c-2 SQL authority/proof suites remain valid; required final authority state asserted without protected output",
+      "status": "PASS",
+      "evidence_location": "docs/agent-run-c3c3-settings-auth-email-outbox.md / prior fresh 66-scenario execution",
+      "remaining": null,
+      "new_execution_witnesses": [],
+      "new_harness_locations": []
+    }
+  ],
+  "historical": true,
+  "superseded_by": "docs/every8d-c3c3-section36-coverage-final.json"
+}

@@ -1,0 +1,2914 @@
+{
+  "status": "PASS",
+  "complete_suite": true,
+  "pg_version": "17.11 (Debian 17.11-1.pgdg12+2)",
+  "cleanup": {
+    "harness_backends_zero": true,
+    "base_databases_zero": true,
+    "regression_resources_zero": true
+  },
+  "scenarios": 213,
+  "races": 47,
+  "guard_groups": [
+    {
+      "group": "original_counterexample",
+      "negative_cases": 1,
+      "positive_controls": 0
+    },
+    {
+      "group": "finalize",
+      "negative_cases": 140,
+      "positive_controls": 4
+    },
+    {
+      "group": "source_provenance",
+      "negative_cases": 21,
+      "positive_controls": 1
+    },
+    {
+      "group": "claim_begin",
+      "negative_cases": 60,
+      "positive_controls": 6
+    },
+    {
+      "group": "recovery",
+      "negative_cases": 75,
+      "positive_controls": 6
+    },
+    {
+      "group": "purge",
+      "negative_cases": 11,
+      "positive_controls": 1
+    },
+    {
+      "group": "operation_state_edges",
+      "negative_cases": 718,
+      "positive_controls": 0,
+      "legitimate_source_families": 14
+    },
+    {
+      "group": "enqueue",
+      "negative_cases": 29,
+      "positive_controls": 1
+    },
+    {
+      "group": "retry_terminal",
+      "negative_cases": 36,
+      "positive_controls": 4
+    }
+  ],
+  "guard_function_fingerprint": "748d827b62aeab8dd2eb867544a2eb84",
+  "proof_sources_sha256": {
+    "test/postgres/every8dSettingsEmailOutbox.sh": "14bdcb6662c8913b43cc56e4e175ae4af70da5e33266ad18cba830967f988ed8",
+    "test/postgres/every8dSettingsEmailOutbox.sql": "706bc6f2ce5a2313ef3656658da51f36ee1681f5927ea9a39a71b29d35ed25b3",
+    "test/postgres/every8dSettingsEmailOutboxAad.sql": "66b9517b247b6d0873f9805c8ec538224e17f245da8ec698b9306d0c98dd4811",
+    "test/postgres/every8dSettingsEmailOutboxClosure.py": "84802a81e6d9312699352037f612fdb5c99b922aa77bc17fd7971121a2e9fecd",
+    "test/postgres/every8dSettingsEmailOutboxConcurrency.py": "7e1688ed237a3e72ad1e366659f38386875e0087bb2b481ccecf750e4c34c5da",
+    "test/postgres/every8dSettingsEmailOutboxCoverageManifest.cjs": "e242d81d6403f8047f4e9863b6d96f3ddf9e833bc4bc5626eec9ed053884a100",
+    "test/postgres/every8dSettingsEmailOutboxDerive.sql": "00bed9b615be7987160636c6729849ffb8d464da9a7190224c50f4c337dd0b9f",
+    "test/postgres/every8dSettingsEmailOutboxGuardProof.sql": "769a7cdac6dc8ca482d0531a0d0016856ba17be5f4cda8911f1f3dc1f5021c2d",
+    "test/postgres/every8dSettingsEmailOutboxManifest.json": "6dbe504159bd0273cf4fb01cde292fe6663ca06ba0b50f3bcd54072b1a5c3eb5",
+    "test/postgres/every8dSettingsEmailOutboxPostflight.sql": "8dccc44e689d2cd9559c23e6e3a056e3d4a538e34634f8796c5c3eccdaeed4ae",
+    "test/postgres/every8dSettingsEmailOutboxRegressions.py": "bfb71c96ade371e363d40e29ec6f555af0f5a69fbec511c4a1b8c13fd94c5312",
+    "test/postgres/every8dSettingsEmailOutboxSection36.py": "cdcf234276984606b522973c24318680a3a2cbede5d98e00a872eab8b6a0042c",
+    "test/postgres/every8dSettingsEmailOutboxSection36.sh": "a63e854a4a3840cf50babfca4fec7ea5fb2d349d0c17ab268c9a02597581e676"
+  },
+  "migration_sha256": "13d1243e45ffccf31cb2823875d42a2a782697ac252bd56fb1992cc7db804dc6",
+  "harness_sha256": "84802a81e6d9312699352037f612fdb5c99b922aa77bc17fd7971121a2e9fecd",
+  "events": [
+    {
+      "scenario_id": "rollback.fresh_preuse",
+      "obligations": [
+        "S36-090",
+        "S36-098",
+        "S36-106"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: rollback.fresh_preuse",
+      "final_authority_assertions": [
+        "real fresh apply and full postflight",
+        "empty outbox; sequence last_value 1/is_called false; current singleton guard",
+        "real rollback before runtime behavior",
+        "complete prerequisite catalog/ACL/data restoration"
+      ]
+    },
+    {
+      "scenario_id": "aad.sql_vectors",
+      "obligations": [],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: aad.sql_vectors",
+      "final_authority_assertions": [
+        "two fixed SQL vectors passed; no sequence allocation"
+      ]
+    },
+    {
+      "scenario_id": "direct_owner.sending_sender_unavailable",
+      "obligations": [
+        "S36-048",
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: direct_owner.sending_sender_unavailable",
+      "final_authority_assertions": [
+        "supported RPC refuses with unchanged SENDING",
+        "ordinary owner with operation context cannot misclassify SENDING as sender unavailable",
+        "no disabled trigger/constraint",
+        "exact protection refusal and unchanged row"
+      ]
+    },
+    {
+      "scenario_id": "guard.finalize_accepted",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.finalize_accepted",
+      "final_authority_assertions": [
+        "closed static finalize provenance negatives",
+        "immutable fields and exact resolution tuple protected",
+        "terminal scrub shape",
+        "supported runtime positive control"
+      ]
+    },
+    {
+      "scenario_id": "guard.finalize_rejected",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.finalize_rejected",
+      "final_authority_assertions": [
+        "closed static finalize provenance negatives",
+        "immutable fields and exact resolution tuple protected",
+        "terminal scrub shape",
+        "supported runtime positive control"
+      ]
+    },
+    {
+      "scenario_id": "guard.finalize_outcome_unknown",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.finalize_outcome_unknown",
+      "final_authority_assertions": [
+        "closed static finalize provenance negatives",
+        "immutable fields and exact resolution tuple protected",
+        "terminal scrub shape",
+        "supported runtime positive control"
+      ]
+    },
+    {
+      "scenario_id": "guard.finalize_not_accepted_retryable",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.finalize_not_accepted_retryable",
+      "final_authority_assertions": [
+        "closed static finalize provenance negatives",
+        "immutable fields and exact resolution tuple protected",
+        "terminal scrub shape",
+        "supported runtime positive control"
+      ]
+    },
+    {
+      "scenario_id": "guard.sending_origins",
+      "obligations": [
+        "S36-048",
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.sending_origins",
+      "final_authority_assertions": [
+        "fully scrubbed original provenance counterexample rejected",
+        "SENDING cannot become CANCELLED/EXPIRED/PENDING/LEASED",
+        "source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.leased_origins",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.leased_origins",
+      "final_authority_assertions": [
+        "all four provider families rejected from LEASED",
+        "sender unavailable exact provenance only",
+        "supported sender-unavailable positive from legitimate retry LEASED"
+      ]
+    },
+    {
+      "scenario_id": "guard.inactive_PENDING",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.inactive_PENDING",
+      "final_authority_assertions": [
+        "legitimate inactive source",
+        "provider terminalization rejected",
+        "RETRY_WAIT direct SENDING bypass rejected where applicable"
+      ]
+    },
+    {
+      "scenario_id": "guard.inactive_RETRY_WAIT",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.inactive_RETRY_WAIT",
+      "final_authority_assertions": [
+        "legitimate inactive source",
+        "provider terminalization rejected",
+        "RETRY_WAIT direct SENDING bypass rejected where applicable"
+      ]
+    },
+    {
+      "scenario_id": "guard.claim_begin",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.claim_begin",
+      "final_authority_assertions": [
+        "claim/begin exact changed columns",
+        "fresh fence supplied only by trigger",
+        "count jump/decrement/fourth/NULL negatives",
+        "nonterminal envelope immutable",
+        "supported claim/begin still succeed"
+      ]
+    },
+    {
+      "scenario_id": "guard.fourth_attempt",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.fourth_attempt",
+      "final_authority_assertions": [
+        "real prior positive non-acceptance attempts 1/2",
+        "only third begin allowed",
+        "no fourth attempt or invented attempt-three disposition",
+        "supported third begin/budget exhaustion controls"
+      ]
+    },
+    {
+      "scenario_id": "guard.begin_unusable_0",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.begin_unusable_0",
+      "final_authority_assertions": [
+        "begin uses unusable provenance only",
+        "never-sent vs prior-positive classifications closed",
+        "supported begin terminalization; no increment/recorder; full scrub"
+      ]
+    },
+    {
+      "scenario_id": "guard.begin_unusable_1",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.begin_unusable_1",
+      "final_authority_assertions": [
+        "begin uses unusable provenance only",
+        "never-sent vs prior-positive classifications closed",
+        "supported begin terminalization; no increment/recorder; full scrub"
+      ]
+    },
+    {
+      "scenario_id": "guard.recovery_requeue_0",
+      "obligations": [
+        "S36-059",
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.recovery_requeue_0",
+      "final_authority_assertions": [
+        "exact old positive-history/count family",
+        "unchanged attempt/fence/envelope/availability/resolution history",
+        "lease cleared; stale begin and historical retry finalization zero",
+        "supported recovery positive"
+      ]
+    },
+    {
+      "scenario_id": "guard.recovery_requeue_1",
+      "obligations": [
+        "S36-059",
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.recovery_requeue_1",
+      "final_authority_assertions": [
+        "exact old positive-history/count family",
+        "unchanged attempt/fence/envelope/availability/resolution history",
+        "lease cleared; stale begin and historical retry finalization zero",
+        "supported recovery positive"
+      ]
+    },
+    {
+      "scenario_id": "guard.recovery_requeue_2",
+      "obligations": [
+        "S36-059",
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.recovery_requeue_2",
+      "final_authority_assertions": [
+        "exact old positive-history/count family",
+        "unchanged attempt/fence/envelope/availability/resolution history",
+        "lease cleared; stale begin and historical retry finalization zero",
+        "supported recovery positive"
+      ]
+    },
+    {
+      "scenario_id": "guard.recovery_terminal_pending",
+      "obligations": [
+        "S36-060",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.recovery_terminal_pending",
+      "final_authority_assertions": [
+        "exact recovery-only provenance",
+        "no fabricated provider/pre-send classification",
+        "attempt preserved",
+        "full scrub/lease clear",
+        "no terminal re-selection or resend",
+        "supported recovery positive"
+      ]
+    },
+    {
+      "scenario_id": "guard.recovery_terminal_retry_wait",
+      "obligations": [
+        "S36-060",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.recovery_terminal_retry_wait",
+      "final_authority_assertions": [
+        "exact recovery-only provenance",
+        "no fabricated provider/pre-send classification",
+        "attempt preserved",
+        "full scrub/lease clear",
+        "no terminal re-selection or resend",
+        "supported recovery positive"
+      ]
+    },
+    {
+      "scenario_id": "guard.recovery_terminal_sending",
+      "obligations": [
+        "S36-060",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.recovery_terminal_sending",
+      "final_authority_assertions": [
+        "exact recovery-only provenance",
+        "no fabricated provider/pre-send classification",
+        "attempt preserved",
+        "full scrub/lease clear",
+        "no terminal re-selection or resend",
+        "supported recovery positive"
+      ]
+    },
+    {
+      "scenario_id": "guard.purge",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.purge",
+      "final_authority_assertions": [
+        "wrong/missing/forged purge context refuses atomically",
+        "premature retention deletion refuses",
+        "GUC alone insufficient even when eligible",
+        "TRUNCATE always refuses",
+        "supported purge positive deletes child only"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_PENDING_0",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_PENDING_0",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_LEASED_0",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_LEASED_0",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_LEASED_1",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_LEASED_1",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_LEASED_2",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_LEASED_2",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_SENDING_1",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_SENDING_1",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_SENDING_2",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_SENDING_2",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_SENDING_3",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_SENDING_3",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_RETRY_WAIT_1",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_RETRY_WAIT_1",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_RETRY_WAIT_2",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_RETRY_WAIT_2",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_ACCEPTED_1",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_ACCEPTED_1",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_FAILED_TERMINAL_1",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_FAILED_TERMINAL_1",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_DELIVERY_OUTCOME_UNKNOWN_1",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_DELIVERY_OUTCOME_UNKNOWN_1",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_CANCELLED_0",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_CANCELLED_0",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.edges_EXPIRED_0",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.edges_EXPIRED_0",
+      "final_authority_assertions": [
+        "legitimate source constructed through supported runtime authority",
+        "all six operation markers",
+        "every forbidden state edge and no-op rejected",
+        "terminal updates/reopening rejected",
+        "protections enabled; source/challenge/guard unchanged"
+      ]
+    },
+    {
+      "scenario_id": "guard.enqueue",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.enqueue",
+      "final_authority_assertions": [
+        "only enqueue marker admits INSERT",
+        "absent -> PENDING/count 0 only",
+        "caller cannot supply fence or provenance",
+        "payload/identity/deadline shape protected",
+        "supported enqueue positive"
+      ]
+    },
+    {
+      "scenario_id": "guard.retry_terminal_deadline_1",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.retry_terminal_deadline_1",
+      "final_authority_assertions": [
+        "prior positive attempt provenance",
+        "no budget disposition before attempt three",
+        "exact provider not-accepted metadata",
+        "supported terminalization; unchanged count/no recorder/full scrub"
+      ]
+    },
+    {
+      "scenario_id": "guard.retry_terminal_unusable_1",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.retry_terminal_unusable_1",
+      "final_authority_assertions": [
+        "prior positive attempt provenance",
+        "no budget disposition before attempt three",
+        "exact provider not-accepted metadata",
+        "supported terminalization; unchanged count/no recorder/full scrub"
+      ]
+    },
+    {
+      "scenario_id": "guard.retry_terminal_deadline_2",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.retry_terminal_deadline_2",
+      "final_authority_assertions": [
+        "prior positive attempt provenance",
+        "no budget disposition before attempt three",
+        "exact provider not-accepted metadata",
+        "supported terminalization; unchanged count/no recorder/full scrub"
+      ]
+    },
+    {
+      "scenario_id": "guard.retry_terminal_unusable_2",
+      "obligations": [
+        "S36-077"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: guard.retry_terminal_unusable_2",
+      "final_authority_assertions": [
+        "prior positive attempt provenance",
+        "no budget disposition before attempt three",
+        "exact provider not-accepted metadata",
+        "supported terminalization; unchanged count/no recorder/full scrub"
+      ]
+    },
+    {
+      "scenario_id": "baseline.basic",
+      "obligations": [
+        "S36-002",
+        "S36-012",
+        "S36-024",
+        "S36-025"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: baseline.basic",
+      "final_authority_assertions": [
+        "entire original executable method rerun on corrected installed SQL",
+        "all original state/receipt/recorder/ACL/sequence/rollback assertions retained",
+        "executed scenarios=2",
+        "independent-session races=0"
+      ]
+    },
+    {
+      "scenario_id": "baseline.outcomes",
+      "obligations": [
+        "S36-032",
+        "S36-054",
+        "S36-055",
+        "S36-056",
+        "S36-057",
+        "S36-058"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: baseline.outcomes",
+      "final_authority_assertions": [
+        "entire original executable method rerun on corrected installed SQL",
+        "all original state/receipt/recorder/ACL/sequence/rollback assertions retained",
+        "executed scenarios=9",
+        "independent-session races=0"
+      ]
+    },
+    {
+      "scenario_id": "baseline.retries",
+      "obligations": [
+        "S36-013",
+        "S36-014",
+        "S36-033",
+        "S36-035",
+        "S36-036",
+        "S36-037",
+        "S36-038",
+        "S36-039"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: baseline.retries",
+      "final_authority_assertions": [
+        "entire original executable method rerun on corrected installed SQL",
+        "all original state/receipt/recorder/ACL/sequence/rollback assertions retained",
+        "executed scenarios=3",
+        "independent-session races=0"
+      ]
+    },
+    {
+      "scenario_id": "baseline.loss_and_recovery",
+      "obligations": [
+        "S36-064",
+        "S36-065",
+        "S36-066",
+        "S36-067",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: baseline.loss_and_recovery",
+      "final_authority_assertions": [
+        "entire original executable method rerun on corrected installed SQL",
+        "all original state/receipt/recorder/ACL/sequence/rollback assertions retained",
+        "executed scenarios=7",
+        "independent-session races=0"
+      ]
+    },
+    {
+      "scenario_id": "baseline.purge",
+      "obligations": [
+        "S36-068",
+        "S36-069"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: baseline.purge",
+      "final_authority_assertions": [
+        "entire original executable method rerun on corrected installed SQL",
+        "all original state/receipt/recorder/ACL/sequence/rollback assertions retained",
+        "executed scenarios=6",
+        "independent-session races=0"
+      ]
+    },
+    {
+      "scenario_id": "baseline.negatives",
+      "obligations": [
+        "S36-032",
+        "S36-088",
+        "S36-089"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: baseline.negatives",
+      "final_authority_assertions": [
+        "entire original executable method rerun on corrected installed SQL",
+        "all original state/receipt/recorder/ACL/sequence/rollback assertions retained",
+        "executed scenarios=1",
+        "independent-session races=0"
+      ]
+    },
+    {
+      "scenario_id": "baseline.races",
+      "obligations": [
+        "S36-017",
+        "S36-018",
+        "S36-026",
+        "S36-027",
+        "S36-073",
+        "S36-074",
+        "S36-075",
+        "S36-076"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: baseline.races",
+      "final_authority_assertions": [
+        "entire original executable method rerun on corrected installed SQL",
+        "all original state/receipt/recorder/ACL/sequence/rollback assertions retained",
+        "executed scenarios=18",
+        "independent-session races=18"
+      ]
+    },
+    {
+      "scenario_id": "baseline.maintenance",
+      "obligations": [
+        "S36-084",
+        "S36-086",
+        "S36-091",
+        "S36-094",
+        "S36-095",
+        "S36-101",
+        "S36-102"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: baseline.maintenance",
+      "final_authority_assertions": [
+        "entire original executable method rerun on corrected installed SQL",
+        "all original state/receipt/recorder/ACL/sequence/rollback assertions retained",
+        "executed scenarios=11",
+        "independent-session races=0"
+      ]
+    },
+    {
+      "scenario_id": "rollback.populated",
+      "obligations": [
+        "S36-099"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: rollback.populated",
+      "final_authority_assertions": [
+        "supported enqueue created one row",
+        "exact pre-use refusal",
+        "catalog/functions/triggers/ACL/prerequisites/rows/guard/sequence unchanged"
+      ]
+    },
+    {
+      "scenario_id": "rollback.used_but_purged",
+      "obligations": [
+        "S36-100"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: rollback.used_but_purged",
+      "final_authority_assertions": [
+        "real enqueue/claim/begin/finalize/purge",
+        "retention respected by existing full-timeline fixture",
+        "empty outbox still used sequence",
+        "exact pre-use refusal",
+        "complete authority snapshot unchanged"
+      ]
+    },
+    {
+      "scenario_id": "maintenance.apply_timeout",
+      "obligations": [
+        "S36-104",
+        "S36-105"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: maintenance.apply_timeout",
+      "final_authority_assertions": [
+        "independent physical sessions",
+        "exact relation/lock wait observed",
+        "real frozen 5s lock_timeout returns 55P03",
+        "zero partial CREATE/DROP/GRANT/REVOKE/guard/row mutation",
+        "subsequent clean apply/postflight/rollback works",
+        "exact prerequisite baseline restored"
+      ]
+    },
+    {
+      "scenario_id": "maintenance.rollback_timeout",
+      "obligations": [
+        "S36-104",
+        "S36-105"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: maintenance.rollback_timeout",
+      "final_authority_assertions": [
+        "independent physical sessions",
+        "exact relation/lock wait observed",
+        "real frozen 5s lock_timeout returns 55P03",
+        "zero partial CREATE/DROP/GRANT/REVOKE/guard/row mutation",
+        "subsequent clean apply/postflight/rollback works",
+        "exact prerequisite baseline restored"
+      ]
+    },
+    {
+      "scenario_id": "sequence.concurrent_and_fresh_generation",
+      "obligations": [
+        "S36-019",
+        "S36-020",
+        "S36-023",
+        "S36-082"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.concurrent_and_fresh_generation",
+      "final_authority_assertions": [
+        "two real concurrent open allocating transactions",
+        "distinct increasing committed fences 1/2",
+        "real claims allocate 3/4",
+        "fresh lease UUID",
+        "stale UUID-only/fence-only/prior tuple rejected without mutation"
+      ]
+    },
+    {
+      "scenario_id": "sequence.aborted_gap",
+      "obligations": [
+        "S36-083"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.aborted_gap",
+      "final_authority_assertions": [
+        "real enqueue transaction allocated fence then rolled back",
+        "outbox remained empty after abort",
+        "subsequent supported enqueue uses next fence",
+        "no reset or guard mutation"
+      ]
+    },
+    {
+      "scenario_id": "sequence.tamper_properties",
+      "obligations": [
+        "S36-085",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_properties",
+      "final_authority_assertions": [
+        "real administrative tamper",
+        "metadata postflight refusal for definition/owner/ACL drift; direct state drift assertion for values",
+        "rollback exact refusal",
+        "tampered catalog/ACL/sequence state remains unchanged",
+        "no partial drop/revoke/repair"
+      ]
+    },
+    {
+      "scenario_id": "sequence.tamper_owner",
+      "obligations": [
+        "S36-085",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_owner",
+      "final_authority_assertions": [
+        "real administrative tamper",
+        "metadata postflight refusal for definition/owner/ACL drift; direct state drift assertion for values",
+        "rollback exact refusal",
+        "tampered catalog/ACL/sequence state remains unchanged",
+        "no partial drop/revoke/repair"
+      ]
+    },
+    {
+      "scenario_id": "sequence.tamper_acl",
+      "obligations": [
+        "S36-085",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_acl",
+      "final_authority_assertions": [
+        "real administrative tamper",
+        "metadata postflight refusal for definition/owner/ACL drift; direct state drift assertion for values",
+        "rollback exact refusal",
+        "tampered catalog/ACL/sequence state remains unchanged",
+        "no partial drop/revoke/repair"
+      ]
+    },
+    {
+      "scenario_id": "sequence.tamper_state",
+      "obligations": [
+        "S36-085",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sequence.tamper_state",
+      "final_authority_assertions": [
+        "real administrative tamper",
+        "metadata postflight refusal for definition/owner/ACL drift; direct state drift assertion for values",
+        "rollback exact refusal",
+        "tampered catalog/ACL/sequence state remains unchanged",
+        "no partial drop/revoke/repair"
+      ]
+    },
+    {
+      "scenario_id": "fingerprint.constraint",
+      "obligations": [
+        "S36-096",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.constraint",
+      "final_authority_assertions": [
+        "actual disposable catalog/body tamper observable",
+        "real full postflight rejects",
+        "real guarded rollback rejects",
+        "no partial DDL/ACL/row/guard/sequence change",
+        "no repair"
+      ]
+    },
+    {
+      "scenario_id": "fingerprint.owner",
+      "obligations": [
+        "S36-096",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.owner",
+      "final_authority_assertions": [
+        "actual disposable catalog/body tamper observable",
+        "real full postflight rejects",
+        "real guarded rollback rejects",
+        "no partial DDL/ACL/row/guard/sequence change",
+        "no repair"
+      ]
+    },
+    {
+      "scenario_id": "fingerprint.acl",
+      "obligations": [
+        "S36-096",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.acl",
+      "final_authority_assertions": [
+        "actual disposable catalog/body tamper observable",
+        "real full postflight rejects",
+        "real guarded rollback rejects",
+        "no partial DDL/ACL/row/guard/sequence change",
+        "no repair"
+      ]
+    },
+    {
+      "scenario_id": "fingerprint.body",
+      "obligations": [
+        "S36-096",
+        "S36-103"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: fingerprint.body",
+      "final_authority_assertions": [
+        "actual disposable catalog/body tamper observable",
+        "real full postflight rejects",
+        "real guarded rollback rejects",
+        "no partial DDL/ACL/row/guard/sequence change",
+        "no repair"
+      ]
+    },
+    {
+      "scenario_id": "claim.deadline",
+      "obligations": [
+        "S36-015"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.deadline",
+      "final_authority_assertions": [
+        "real claim returns zero with unchanged row",
+        "separate recovery produces truthful never-sent terminal state",
+        "atomic envelope/lease/availability scrub",
+        "no attempt/recorder invention"
+      ]
+    },
+    {
+      "scenario_id": "claim.unusable",
+      "obligations": [
+        "S36-015"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.unusable",
+      "final_authority_assertions": [
+        "real claim returns zero with unchanged row",
+        "separate recovery produces truthful never-sent terminal state",
+        "atomic envelope/lease/availability scrub",
+        "no attempt/recorder invention"
+      ]
+    },
+    {
+      "scenario_id": "claim.batch_order",
+      "obligations": [
+        "S36-016"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.batch_order",
+      "final_authority_assertions": [
+        "invalid bounds refused atomically",
+        "three equal-availability real jobs",
+        "exact secondary UUID order",
+        "only bounded two then remaining one",
+        "fresh distinct leases; counts unchanged"
+      ]
+    },
+    {
+      "scenario_id": "claim.bounded_skip",
+      "obligations": [
+        "S36-016",
+        "S36-017",
+        "S36-018"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.bounded_skip",
+      "final_authority_assertions": [
+        "two physical sessions; actual row lock",
+        "bounded prefix skips held first without refill",
+        "no mutation of held/ineligible candidate",
+        "post-release remaining jobs claimed in order"
+      ]
+    },
+    {
+      "scenario_id": "enqueue.identity_conflicts",
+      "obligations": [
+        "S36-001",
+        "S36-002",
+        "S36-004"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: enqueue.identity_conflicts",
+      "final_authority_assertions": [
+        "job and challenge uniqueness",
+        "nonce/ciphertext/tag/key/AAD identity conflicts return zero",
+        "exact duplicate receipt unchanged",
+        "no extra row/fence or losing-challenge resurrection"
+      ]
+    },
+    {
+      "scenario_id": "orphan.real_supersession",
+      "obligations": [
+        "S36-009",
+        "S36-010",
+        "S36-011"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: orphan.real_supersession",
+      "final_authority_assertions": [
+        "challenge-only commit",
+        "claim/recover/purge create no job or fence",
+        "real C3b request authority refuses within cooldown",
+        "actual DB time reaches cooldown; supported resend supersedes under existing limits",
+        "old challenge cannot enqueue; no reconstruction/provider/attempt"
+      ]
+    },
+    {
+      "scenario_id": "enqueue.concurrent_duplicate_False",
+      "obligations": [
+        "S36-001",
+        "S36-002",
+        "S36-003"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: enqueue.concurrent_duplicate_False",
+      "final_authority_assertions": [
+        "two physical sessions and observed challenge wait",
+        "both actual receipts match stored identity/state/timestamps",
+        "one row/fence only",
+        "both symmetric winner orders"
+      ]
+    },
+    {
+      "scenario_id": "enqueue.concurrent_duplicate_True",
+      "obligations": [
+        "S36-001",
+        "S36-002",
+        "S36-003"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: enqueue.concurrent_duplicate_True",
+      "final_authority_assertions": [
+        "two physical sessions and observed challenge wait",
+        "both actual receipts match stored identity/state/timestamps",
+        "one row/fence only",
+        "both symmetric winner orders"
+      ]
+    },
+    {
+      "scenario_id": "enqueue.supersession_cooldown",
+      "obligations": [],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: enqueue.supersession_cooldown",
+      "final_authority_assertions": [
+        "real DB cooldown elapsed",
+        "old challenge still unexpired/full provider window fits",
+        "no fabricated prerequisite"
+      ]
+    },
+    {
+      "scenario_id": "enqueue.supersession_False",
+      "obligations": [
+        "S36-005"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: enqueue.supersession_False",
+      "final_authority_assertions": [
+        "real C3b request authority with valid cooldown",
+        "parent/challenge wait observed in two sessions",
+        "fresh losing enqueue revalidation",
+        "winner child cannot send after supersession; truthful recovery scrub",
+        "no duplicate/orphan/fabricated job"
+      ]
+    },
+    {
+      "scenario_id": "enqueue.supersession_True",
+      "obligations": [
+        "S36-005"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: enqueue.supersession_True",
+      "final_authority_assertions": [
+        "real C3b request authority with valid cooldown",
+        "parent/challenge wait observed in two sessions",
+        "fresh losing enqueue revalidation",
+        "winner child cannot send after supersession; truthful recovery scrub",
+        "no duplicate/orphan/fabricated job"
+      ]
+    },
+    {
+      "scenario_id": "begin.ambiguous_ack_False",
+      "obligations": [
+        "S36-030"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: begin.ambiguous_ack_False",
+      "final_authority_assertions": [
+        "real begin inside independent transaction",
+        "receipt intentionally not delivered to test consumer",
+        "commit/abort branches verified by exact state/attempt snapshot",
+        "no reconstructed receipt/automatic replacement call",
+        "zero provider counters",
+        "recovery preserves truthful attempt history"
+      ]
+    },
+    {
+      "scenario_id": "begin.ambiguous_ack_True",
+      "obligations": [
+        "S36-030"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: begin.ambiguous_ack_True",
+      "final_authority_assertions": [
+        "real begin inside independent transaction",
+        "receipt intentionally not delivered to test consumer",
+        "commit/abort branches verified by exact state/attempt snapshot",
+        "no reconstructed receipt/automatic replacement call",
+        "zero provider counters",
+        "recovery preserves truthful attempt history"
+      ]
+    },
+    {
+      "scenario_id": "begin.late_ack",
+      "obligations": [
+        "S36-031"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: begin.late_ack",
+      "final_authority_assertions": [
+        "real committed begin receipt",
+        "actual DB provider deadline crossed before test delivery",
+        "conservative monotonic elapsed time",
+        "deadline equality/late test counter zero",
+        "duplicate begin and unavailable-sender result cannot replace attempt",
+        "actual lease expiry recovers only unknown; no resend"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.accepted",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.accepted",
+      "final_authority_assertions": [
+        "actual supported terminal path accepted",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.rejected",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.rejected",
+      "final_authority_assertions": [
+        "actual supported terminal path rejected",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.outcome_unknown",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.outcome_unknown",
+      "final_authority_assertions": [
+        "actual supported terminal path outcome_unknown",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.retryable1",
+      "obligations": [
+        "S36-033",
+        "S36-035",
+        "S36-036",
+        "S36-049",
+        "S36-050",
+        "S36-051",
+        "S36-052",
+        "S36-053"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.retryable1",
+      "final_authority_assertions": [
+        "entire item-17 valid/invalid representation and tuple families",
+        "stored availability/resolved_at/recorder unchanged",
+        "fresh claim invalidates old retry permanently including safe recovery",
+        "no recorder/scrub/increment on intermediate retry"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.retryable2",
+      "obligations": [
+        "S36-033",
+        "S36-035",
+        "S36-036",
+        "S36-049",
+        "S36-050",
+        "S36-051",
+        "S36-052",
+        "S36-053"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.retryable2",
+      "final_authority_assertions": [
+        "entire item-17 valid/invalid representation and tuple families",
+        "stored availability/resolved_at/recorder unchanged",
+        "fresh claim invalidates old retry permanently including safe recovery",
+        "no recorder/scrub/increment on intermediate retry"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.sender0",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.sender0",
+      "final_authority_assertions": [
+        "actual supported terminal path sender0",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.sender1",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.sender1",
+      "final_authority_assertions": [
+        "actual supported terminal path sender1",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.sender2",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.sender2",
+      "final_authority_assertions": [
+        "actual supported terminal path sender2",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.budget",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.budget",
+      "final_authority_assertions": [
+        "actual supported terminal path budget",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.deadline",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.deadline",
+      "final_authority_assertions": [
+        "actual supported terminal path deadline",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.unusable",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.unusable",
+      "final_authority_assertions": [
+        "actual supported terminal path unusable",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.recover_unknown",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.recover_unknown",
+      "final_authority_assertions": [
+        "actual supported terminal path recover_unknown",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.recover_cancel",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.recover_cancel",
+      "final_authority_assertions": [
+        "actual supported terminal path recover_cancel",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.recover_expired",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.recover_expired",
+      "final_authority_assertions": [
+        "actual supported terminal path recover_expired",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.recover_retry",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.recover_retry",
+      "final_authority_assertions": [
+        "actual supported terminal path recover_retry",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.begin_cancel",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.begin_cancel",
+      "final_authority_assertions": [
+        "actual supported terminal path begin_cancel",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.begin_expired",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.begin_expired",
+      "final_authority_assertions": [
+        "actual supported terminal path begin_expired",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "duplicates.begin_retry",
+      "obligations": [
+        "S36-007",
+        "S36-008",
+        "S36-032",
+        "S36-044",
+        "S36-045",
+        "S36-049",
+        "S36-052",
+        "S36-053",
+        "S36-063",
+        "S36-068",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: duplicates.begin_retry",
+      "final_authority_assertions": [
+        "actual supported terminal path begin_retry",
+        "item-17 exact stored compatible receipt or recovery/unusable never compatible",
+        "all valid conflicting provider/pre-send and tuple inputs rejected without recorder mutation",
+        "complete terminal scrub",
+        "exact enqueue duplicate after scrub; real retained purge; both resurrection forms refused"
+      ]
+    },
+    {
+      "scenario_id": "claim.stale_finalization_False",
+      "obligations": [
+        "S36-021",
+        "S36-023",
+        "S36-051"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.stale_finalization_False",
+      "final_authority_assertions": [
+        "independent sessions; both legal winner orders",
+        "actual blocking or SKIP LOCKED lock evidence",
+        "one fresh lease/fence; unchanged attempt count",
+        "prior generation permanently incompatible; final state asserted"
+      ]
+    },
+    {
+      "scenario_id": "claim.stale_finalization_True",
+      "obligations": [
+        "S36-021",
+        "S36-023",
+        "S36-051"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: claim.stale_finalization_True",
+      "final_authority_assertions": [
+        "independent sessions; both legal winner orders",
+        "actual blocking or SKIP LOCKED lock evidence",
+        "one fresh lease/fence; unchanged attempt count",
+        "prior generation permanently incompatible; final state asserted"
+      ]
+    },
+    {
+      "scenario_id": "sender.expiry_0_False",
+      "obligations": [
+        "S36-022",
+        "S36-044",
+        "S36-045",
+        "S36-046",
+        "S36-047"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sender.expiry_0_False",
+      "final_authority_assertions": [
+        "unexpired LEASED sender wins or expired recovery wins; both legally constructible orderings",
+        "new claim cannot coexist with current unexpired lease; terminal winner excludes it",
+        "independent sessions and real lock/state evidence",
+        "old lease/fence always refused after expiry/recovery/new claim",
+        "count unchanged; recorder mapping and complete scrub"
+      ]
+    },
+    {
+      "scenario_id": "sender.expiry_0_True",
+      "obligations": [
+        "S36-022",
+        "S36-044",
+        "S36-045",
+        "S36-046",
+        "S36-047"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sender.expiry_0_True",
+      "final_authority_assertions": [
+        "unexpired LEASED sender wins or expired recovery wins; both legally constructible orderings",
+        "new claim cannot coexist with current unexpired lease; terminal winner excludes it",
+        "independent sessions and real lock/state evidence",
+        "old lease/fence always refused after expiry/recovery/new claim",
+        "count unchanged; recorder mapping and complete scrub"
+      ]
+    },
+    {
+      "scenario_id": "sender.expiry_1_False",
+      "obligations": [
+        "S36-022",
+        "S36-044",
+        "S36-045",
+        "S36-046",
+        "S36-047"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sender.expiry_1_False",
+      "final_authority_assertions": [
+        "unexpired LEASED sender wins or expired recovery wins; both legally constructible orderings",
+        "new claim cannot coexist with current unexpired lease; terminal winner excludes it",
+        "independent sessions and real lock/state evidence",
+        "old lease/fence always refused after expiry/recovery/new claim",
+        "count unchanged; recorder mapping and complete scrub"
+      ]
+    },
+    {
+      "scenario_id": "sender.expiry_1_True",
+      "obligations": [
+        "S36-022",
+        "S36-044",
+        "S36-045",
+        "S36-046",
+        "S36-047"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sender.expiry_1_True",
+      "final_authority_assertions": [
+        "unexpired LEASED sender wins or expired recovery wins; both legally constructible orderings",
+        "new claim cannot coexist with current unexpired lease; terminal winner excludes it",
+        "independent sessions and real lock/state evidence",
+        "old lease/fence always refused after expiry/recovery/new claim",
+        "count unchanged; recorder mapping and complete scrub"
+      ]
+    },
+    {
+      "scenario_id": "sender.expiry_2_False",
+      "obligations": [
+        "S36-022",
+        "S36-044",
+        "S36-045",
+        "S36-046",
+        "S36-047"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sender.expiry_2_False",
+      "final_authority_assertions": [
+        "unexpired LEASED sender wins or expired recovery wins; both legally constructible orderings",
+        "new claim cannot coexist with current unexpired lease; terminal winner excludes it",
+        "independent sessions and real lock/state evidence",
+        "old lease/fence always refused after expiry/recovery/new claim",
+        "count unchanged; recorder mapping and complete scrub"
+      ]
+    },
+    {
+      "scenario_id": "sender.expiry_2_True",
+      "obligations": [
+        "S36-022",
+        "S36-044",
+        "S36-045",
+        "S36-046",
+        "S36-047"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: sender.expiry_2_True",
+      "final_authority_assertions": [
+        "unexpired LEASED sender wins or expired recovery wins; both legally constructible orderings",
+        "new claim cannot coexist with current unexpired lease; terminal winner excludes it",
+        "independent sessions and real lock/state evidence",
+        "old lease/fence always refused after expiry/recovery/new claim",
+        "count unchanged; recorder mapping and complete scrub"
+      ]
+    },
+    {
+      "scenario_id": "crypto_loss.unusable_0",
+      "obligations": [
+        "S36-064",
+        "S36-065",
+        "S36-066",
+        "S36-067",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: crypto_loss.unusable_0",
+      "final_authority_assertions": [
+        "three real claim/expired-lease cycles without begin",
+        "no ciphertext reconstruction or provider invocation",
+        "zero or prior-positive attempt unchanged",
+        "eventual unusable truthful terminalization; full scrub; no recorder/resend"
+      ]
+    },
+    {
+      "scenario_id": "crypto_loss.unusable_1",
+      "obligations": [
+        "S36-064",
+        "S36-065",
+        "S36-066",
+        "S36-067",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: crypto_loss.unusable_1",
+      "final_authority_assertions": [
+        "three real claim/expired-lease cycles without begin",
+        "no ciphertext reconstruction or provider invocation",
+        "zero or prior-positive attempt unchanged",
+        "eventual unusable truthful terminalization; full scrub; no recorder/resend"
+      ]
+    },
+    {
+      "scenario_id": "crypto_loss.unusable_2",
+      "obligations": [
+        "S36-064",
+        "S36-065",
+        "S36-066",
+        "S36-067",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: crypto_loss.unusable_2",
+      "final_authority_assertions": [
+        "three real claim/expired-lease cycles without begin",
+        "no ciphertext reconstruction or provider invocation",
+        "zero or prior-positive attempt unchanged",
+        "eventual unusable truthful terminalization; full scrub; no recorder/resend"
+      ]
+    },
+    {
+      "scenario_id": "time.exact_predicate_units",
+      "obligations": [
+        "S36-034",
+        "S36-041",
+        "S36-069",
+        "S36-070",
+        "S36-071",
+        "S36-079"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: time.exact_predicate_units",
+      "final_authority_assertions": [
+        "33 executed before/equal/after predicates from installed fingerprint-checked production bodies",
+        "DB-generated T; no caller-controlled runtime clock or replacement function",
+        "strict vs inclusive comparisons asserted independently",
+        "exact equality units paired with supported runtime state and real post-wait proofs",
+        "original catalog/ACL/rows/guard/sequence unchanged"
+      ]
+    },
+    {
+      "scenario_id": "time.retention_equality",
+      "obligations": [
+        "S36-069",
+        "S36-070",
+        "S36-071",
+        "S36-079"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: time.retention_equality",
+      "final_authority_assertions": [
+        "real owner guard rejects captured DB T one microsecond before retention; source unchanged",
+        "real protected DELETE accepts exact T=terminal_at+24h; assertion inside transaction then rollback restores source",
+        "real RPC after retention deletes child",
+        "future linked challenge plus valid 24h-retained terminal impossible: expiry<=created+10m<=terminal+10m<terminal+24h",
+        "linked-expiry exact SQL predicate before/equal/after executed; nearest legal RPC fixture asserted; no impossible prerequisite forged"
+      ]
+    },
+    {
+      "scenario_id": "time.wait_window",
+      "obligations": [
+        "S36-028",
+        "S36-080",
+        "S36-081"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: time.wait_window",
+      "final_authority_assertions": [
+        "independent sessions and actual challenge lock wait",
+        "xact_start precedes boundary; DB time crosses while waiter remains blocked",
+        "post-lock clock authority rejects old admission",
+        "final state/attempt/recorder/scrub asserted"
+      ]
+    },
+    {
+      "scenario_id": "time.wait_challenge",
+      "obligations": [
+        "S36-028",
+        "S36-080",
+        "S36-081"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: time.wait_challenge",
+      "final_authority_assertions": [
+        "independent sessions and actual challenge lock wait",
+        "xact_start precedes boundary; DB time crosses while waiter remains blocked",
+        "post-lock clock authority rejects old admission",
+        "final state/attempt/recorder/scrub asserted"
+      ]
+    },
+    {
+      "scenario_id": "time.wait_lease",
+      "obligations": [
+        "S36-028",
+        "S36-080",
+        "S36-081"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: time.wait_lease",
+      "final_authority_assertions": [
+        "independent sessions and actual challenge lock wait",
+        "xact_start precedes boundary; DB time crosses while waiter remains blocked",
+        "post-lock clock authority rejects old admission",
+        "final state/attempt/recorder/scrub asserted"
+      ]
+    },
+    {
+      "scenario_id": "time.wait_retention",
+      "obligations": [
+        "S36-069",
+        "S36-080",
+        "S36-081"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: time.wait_retention",
+      "final_authority_assertions": [
+        "real purge before threshold yields zero while parent locked",
+        "bounded prefix excludes pre-retention candidates: invocation cannot wait on a row not selected",
+        "same physical transaction crosses actual DB retention boundary",
+        "next invocation in same old transaction waits on parent then purges one using fresh DB time",
+        "final outbox empty; linked challenge retained; no forged runtime clock"
+      ]
+    },
+    {
+      "scenario_id": "retry.precedence_1",
+      "obligations": [
+        "S36-037",
+        "S36-038",
+        "S36-039",
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: retry.precedence_1",
+      "final_authority_assertions": [
+        "simultaneous budget/unusable/deadline fixtures; exact frozen precedence",
+        "count preserved; no fourth begin/claim",
+        "no challenge delivery recorder class",
+        "complete terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "retry.precedence_2",
+      "obligations": [
+        "S36-037",
+        "S36-038",
+        "S36-039",
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: retry.precedence_2",
+      "final_authority_assertions": [
+        "simultaneous budget/unusable/deadline fixtures; exact frozen precedence",
+        "count preserved; no fourth begin/claim",
+        "no challenge delivery recorder class",
+        "complete terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "retry.precedence_3",
+      "obligations": [
+        "S36-037",
+        "S36-038",
+        "S36-039",
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: retry.precedence_3",
+      "final_authority_assertions": [
+        "simultaneous budget/unusable/deadline fixtures; exact frozen precedence",
+        "count preserved; no fourth begin/claim",
+        "no challenge delivery recorder class",
+        "complete terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "terminal.begin_LEASED_0_unusable",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.begin_LEASED_0_unusable",
+      "final_authority_assertions": [
+        "supported begin from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.begin_LEASED_0_deadline",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.begin_LEASED_0_deadline",
+      "final_authority_assertions": [
+        "supported begin from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.begin_LEASED_1_unusable",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.begin_LEASED_1_unusable",
+      "final_authority_assertions": [
+        "supported begin from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.begin_LEASED_1_deadline",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.begin_LEASED_1_deadline",
+      "final_authority_assertions": [
+        "supported begin from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.begin_LEASED_2_unusable",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.begin_LEASED_2_unusable",
+      "final_authority_assertions": [
+        "supported begin from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.begin_LEASED_2_deadline",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.begin_LEASED_2_deadline",
+      "final_authority_assertions": [
+        "supported begin from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_PENDING_0_unusable",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_PENDING_0_unusable",
+      "final_authority_assertions": [
+        "supported recover from PENDING with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_PENDING_0_deadline",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_PENDING_0_deadline",
+      "final_authority_assertions": [
+        "supported recover from PENDING with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_LEASED_0_unusable",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_LEASED_0_unusable",
+      "final_authority_assertions": [
+        "supported recover from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_LEASED_0_deadline",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_LEASED_0_deadline",
+      "final_authority_assertions": [
+        "supported recover from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_LEASED_1_unusable",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_LEASED_1_unusable",
+      "final_authority_assertions": [
+        "supported recover from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_LEASED_1_deadline",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_LEASED_1_deadline",
+      "final_authority_assertions": [
+        "supported recover from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_LEASED_2_unusable",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_LEASED_2_unusable",
+      "final_authority_assertions": [
+        "supported recover from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_LEASED_2_deadline",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_LEASED_2_deadline",
+      "final_authority_assertions": [
+        "supported recover from LEASED with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_RETRY_WAIT_1_unusable",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_RETRY_WAIT_1_unusable",
+      "final_authority_assertions": [
+        "supported recover from RETRY_WAIT with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_RETRY_WAIT_1_deadline",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_RETRY_WAIT_1_deadline",
+      "final_authority_assertions": [
+        "supported recover from RETRY_WAIT with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_RETRY_WAIT_2_unusable",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_RETRY_WAIT_2_unusable",
+      "final_authority_assertions": [
+        "supported recover from RETRY_WAIT with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "terminal.recover_RETRY_WAIT_2_deadline",
+      "obligations": [
+        "S36-040",
+        "S36-042",
+        "S36-043",
+        "S36-059",
+        "S36-061",
+        "S36-062",
+        "S36-063",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: terminal.recover_RETRY_WAIT_2_deadline",
+      "final_authority_assertions": [
+        "supported recover from RETRY_WAIT with frozen attempt family",
+        "truthful unusable/deadline disposition",
+        "all four encrypted columns NULL; active lease and availability cleared",
+        "no attempt increment or recorder mutation",
+        "terminal not reselected; stale begin zero"
+      ]
+    },
+    {
+      "scenario_id": "recorder.mapping_accepted_False",
+      "obligations": [
+        "S36-032",
+        "S36-045",
+        "S36-054",
+        "S36-055",
+        "S36-060",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: recorder.mapping_accepted_False",
+      "final_authority_assertions": [
+        "actual unchanged challenge recorder",
+        "exact success/failure class and stamp mapping",
+        "recorded/not_recorded receipt boolean",
+        "false receipt preserves entire challenge/ledger",
+        "full atomic terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "recorder.mapping_accepted_True",
+      "obligations": [
+        "S36-032",
+        "S36-045",
+        "S36-054",
+        "S36-055",
+        "S36-060",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: recorder.mapping_accepted_True",
+      "final_authority_assertions": [
+        "actual unchanged challenge recorder",
+        "exact success/failure class and stamp mapping",
+        "recorded/not_recorded receipt boolean",
+        "false receipt preserves entire challenge/ledger",
+        "full atomic terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "recorder.mapping_rejected_False",
+      "obligations": [
+        "S36-032",
+        "S36-045",
+        "S36-054",
+        "S36-055",
+        "S36-060",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: recorder.mapping_rejected_False",
+      "final_authority_assertions": [
+        "actual unchanged challenge recorder",
+        "exact success/failure class and stamp mapping",
+        "recorded/not_recorded receipt boolean",
+        "false receipt preserves entire challenge/ledger",
+        "full atomic terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "recorder.mapping_rejected_True",
+      "obligations": [
+        "S36-032",
+        "S36-045",
+        "S36-054",
+        "S36-055",
+        "S36-060",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: recorder.mapping_rejected_True",
+      "final_authority_assertions": [
+        "actual unchanged challenge recorder",
+        "exact success/failure class and stamp mapping",
+        "recorded/not_recorded receipt boolean",
+        "false receipt preserves entire challenge/ledger",
+        "full atomic terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "recorder.mapping_outcome_unknown_False",
+      "obligations": [
+        "S36-032",
+        "S36-045",
+        "S36-054",
+        "S36-055",
+        "S36-060",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: recorder.mapping_outcome_unknown_False",
+      "final_authority_assertions": [
+        "actual unchanged challenge recorder",
+        "exact success/failure class and stamp mapping",
+        "recorded/not_recorded receipt boolean",
+        "false receipt preserves entire challenge/ledger",
+        "full atomic terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "recorder.mapping_outcome_unknown_True",
+      "obligations": [
+        "S36-032",
+        "S36-045",
+        "S36-054",
+        "S36-055",
+        "S36-060",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: recorder.mapping_outcome_unknown_True",
+      "final_authority_assertions": [
+        "actual unchanged challenge recorder",
+        "exact success/failure class and stamp mapping",
+        "recorded/not_recorded receipt boolean",
+        "false receipt preserves entire challenge/ledger",
+        "full atomic terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "recorder.mapping_None_False",
+      "obligations": [
+        "S36-032",
+        "S36-045",
+        "S36-054",
+        "S36-055",
+        "S36-060",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: recorder.mapping_None_False",
+      "final_authority_assertions": [
+        "actual unchanged challenge recorder",
+        "exact success/failure class and stamp mapping",
+        "recorded/not_recorded receipt boolean",
+        "false receipt preserves entire challenge/ledger",
+        "full atomic terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "recorder.mapping_None_True",
+      "obligations": [
+        "S36-032",
+        "S36-045",
+        "S36-054",
+        "S36-055",
+        "S36-060",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: recorder.mapping_None_True",
+      "final_authority_assertions": [
+        "actual unchanged challenge recorder",
+        "exact success/failure class and stamp mapping",
+        "recorded/not_recorded receipt boolean",
+        "false receipt preserves entire challenge/ledger",
+        "full atomic terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "recorder.mapping_recovery_False",
+      "obligations": [
+        "S36-032",
+        "S36-045",
+        "S36-054",
+        "S36-055",
+        "S36-060",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: recorder.mapping_recovery_False",
+      "final_authority_assertions": [
+        "actual unchanged challenge recorder",
+        "exact success/failure class and stamp mapping",
+        "recorded/not_recorded receipt boolean",
+        "false receipt preserves entire challenge/ledger",
+        "full atomic terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "recorder.mapping_recovery_True",
+      "obligations": [
+        "S36-032",
+        "S36-045",
+        "S36-054",
+        "S36-055",
+        "S36-060",
+        "S36-078"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: recorder.mapping_recovery_True",
+      "final_authority_assertions": [
+        "actual unchanged challenge recorder",
+        "exact success/failure class and stamp mapping",
+        "recorded/not_recorded receipt boolean",
+        "false receipt preserves entire challenge/ledger",
+        "full atomic terminal scrub"
+      ]
+    },
+    {
+      "scenario_id": "purge.duplicate_False",
+      "obligations": [
+        "S36-072"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: purge.duplicate_False",
+      "final_authority_assertions": [
+        "two independent physical sessions; actual wait or SKIP LOCKED evidence",
+        "both winner orders; original duplicate receipt unchanged while retained",
+        "purge deletes only child; challenge/ledger unchanged",
+        "after release/purge duplicate zero; no resurrection/orphan"
+      ]
+    },
+    {
+      "scenario_id": "purge.duplicate_True",
+      "obligations": [
+        "S36-072"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: purge.duplicate_True",
+      "final_authority_assertions": [
+        "two independent physical sessions; actual wait or SKIP LOCKED evidence",
+        "both winner orders; original duplicate receipt unchanged while retained",
+        "purge deletes only child; challenge/ledger unchanged",
+        "after release/purge duplicate zero; no resurrection/orphan"
+      ]
+    },
+    {
+      "scenario_id": "section36.enqueue_cleanup",
+      "obligations": [
+        "S36-006",
+        "S36-074",
+        "S36-075",
+        "S36-076"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: section36.enqueue_cleanup",
+      "final_authority_assertions": [
+        "complete previously added method freshly executed",
+        "unchanged expected frozen semantics",
+        "actual independent sessions/lock state and final authority snapshots",
+        "real restart with unchanged guard/data directory; exact refusal and no partial mutation where applicable"
+      ]
+    },
+    {
+      "scenario_id": "section36.begin_recovery",
+      "obligations": [
+        "S36-022",
+        "S36-028",
+        "S36-029",
+        "S36-080",
+        "S36-081"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: section36.begin_recovery",
+      "final_authority_assertions": [
+        "complete previously added method freshly executed",
+        "unchanged expected frozen semantics",
+        "actual independent sessions/lock state and final authority snapshots",
+        "real restart with unchanged guard/data directory; exact refusal and no partial mutation where applicable"
+      ]
+    },
+    {
+      "scenario_id": "section36.restart",
+      "obligations": [
+        "S36-087",
+        "S36-090",
+        "S36-091",
+        "S36-092",
+        "S36-093",
+        "S36-098",
+        "S36-106"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: section36.restart",
+      "final_authority_assertions": [
+        "complete previously added method freshly executed",
+        "unchanged expected frozen semantics",
+        "actual independent sessions/lock state and final authority snapshots",
+        "real restart with unchanged guard/data directory; exact refusal and no partial mutation where applicable"
+      ]
+    },
+    {
+      "scenario_id": "regression.all11",
+      "obligations": [
+        "S36-107"
+      ],
+      "status": "PASS",
+      "executed": true,
+      "harness_location": "test/postgres/every8dSettingsEmailOutboxClosure.py :: regression.all11",
+      "final_authority_assertions": [
+        "all 11 exact canonical prerequisite regression scripts executed from pinned base",
+        "fresh isolated PG17 container",
+        "original assertions unmodified",
+        "zero surviving regression databases/backends/containers"
+      ]
+    }
+  ]
+}

@@ -97,7 +97,8 @@ jobs:
               || "$migration" == *"202610020001_every8d_settings_auth_foundation.sql" \
               || "$migration" == *"202610060001_every8d_settings_email_challenge_foundation.sql" \
               || "$migration" == *"202610140001_every8d_settings_auth_orchestration.sql" \
-              || "$migration" == *"202610220001_every8d_settings_session_consumption.sql" ]]; then
+              || "$migration" == *"202610220001_every8d_settings_session_consumption.sql" \
+              || "$migration" == *"202610230001_every8d_settings_auth_email_outbox.sql" ]]; then
               continue
             fi
             echo "Applying $migration"
@@ -160,3 +161,33 @@ jobs:
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: bash test/postgres/every8dSettingsSessionConsumption.sh
+  postgres-email-outbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_DB: wincrm_test
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd "pg_isready -U postgres -d wincrm_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Prove all 107 C3c-3 obligations, guard negatives, rollback and regressions
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: bash test/postgres/every8dSettingsEmailOutboxSection36.sh
