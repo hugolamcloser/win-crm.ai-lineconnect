@@ -1,3 +1,40 @@
+# R1 independent-review correction: local validation PASS; corrected-head CI pending
+
+Authorized scope: one local TypeScript parseBegin receipt-semantic correction on the existing codex/c3c3-settings-auth-email-outbox branch and PR #118. Before editing, GitHub confirmed OPEN/unmerged, exactly one commit, head faf72b7f7977010a708f261f53c9ec6d106e728f, base 0817596034b69c1badca2fdac1bf56b0490e4a3d. The remote branch matched that head and the worktree was clean. No branch/worktree was created.
+
+## Reproduction and correction
+
+Before changing runtime TypeScript, all three independent-review counterexamples returned applied: EXPIRED/expired_pre_send/count 0 with about ten minutes remaining; CANCELLED/cancelled_pre_send/count 0 after deadline; FAILED_TERMINAL/retry_deadline_exhausted/count 1 with about ten minutes remaining. The three permanent rejection regressions then failed against that pre-fix build (0/3 PASS), with sanitized category-only assertions. No protected receipt values were logged.
+
+The internal validBeginTerminalSemantics predicate now validates a closed state/disposition/count/window matrix using existing timestamp-parser bigint microseconds and exactly 10000000n. windowFits means returned db_now + ten seconds < returned delivery_deadline_at. EXPIRED/count 0 and retry_deadline_exhausted/count 1..2 require an exhausted window; CANCELLED/count 0 requires a fitting window; retry_unusable/count 1..2 accepts either window state. Equality exhausts the window. No local wall clock, lifecycle usability, challenge authority, SQL decision, RPC/API or public result model was added or changed. Existing terminal NULL shape, terminal_at=db_now, job/fence identity and all SENDING validations remain intact. Invalid receipts return only the existing sanitized repository_contract_violation result. Transport/RPC failures remain repository_unavailable without retry.
+
+## Executed final local validation
+
+| Check | Result |
+| --- | --- |
+| Three reviewer counterexamples after correction | 3/3 repository_contract_violation |
+| New R1 tests | 71/71 PASS: 3 reproductions, 18 microsecond boundary cases, 18 invalid counts, 12 invalid families, 6 terminal shapes, 3 SENDING positives, 11 SENDING negatives |
+| Complete repository suite / all six methods | 414/414 PASS (previously 343) |
+| Complete focused C3c-3 application | 635/635 PASS (previously 564); recovery 23, crypto 92, preparation 30, remaining application 76 unchanged |
+| npm run typecheck | PASS |
+| npm test | 1596/1596 PASS (previously 1525), no failed/skipped/cancelled/todo |
+| npm run build | PASS |
+| Protected original 60 artifacts against approved faf72b7 state | 60/60 byte-identical, including the four previously authorized SQL/fingerprint artifacts |
+
+Boundary receipts use literal timestamps at one microsecond before/equal/after the ten-second boundary. retry_unusable counts 1 and 2 both pass in all three window states, so receipt parsing does not infer lifecycle usability from time. SENDING counts 1..3 pass; identity, NULL terminal fields, attempt_started_at=db_now, exact ten-second provider duration, and strict provider-before-lease/deadline checks remain enforced. All six methods retain unavailable/contract-violation taxonomy in the complete repository suite.
+
+Preserved without local PG rerun: 107/107 frozen Section-36 obligations, 213 PG17 scenarios, 47 independent-session races, 1091 direct-owner negatives, 23 positives, 11/11 existing DB regressions and 2/2 SQL/TS AAD equality. Their DB/proof/frozen sources remain unchanged; this R1 validation does not replace or rewrite their original receipts/certificate.
+
+DATABASE_AUTHORITY_CHANGED: NO. FROZEN_CONTRACT_CHANGED: NO. Frozen contract SHA-256: C3FF909BC66FB19398694CB16CC1AD07505E68C2603E73E780C67EAA83C0AEBA. No migration, rollback, PostgreSQL harness/proof SQL, Section-36, crypto, preparation or config changes. The only runtime diff is the internal begin-terminal predicate and its call in the TypeScript repository. Related changes are existing repository tests and this evidence log.
+
+A guarded editing script initially refused to match because it assumed CRLF rather than the existing source line endings; it wrote no runtime file. The script was corrected to preserve existing line endings before applying the same authorized predicate. No runtime-semantic correction beyond R1 was needed.
+
+Logs: C:/Users/User/AppData/Local/Temp/c3c3-r1-repository.log, c3c3-r1-focused.log, c3c3-r1-typecheck.log, c3c3-r1-npm-test.log and c3c3-r1-build.log. This pre-commit snapshot records local results. The one normal correction commit, its resulting PR head and the first automatically triggered corrected-head CI run are verified and reported separately after push; original run #129 attempt 1 remains historical evidence for the old head only. No manual workflow invocation/rerun is authorized.
+
+PRODUCTION_CHANGES: NONE. C3c-4/C3c-5 NOT_STARTED_NOT_AUTHORIZED. No merge, deployment, production DB/keys, activation, provider/email/SMS sending, Phase2F or LINE changes. Rollback path is reverting this single correction commit through review. Next gate after successful corrected-head CI is independent C3c-3 R1 re-review.
+
+# Historical implementation evidence before R1
+
 # Current status: local implementation and 107-obligation proof closure PASS; independent review required
 
 This snapshot records the authorized local guard correction and final local delivery gates. The one unmerged PR and its FIRST hosted CI result are reported by GitHub and in the task's delivery response after this snapshot. No merge/deployment/activation/provider sending is authorized.

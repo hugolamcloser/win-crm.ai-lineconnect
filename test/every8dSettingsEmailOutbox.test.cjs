@@ -133,3 +133,112 @@ test("recover: PENDING cannot have a previously recorded provider attempt", asyn
   // Assert only safe categories; do not print protected receipt fields on failure.
   violation(result);
 });
+
+
+function beginTerminalRow(state, disposition, count, deadline) {
+  return { ...F.responses().beginSend, state, terminal_disposition: disposition, attempt_count: count,
+    lease_id: null, attempt_started_at: null, provider_deadline_at: null, lease_expires_at: null,
+    terminal_at: F.NOW, delivery_deadline_at: deadline };
+}
+for (const [name, state, disposition, count, deadline] of [
+  ["EXPIRED with a full window", "EXPIRED", "expired_pre_send", 0, F.DEADLINE],
+  ["CANCELLED after the deadline", "CANCELLED", "cancelled_pre_send", 0, F.AVAILABLE],
+  ["retry deadline exhausted with a full window", "FAILED_TERMINAL", "retry_deadline_exhausted", 1, F.DEADLINE]
+]) {
+  test(`beginSend R1 reviewer counterexample: ${name}`, async () => {
+    const { repo, calls } = F.repository({ data: [beginTerminalRow(state, disposition, count, deadline)], error: null });
+    violation(await repo.beginSend(F.inputs().beginSend));
+    assert.equal(calls.length, 1);
+  });
+}
+
+
+// Literal deadlines differ by one microsecond around the frozen ten-second boundary.
+const beginWindows = [
+  ["full window by one microsecond", "2026-10-26T00:00:10.000002Z"],
+  ["exact window equality", "2026-10-26T00:00:10.000001Z"],
+  ["window exhausted by one microsecond", "2026-10-26T00:00:10.000000Z"]
+];
+for (const [state, disposition, count, expected] of [
+  ["EXPIRED", "expired_pre_send", 0, [false, true, true]],
+  ["CANCELLED", "cancelled_pre_send", 0, [true, false, false]],
+  ["FAILED_TERMINAL", "retry_deadline_exhausted", 1, [false, true, true]],
+  ["FAILED_TERMINAL", "retry_deadline_exhausted", 2, [false, true, true]],
+  ["FAILED_TERMINAL", "retry_unusable", 1, [true, true, true]],
+  ["FAILED_TERMINAL", "retry_unusable", 2, [true, true, true]]
+]) {
+  for (const [index, [name, deadline]] of beginWindows.entries()) {
+    test("beginSend R1 boundary: " + disposition + " count " + count + " / " + name, async () => {
+      const { repo } = F.repository({ data: [beginTerminalRow(state, disposition, count, deadline)], error: null });
+      const result = await repo.beginSend(F.inputs().beginSend);
+      if (expected[index]) {
+        assert.ok(result.outcome === "applied", "valid terminal receipt applied");
+        assert.ok(result.receipt.state === state && result.receipt.attemptCount === count &&
+          result.receipt.terminalDisposition === disposition, "terminal classification preserved");
+      } else violation(result);
+    });
+  }
+}
+for (const [state, disposition, deadline, counts] of [
+  ["EXPIRED", "expired_pre_send", F.PROVIDER, [-1, 1, 2, 3, 4]],
+  ["CANCELLED", "cancelled_pre_send", F.DEADLINE, [-1, 1, 2, 3, 4]],
+  ["FAILED_TERMINAL", "retry_deadline_exhausted", F.PROVIDER, [-1, 0, 3, 4]],
+  ["FAILED_TERMINAL", "retry_unusable", F.DEADLINE, [-1, 0, 3, 4]]
+]) {
+  for (const count of counts) {
+    test("beginSend R1 invalid terminal count: " + disposition + " / " + count, async () => {
+      const { repo } = F.repository({ data: [beginTerminalRow(state, disposition, count, deadline)], error: null });
+      violation(await repo.beginSend(F.inputs().beginSend));
+    });
+  }
+}
+for (const [state, disposition, count] of [
+  ["EXPIRED", "cancelled_pre_send", 0], ["CANCELLED", "expired_pre_send", 0],
+  ["FAILED_TERMINAL", "expired_pre_send", 0], ["EXPIRED", "retry_unusable", 1],
+  ["FAILED_TERMINAL", "sender_unavailable_pre_send", 0],
+  ["FAILED_TERMINAL", "provider_rejected", 1], ["FAILED_TERMINAL", "retry_budget_exhausted", 3],
+  ["ACCEPTED", "accepted", 1], ["DELIVERY_OUTCOME_UNKNOWN", "delivery_outcome_unknown", 1],
+  ["PENDING", null, 0], ["RETRY_WAIT", null, 1], ["LEASED", null, 0]
+]) {
+  test("beginSend R1 invalid terminal family: " + state + " / " + disposition, async () => {
+    const { repo } = F.repository({ data: [beginTerminalRow(state, disposition, count, F.PROVIDER)], error: null });
+    violation(await repo.beginSend(F.inputs().beginSend));
+  });
+}
+for (const [field, value] of [
+  ["lease_id", F.LEASE], ["attempt_started_at", F.NOW], ["provider_deadline_at", F.PROVIDER],
+  ["lease_expires_at", F.EXPIRES], ["terminal_at", null], ["terminal_at", F.RESOLVED]
+]) {
+  test("beginSend R1 terminal shape remains closed: " + field + " / " + (value === null ? "null" : "timestamp or identity"), async () => {
+    const row = { ...beginTerminalRow("EXPIRED", "expired_pre_send", 0, F.PROVIDER), [field]: value };
+    const { repo } = F.repository({ data: [row], error: null });
+    violation(await repo.beginSend(F.inputs().beginSend));
+  });
+}
+for (const count of [1, 2, 3]) {
+  test("beginSend R1 SENDING positive control count " + count, async () => {
+    const { repo } = F.repository({ data: [{ ...F.responses().beginSend, attempt_count: count }], error: null });
+    const result = await repo.beginSend(F.inputs().beginSend);
+    assert.ok(result.outcome === "applied", "valid send authority applied");
+    assert.ok(result.receipt.attemptCount === count && result.receipt.leaseId === F.LEASE && result.receipt.fence === "1" &&
+      result.receipt.terminalAt === null && result.receipt.terminalDisposition === null &&
+      result.receipt.attemptStartedAt === F.NOW && result.receipt.dbNow === F.NOW &&
+      result.receipt.providerDeadlineAt === F.PROVIDER && result.receipt.leaseExpiresAt === F.EXPIRES &&
+      result.receipt.deliveryDeadlineAt === F.DEADLINE, "send authority preserved");
+  });
+}
+for (const [name, mutation] of [
+  ["zero attempts", { attempt_count: 0 }], ["fourth attempt", { attempt_count: 4 }],
+  ["lease identity", { lease_id: F.OTHER }], ["fence identity", { fence: "2" }],
+  ["terminal disposition", { terminal_disposition: "accepted" }], ["terminal timestamp", { terminal_at: F.NOW }],
+  ["attempt start", { attempt_started_at: F.RESOLVED }],
+  ["short provider duration", { provider_deadline_at: "2026-10-26T00:00:10.000000Z" }],
+  ["long provider duration", { provider_deadline_at: "2026-10-26T00:00:10.000002Z" }],
+  ["lease equality", { lease_expires_at: F.PROVIDER }],
+  ["delivery equality", { delivery_deadline_at: F.PROVIDER }]
+]) {
+  test("beginSend R1 SENDING rejects changed " + name, async () => {
+    const { repo } = F.repository({ data: [{ ...F.responses().beginSend, ...mutation }], error: null });
+    violation(await repo.beginSend(F.inputs().beginSend));
+  });
+}

@@ -147,6 +147,14 @@ function parseClaim(row: Row): Every8dSettingsEmailOutboxClaimReceipt {
 export function readValidatedEvery8dSettingsEmailOutboxClaim(value: Every8dSettingsEmailOutboxClaimReceipt): Every8dSettingsEmailOutboxClaimReceipt | null {
   return typeof value === "object" && value !== null ? validatedClaims.get(value) ?? null : null;
 }
+function validBeginTerminalSemantics(row: Row, count: number, nowMicros: bigint, deadlineMicros: bigint): boolean {
+  const windowFits = nowMicros + 10000000n < deadlineMicros;
+  if (row.state === "EXPIRED") return row.terminal_disposition === "expired_pre_send" && count === 0 && !windowFits;
+  if (row.state === "CANCELLED") return row.terminal_disposition === "cancelled_pre_send" && count === 0 && windowFits;
+  return row.state === "FAILED_TERMINAL" && (count === 1 || count === 2) &&
+    (row.terminal_disposition === "retry_unusable" ||
+      (row.terminal_disposition === "retry_deadline_exhausted" && !windowFits));
+}
 function parseBegin(row: Row, args: Record<string, unknown>): Every8dSettingsEmailOutboxBeginReceipt {
   const r = exact(row, ["job_id", "state", "attempt_count", "lease_id", "fence", "attempt_started_at", "provider_deadline_at", "lease_expires_at", "delivery_deadline_at", "terminal_disposition", "terminal_at", "db_now"]);
   need(uuid(r.job_id, true) === args.input_job_id && parseEvery8dSettingsEmailOutboxFence(r.fence) === args.input_fence);
@@ -156,8 +164,7 @@ function parseBegin(row: Row, args: Record<string, unknown>): Every8dSettingsEma
     const started = timestamp(r.attempt_started_at), provider = timestamp(r.provider_deadline_at), lease = timestamp(r.lease_expires_at);
     need(started.micros === now.micros && provider.micros - started.micros === 10000000n && provider.micros < lease.micros && provider.micros < deadline.micros);
   } else {
-    need(["FAILED_TERMINAL", "CANCELLED", "EXPIRED"].includes(text(r.state)) && terminal(r.state, r.terminal_disposition, count));
-    need(r.terminal_disposition === "retry_unusable" || r.terminal_disposition === "retry_deadline_exhausted" || r.terminal_disposition === "cancelled_pre_send" || r.terminal_disposition === "expired_pre_send");
+    need(validBeginTerminalSemantics(r, count, now.micros, deadline.micros));
     need(r.lease_id === null && r.attempt_started_at === null && r.provider_deadline_at === null && r.lease_expires_at === null && timestamp(r.terminal_at).micros === now.micros);
   }
   return Object.freeze({ jobId: r.job_id, state: r.state, attemptCount: count, leaseId: r.lease_id, fence: r.fence,
