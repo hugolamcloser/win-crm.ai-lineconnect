@@ -67,7 +67,8 @@ async function invokeOnce(adapter: Every8dSettingsEmailProvider, input: Every8dS
       if (delayMs <= 0) { finish(null, true); return; }
       cancelTimer = clock.schedule(delayMs, onAbort);
       if (settled) { cancelTimer(); return; }
-      if (clock.nowNs() >= deadline || cancellation?.aborted) { finish(null, true); return; }
+      // Scheduling/processing overhead must still leave a full millisecond at submission.
+      if (deadline - clock.nowNs() < 1000000n || cancellation?.aborted) { finish(null, true); return; }
       invoked = true;
       Promise.resolve(adapter.send(input!)).then((value) => {
         if (settled) return;

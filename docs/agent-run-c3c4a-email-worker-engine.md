@@ -60,7 +60,7 @@ The focused tests also prove batch ten, concurrent ten, shared-repository overla
 ## Approaches and correction budget
 
 - Implementation correction loops: 2 of 2 used. First corrected the missing-historical-key fixture to a valid nonempty keyring and closed the pre-invocation deadline edge. Second released late-handler request references and added boundary proofs. All mandatory application checks pass.
-- Reviewer correction loops: 0 of 1; independent implementation review is the next gate.
+- Reviewer correction loops: 1 of 1; the user explicitly authorized the R2-only owner cycle recorded below.
 - Local harness setup adjustments: new shell files normalized to LF; Docker readiness waits for the final postmaster. Regular WSL user lacked Docker socket permission; dedicated tests use WSL root. No production service was accessed.
 - Rejected: provider registry/config parsing, real transport, retry timers, challenge recorder calls, lifecycle polling/recover/purge/signals, new SQL or production startup integration.
 
@@ -79,7 +79,36 @@ REAL_EMAIL_PROVIDER: NOT_IMPLEMENTED
 WORKER_RUNTIME_ENTRYPOINT: NOT_IMPLEMENTED
 PRODUCTION_EMAIL: NOT_POSSIBLE_FROM_THIS_SLICE
 PRODUCTION_CHANGES: NONE
-NEXT_GATE: INDEPENDENT_C3C_4A_IMPLEMENTATION_REVIEW
+NEXT_GATE: INDEPENDENT_C3C_4A_R2_RE_REVIEW
 ```
 
 Stop for user review after current PR checks pass. No merge or deployment is authorized.
+
+## R2 owner correction: one explicitly authorized cycle
+
+The user authorized corrections for R2-1 and R2-2 only, using this existing owner chat, worktree and branch. Reviewed head: `73f332356bb1479b4587c933537db495c61bdb39`, initial CI #132 SUCCESS. No new worktree, branch switch, history rewrite or scope expansion was authorized or performed.
+
+The pre-code plan identified only the worker, provider result validator, focused tests and this log. The main risks were send permission after scheduling overhead and output construction from getter values different from those validated. The smallest plan was a fresh minimum-one-millisecond guard immediately before invocation, plus immutable field snapshots read once; no authority, transport, configuration or lifecycle changes.
+
+- R2-1: immediately before marking invocation and calling the adapter, require `deadline - clock.nowNs() >= 1000000n` and no cancellation. Scheduling/processing overhead leaving 999999ns, 1ns or zero produces no provider call and no finalization; confirmed SENDING remains for existing DB recovery. Exactly 1000000ns is inclusive and preserves the original deadline. No rounding up, new window or reused authority.
+- R2-2: snapshot outcome, evidence and provider message ID once for the accepted shape; snapshot outcome/evidence once for refusal/retry shapes, and kind once for the exact retry evidence object. Validate and freeze only those local snapshots. Preserve exact 1-255 printable non-space ASCII ID rules and the existing closed evidence enums. Getter exceptions and malformed shapes remain outcome_unknown. Vendor truth remains a future adapter responsibility.
+- Added 16 deterministic tests. The pre-fix targeted run reproduced seven failures; after correction all 68 focused tests pass. Cases include both sub-millisecond boundaries, exact-one-millisecond and actual-deadline equality, timer cancellation/listener removal, late callback suppression, changing and throwing getters, invalid-first evidence, frozen normalized output and exact worker finalization mappings. Optional synchronous send throw and immediate in-send cancellation are covered without production changes. Existing focused tests are preserved byte-for-byte as a prefix.
+
+| Final local check | Result |
+| --- | --- |
+| Focused worker tests | PASS: 68/68, no skips/cancellations |
+| `npm run typecheck` | PASS |
+| `npm test` | PASS: 1,664/1,664 |
+| `npm run build` | PASS |
+| Worker PG17 proof | PASS: all eight real-repository cases |
+| Full unchanged C3c-3 proof | PASS: 107/107 obligations, zero missing/partial; 213 scenarios, 47 races |
+| All 11 prerequisite DB regressions | PASS |
+| Disposable proof cleanup | PASS: no surviving harness backends, databases or regression resources |
+| Protected SQL | 30 files unchanged against canonical base blobs and byte-identical to the original base checkout; no SQL edit or migration |
+| Dependencies/startup/LINE/OAuth/Phase2F/Railway | No changes |
+
+Local R2 evidence is retained under ignored `.temp/r2-*` files. One focused child commit is added after the reviewed head and normally pushed to PR #119; corrected-head automatic CI must pass before final completion is reported. Its authoritative result is attached to that PR. No further implementation or reviewer correction cycle is included in this authorization.
+
+Rollback: revert this single R2 correction commit to restore the reviewed implementation. No database, configuration, credentials or production rollback is needed. No real provider, production wiring, C3c-4b integration or production access was implemented or tested. Manual production smoke tests remain inapplicable to this unconnected slice.
+
+Next gate: `INDEPENDENT_C3C_4A_R2_RE_REVIEW`. Merge authorization is not granted. Stop for user review after corrected-head CI.

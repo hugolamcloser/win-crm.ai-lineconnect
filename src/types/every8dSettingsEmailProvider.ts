@@ -39,19 +39,24 @@ function exact(value: unknown, keys: readonly string[]): value is Record<string,
 /** Defensive adapter-boundary validation. HTTP status or an arbitrary boolean is not evidence. */
 export function validateEvery8dSettingsEmailProviderResult(value: unknown): Every8dSettingsEmailProviderResult {
   try {
-    if (exact(value, ["outcome", "evidence", "providerMessageId"]) && value.outcome === "accepted" &&
-      value.evidence === "authoritative_acceptance" && typeof value.providerMessageId === "string" &&
-      value.providerMessageId.length >= 1 && value.providerMessageId.length <= 255 &&
-      !/[^\x21-\x7e]/.test(value.providerMessageId)) {
-      return Object.freeze({ outcome: "accepted", evidence: "authoritative_acceptance", providerMessageId: value.providerMessageId });
+    if (exact(value, ["outcome", "evidence", "providerMessageId"])) {
+      const { outcome, evidence, providerMessageId } = value;
+      if (outcome === "accepted" && evidence === "authoritative_acceptance" && typeof providerMessageId === "string" &&
+        providerMessageId.length >= 1 && providerMessageId.length <= 255 && !/[^\x21-\x7e]/.test(providerMessageId)) {
+        return Object.freeze({ outcome, evidence, providerMessageId });
+      }
+      return unknownResult;
     }
     if (exact(value, ["outcome", "evidence"])) {
-      if (value.outcome === "rejected" && value.evidence === "definitive_refusal") {
-        return Object.freeze({ outcome: "rejected", evidence: "definitive_refusal" });
+      const { outcome, evidence } = value;
+      if (outcome === "rejected" && evidence === "definitive_refusal") {
+        return Object.freeze({ outcome, evidence });
       }
-      if (value.outcome === "not_accepted_retryable" && exact(value.evidence, ["kind"]) &&
-        (value.evidence.kind === "transport_not_started" || value.evidence.kind === "authoritative_non_acceptance")) {
-        return Object.freeze({ outcome: "not_accepted_retryable", evidence: Object.freeze({ kind: value.evidence.kind }) });
+      if (outcome === "not_accepted_retryable" && exact(evidence, ["kind"])) {
+        const { kind } = evidence;
+        if (kind === "transport_not_started" || kind === "authoritative_non_acceptance") {
+          return Object.freeze({ outcome, evidence: Object.freeze({ kind }) });
+        }
       }
     }
     return unknownResult;

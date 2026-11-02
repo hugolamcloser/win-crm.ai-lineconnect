@@ -312,3 +312,146 @@ test("decryption is attempted once per lease and no worker-owned plaintext buffe
   assert.ok(!/Buffer\.(from|alloc|concat)/.test(source) && source.includes("finally { input = undefined; }"));
   h.fake.fail(); await tick(); assert.equal(h.finalInputs.length, 1);
 });
+
+function trackedCancellation() {
+  const controller = new AbortController(), listeners = new Set();
+  const signal = controller.signal;
+  const add = signal.addEventListener.bind(signal), remove = signal.removeEventListener.bind(signal);
+  let additions = 0, removals = 0;
+  signal.addEventListener = (type, listener, options) => {
+    if (type === "abort") { additions += 1; listeners.add(listener); }
+    return add(type, listener, options);
+  };
+  signal.removeEventListener = (type, listener, options) => {
+    if (type === "abort") { removals += 1; listeners.delete(listener); }
+    return remove(type, listener, options);
+  };
+  return { controller, signal, listeners, counts: () => ({ additions, removals }) };
+}
+for (const remaining of [999999n, 1n, 0n]) test(`R2-1: scheduling overhead leaves ${remaining}ns and cannot invoke provider`, async () => {
+  const h = setup(), cancellation = trackedCancellation();
+  let lateTimer, timerCancellations = 0;
+  const clock = { ...h.time.clock, schedule(delay, callback) {
+    lateTimer = callback;
+    const cancel = h.time.clock.schedule(delay, callback);
+    h.time.elapseNs(10000000000n - remaining);
+    return () => { timerCancellations += 1; cancel(); };
+  } };
+  const engine = worker({ ...h.dependencies, clock });
+  outcome(await engine.runBatch(cancellation.signal), "local_budget_exhausted", "not_attempted");
+  assert.ok(h.events.join(",") === "claim,begin,begin_confirmed", "confirmed SENDING is left to existing recovery");
+  assert.ok(h.fake.stats.calls === 0 && h.finalInputs.length === 0 && h.time.timers.size === 0);
+  assert.ok(timerCancellations === 1 && cancellation.listeners.size === 0 &&
+    cancellation.counts().additions === 1 && cancellation.counts().removals === 1, "timer and abort listener removed");
+  lateTimer(); cancellation.controller.abort(); h.time.advanceNs(20000000000n); await tick();
+  assert.ok(h.fake.stats.calls === 0 && h.finalInputs.length === 0 && h.calls.length === 2, "late callbacks cannot reuse claim/begin authority");
+});
+test("R2-1: exactly one millisecond at final guard permits one invocation, never a fresh window", async () => {
+  const h = setup({ scenario: "late" }), cancellation = trackedCancellation();
+  let observedDeadline;
+  const clock = { ...h.time.clock, schedule(delay, callback) {
+    const cancel = h.time.clock.schedule(delay, callback);
+    h.time.elapseNs(9999000000n);
+    return cancel;
+  } };
+  const engine = worker({ ...h.dependencies, clock });
+  const running = engine.runBatch(cancellation.signal); await tick();
+  assert.ok(h.fake.stats.calls === 1 && h.finalInputs.length === 0 && cancellation.listeners.size === 1,
+    "the minimum is inclusive: exactly 1000000ns permits invocation");
+  observedDeadline = [...h.time.timers][0].at;
+  assert.ok(observedDeadline === 10000000000n, "original durable-derived deadline is preserved");
+  h.time.advanceNs(1000000n); outcome(await running, "outcome_unknown");
+  assert.ok(h.fake.stats.aborts === 1 && h.finalInputs.length === 1 && h.time.timers.size === 0 && cancellation.listeners.size === 0);
+  h.fake.complete(); await tick(); assert.ok(h.fake.stats.calls === 1 && h.finalInputs.length === 1);
+});
+test("R2-1: cancellation during scheduling cannot submit and removes the installed timer", async () => {
+  const h = setup(), cancellation = trackedCancellation();
+  let lateTimer, timerCancellations = 0;
+  const clock = { ...h.time.clock, schedule(delay, callback) {
+    lateTimer = callback;
+    const cancel = h.time.clock.schedule(delay, callback);
+    cancellation.controller.abort();
+    return () => { timerCancellations += 1; cancel(); };
+  } };
+  outcome(await worker({ ...h.dependencies, clock }).runBatch(cancellation.signal), "local_budget_exhausted", "not_attempted");
+  lateTimer(); await tick();
+  assert.ok(h.fake.stats.calls === 0 && h.finalInputs.length === 0 && timerCancellations === 1 &&
+    h.time.timers.size === 0 && cancellation.listeners.size === 0);
+});
+function providerAccessorFixture(category, options = {}) {
+  const reads = { outcome: 0, evidence: 0, kind: 0, providerMessageId: 0 };
+  function field(target, name, first, later) {
+    Object.defineProperty(target, name, { enumerable: true, get() {
+      reads[name] += 1;
+      if (options.throwAt === name) throw new Error("synthetic private accessor failure");
+      return reads[name] === 1 ? first : later;
+    } });
+  }
+  const value = {};
+  field(value, "outcome", category, "invalid");
+  if (category === "not_accepted_retryable") {
+    const evidence = {};
+    field(evidence, "kind", options.invalidFirst ? "invalid" : "transport_not_started", options.invalidFirst ? "transport_not_started" : "invalid");
+    field(value, "evidence", evidence, { kind: "invalid" });
+  } else {
+    field(value, "evidence", category === "accepted" ? "authoritative_acceptance" : "definitive_refusal", "invalid");
+    if (category === "accepted") field(value, "providerMessageId", options.invalidFirst ? "bad id" : "synthetic-provider-id",
+      options.invalidFirst ? "synthetic-provider-id" : "bad id");
+  }
+  return { value, reads };
+}
+for (const category of ["accepted", "rejected", "not_accepted_retryable"]) test(`R2-2: ${category} snapshots each relevant getter once and freezes only validated values`, async () => {
+  const direct = providerAccessorFixture(category), normalized = validate(direct.value);
+  assert.ok(normalized.outcome === category && Object.isFrozen(normalized));
+  assert.ok(direct.reads.outcome === 1 && direct.reads.evidence === 1 &&
+    direct.reads.providerMessageId === (category === "accepted" ? 1 : 0) &&
+    direct.reads.kind === (category === "not_accepted_retryable" ? 1 : 0), "single read for every relevant field");
+  if (category === "accepted") assert.ok(normalized.providerMessageId === "synthetic-provider-id", "validated ID snapshot is preserved exactly");
+  if (category === "not_accepted_retryable") assert.ok(Object.isFrozen(normalized.evidence) && normalized.evidence.kind === "transport_not_started");
+  const fixture = providerAccessorFixture(category);
+  let calls = 0;
+  const h = setup({ fake: { adapter: { send: () => { calls += 1; return Promise.resolve(fixture.value); } } } });
+  outcome(await h.engine.runBatch(), category);
+  assert.ok(calls === 1 && h.finalInputs.length === 1 && h.finalInputs[0].input_provider_outcome === category &&
+    h.finalInputs[0].input_non_acceptance_proven === (category === "not_accepted_retryable"));
+  assert.ok(h.finalInputs[0].input_provider_message_id === (category === "accepted" ? "synthetic-provider-id" : null));
+  assert.ok(fixture.reads.outcome === 1 && fixture.reads.evidence === 1 &&
+    fixture.reads.providerMessageId === (category === "accepted" ? 1 : 0) && fixture.reads.kind === (category === "not_accepted_retryable" ? 1 : 0));
+});
+for (const category of ["accepted", "not_accepted_retryable"]) test(`R2-2: invalid first ${category} snapshot cannot become validated through rereads`, async () => {
+  const direct = providerAccessorFixture(category, { invalidFirst: true });
+  assert.ok(validate(direct.value).outcome === "outcome_unknown");
+  const fixture = providerAccessorFixture(category, { invalidFirst: true });
+  const h = setup({ fake: { adapter: { send: async () => fixture.value } } });
+  outcome(await h.engine.runBatch(), "outcome_unknown");
+  assert.ok(h.finalInputs.length === 1 && h.finalInputs[0].input_provider_outcome === "outcome_unknown" &&
+    h.finalInputs[0].input_non_acceptance_proven === false && h.finalInputs[0].input_provider_message_id === null);
+  assert.ok(Object.values(fixture.reads).every((count) => count <= 1));
+});
+for (const field of ["outcome", "evidence", "kind", "providerMessageId"]) test(`R2-2: throwing ${field} getter becomes unknown without raw exception or retry evidence`, async () => {
+  const category = field === "kind" ? "not_accepted_retryable" : "accepted";
+  const direct = providerAccessorFixture(category, { throwAt: field });
+  assert.ok(validate(direct.value).outcome === "outcome_unknown");
+  const fixture = providerAccessorFixture(category, { throwAt: field });
+  const h = setup({ fake: { adapter: { send: async () => fixture.value } } });
+  const result = await h.engine.runBatch(); outcome(result, "outcome_unknown");
+  assert.ok(h.finalInputs.length === 1 && h.finalInputs[0].input_provider_outcome === "outcome_unknown" &&
+    h.finalInputs[0].input_non_acceptance_proven === false && h.finalInputs[0].input_provider_message_id === null);
+  assert.ok(!JSON.stringify(result).includes("accessor") && Object.values(fixture.reads).every((count) => count <= 1));
+});
+test("R2: non-async synchronous send throw remains unknown with one finalize", async () => {
+  let calls = 0;
+  const h = setup({ fake: { adapter: { send() { calls += 1; throw new Error("synthetic send failure"); } } } });
+  outcome(await h.engine.runBatch(), "outcome_unknown");
+  assert.ok(calls === 1 && h.finalInputs.length === 1 && h.finalInputs[0].input_non_acceptance_proven === false);
+});
+test("R2: immediate cancellation inside send settles unknown once and ignores its returned acceptance", async () => {
+  const cancellation = trackedCancellation(); let calls = 0;
+  const h = setup({ fake: { adapter: { send() {
+    calls += 1; cancellation.controller.abort();
+    return Promise.resolve({ outcome: "accepted", evidence: "authoritative_acceptance", providerMessageId: "synthetic-provider-id" });
+  } } } });
+  outcome(await h.engine.runBatch(cancellation.signal), "outcome_unknown"); await tick();
+  assert.ok(calls === 1 && h.finalInputs.length === 1 && h.finalInputs[0].input_non_acceptance_proven === false &&
+    h.time.timers.size === 0 && cancellation.listeners.size === 0);
+});
