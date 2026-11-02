@@ -20,6 +20,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 const states = ["PENDING", "LEASED", "SENDING", "RETRY_WAIT", "ACCEPTED", "FAILED_TERMINAL", "DELIVERY_OUTCOME_UNKNOWN", "CANCELLED", "EXPIRED"];
 const recordings = ["not_applicable", "recorded", "not_recorded"];
 const validatedClaims = new WeakMap<object, Every8dSettingsEmailOutboxClaimReceipt>();
+const validatedBegins = new WeakMap<object, Every8dSettingsEmailOutboxBeginReceipt>();
 class InvalidContract extends Error {}
 function need(condition: unknown): asserts condition { if (!condition) throw new InvalidContract(); }
 function text(value: unknown): string { need(typeof value === "string"); return value; }
@@ -167,9 +168,15 @@ function parseBegin(row: Row, args: Record<string, unknown>): Every8dSettingsEma
     need(validBeginTerminalSemantics(r, count, now.micros, deadline.micros));
     need(r.lease_id === null && r.attempt_started_at === null && r.provider_deadline_at === null && r.lease_expires_at === null && timestamp(r.terminal_at).micros === now.micros);
   }
-  return Object.freeze({ jobId: r.job_id, state: r.state, attemptCount: count, leaseId: r.lease_id, fence: r.fence,
+  const receipt = Object.freeze({ jobId: r.job_id, state: r.state, attemptCount: count, leaseId: r.lease_id, fence: r.fence,
     attemptStartedAt: r.attempt_started_at, providerDeadlineAt: r.provider_deadline_at, leaseExpiresAt: r.lease_expires_at,
     deliveryDeadlineAt: deadline.value, terminalDisposition: r.terminal_disposition, terminalAt: r.terminal_at, dbNow: now.value }) as Every8dSettingsEmailOutboxBeginReceipt;
+  validatedBegins.set(receipt, receipt);
+  return receipt;
+}
+// Pure provenance check; reuses strict parseBegin validation without another RPC.
+export function readValidatedEvery8dSettingsEmailOutboxBegin(value: Every8dSettingsEmailOutboxBeginReceipt): Every8dSettingsEmailOutboxBeginReceipt | null {
+  return typeof value === "object" && value !== null ? validatedBegins.get(value) ?? null : null;
 }
 function parseFinalize(row: Row, args: Record<string, unknown>): Every8dSettingsEmailOutboxFinalizeReceipt {
   const r = exact(row, ["job_id", "state", "attempt_count", "terminal_disposition", "terminal_at", "available_at", "provider_message_id", "challenge_recording", "resolved_at"]);
