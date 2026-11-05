@@ -190,3 +190,11 @@ for(const phase of ['environment','readiness','factory','repository'])test(`star
     createRepository(){step('repository');assert.fail('repository construction was expected to throw');},telemetry:e=>events.push(e)});
   assert.equal(result.exitCode,1);assert.equal(events.at(-1).event,'startup_failed');assert.ok(!JSON.stringify(events).includes(canary));assert.equal(proc.eventNames().length,0);
 });
+
+
+test('empty claim while a peer owns candidates continues normal polling for later eligible work',async()=>{
+  let passes=0;const h=fixture({claim:(args,normal)=>++passes===1?{data:[],error:null}:normal()});
+  h.runtime.start();await tick();assert.equal(h.runtime.state,'running');assert.equal(h.events.filter(e=>e==='provider').length,0);
+  await h.advance(999);assert.equal(passes,1);await h.advance(1);assert.equal(passes,2);
+  assert.equal(h.events.filter(e=>e==='provider').length,1);assert.equal(h.finals.length,1);await h.close();
+});

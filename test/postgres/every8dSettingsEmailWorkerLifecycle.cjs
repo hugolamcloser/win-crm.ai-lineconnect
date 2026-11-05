@@ -77,7 +77,11 @@ async function childMain(){
     return Promise.resolve({outcome:'accepted',evidence:'authoritative_acceptance',providerMessageId:'synthetic-provider-id'});
   }};}};}}};
   const result=await runEvery8dSettingsEmailWorkerProcess({process,loadEnvironment:environment,registry,createRepository:()=>repository(),
-    telemetry(e){if(e.event==='batch')process.emit('SIGTERM');}});
+    telemetry(e){
+      // A bounded SKIP LOCKED claim may legitimately return zero while a peer
+      // holds the candidate set. Keep normal polling; never require one-pass completion.
+      if(e.event==='batch' && (mode!=='compete' || sql("select count(*)=0 from public.every8d_settings_auth_email_outbox where state<>'ACCEPTED'")==='t'))process.emit('SIGTERM');
+    }});
   process.send({kind:'stats',sends});process.exitCode=result.exitCode;process.disconnect();
 }
 async function main(){
@@ -107,8 +111,10 @@ async function main(){
         assert.deepEqual(state(job),{state:'DELIVERY_OUTCOME_UNKNOWN',attempts:1,scrubbed:true});
       }else{
         for(let i=1;i<12;i++)await enqueue(repo);
-        const first=child('once'),second=child('once');await Promise.all([first.ready,second.ready]);first.child.send('go');second.child.send('go');
-        const counts=await Promise.all([first.exited,second.exited]);assert.equal(counts[0]+counts[1],12);
+        proofStage='competing_processes';
+        const first=child('compete'),second=child('compete');await Promise.all([first.ready,second.ready]);first.child.send('go');second.child.send('go');
+        const counts=await Promise.all([first.exited,second.exited]);
+        assert.equal(counts[0]+counts[1],12);
         assert.equal(sql("select count(*)=12 and bool_and(state='ACCEPTED' and attempt_count=1 and ciphertext is null) from public.every8d_settings_auth_email_outbox"),'t');
       }
       completed++;console.log('PASS lifecycle PG17 '+scenario);

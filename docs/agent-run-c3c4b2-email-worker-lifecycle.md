@@ -62,8 +62,8 @@ Local evidence at implementation commit:
 | Check | Result |
 | --- | --- |
 | Typecheck / build | PASS / PASS |
-| Full npm test | PASS: 1,740/1,740; zero failed, skipped or cancelled |
-| New lifecycle unit proof | PASS: 50/50 |
+| Full npm test | PASS: 1,741/1,741; zero failed, skipped or cancelled |
+| New lifecycle unit proof | PASS: 51/51 |
 | Unchanged C3c-4a engine tests | PASS: 68/68 |
 | Unchanged worker PG17 proof | PASS: 8/8 scenarios |
 | New lifecycle PG17 proof | PASS: 6/6 scenarios, including restart and competing processes |
@@ -71,14 +71,14 @@ Local evidence at implementation commit:
 | Protected SQL byte equality | 44/44, including all 30 migration/rollback files |
 | Complete 107-obligation PG17 proof / prerequisite regressions | Running at implementation commit; final result required in draft PR and delivery report |
 
-The new lifecycle PG17 bridge wraps SQL function output in a record subquery, including single-column purge output, matching the existing repository RPC contract. An initial test-only aggregate returned scalar purge rows and correctly triggered contract shutdown; this was corrected in the bridge without touching SQL or repository authority. A later fixture-stage failure was narrowed with closed stage diagnostics; the complete six-scenario run subsequently passed without an application change. Stage output never includes SQL, requests, identifiers or raw exceptions.
+The new lifecycle PG17 bridge wraps SQL function output in a record subquery, including single-column purge output, matching the existing repository RPC contract. An initial test-only aggregate returned scalar purge rows and correctly triggered contract shutdown; this was corrected in the bridge without touching SQL or repository authority. CI #137 then exposed a separate proof assumption: stopping each competing worker after one batch expected 12 sends, but safe instrumentation reproduced 10 ACCEPTED and two untouched PENDING jobs with worker counts 10 and zero. Bounded SKIP LOCKED intentionally performs no refill; the proof now lets both processes continue through normal poll delays until the shared work is complete, then checks exactly 12 sends and one durable attempt per job. This corrects the test orchestration, not the unchanged worker/repository/SQL. A deterministic empty-claim/later-work regression also proves that ordinary polling continues. Stage output never includes SQL, requests, identifiers or raw exceptions.
 
 Detailed local logs, execution/coverage certificates and protected-file inventory are under ignored `.temp`. The unchanged coverage harness can regenerate a tracked certificate; retain the newly generated evidence under `.temp` and restore its baseline tracked bytes before committing. Verify every pre-existing protected source/test/SQL file equals the exact base; only package and CI wiring are intentionally modified. No production provider readiness/network smoke test is applicable because there is no approved provider.
 
 ## Budget, exclusions and rollback
 
 - Active tasks: one; no delegated implementation or independent review is claimed.
-- Implementation correction: one bounded application correction for lazy imports and poll scheduling; one test-bridge correction. No reviewer correction loop.
+- Implementation correction: one bounded application correction for lazy imports and poll scheduling. Proof-only corrections: record-shaped purge bridge and the CI-exposed one-pass competing-worker assumption. No independent reviewer correction loop; independent implementation review remains outstanding.
 - Excluded: real provider, provider credentials, database/migrations/RPC changes, server startup, LINE/SMS/OAuth/Phase2F, Railway, C3c enablement and live delivery.
 - Rollback: revert this focused slice. No schema, credential, environment or production rollback is needed.
 - Next gate: `INDEPENDENT_C3C_4B_2_IMPLEMENTATION_REVIEW`. Draft PR only; merge authorization is not granted. Stop for user review.
