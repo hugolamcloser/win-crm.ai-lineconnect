@@ -195,6 +195,11 @@ jobs:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: bash test/postgres/every8dSettingsEmailWorker.sh
 
+      - name: Prove dedicated email worker lifecycle, restart and competing processes
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: bash test/postgres/every8dSettingsEmailWorkerLifecycle.sh
+
       - name: Prove all 107 C3c-3 obligations, guard negatives, rollback and regressions
         env:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
