@@ -40,7 +40,7 @@ test('startup ordering and barriers; no polling until recovery THEN purge succee
   assert.deepEqual(p.events,['environment','readiness','factory','repository']);assert.deepEqual(p.h.events,['recover']);
   recovery.resolve({data:[],error:null});await tick();assert.deepEqual(p.h.events,['recover','purge']);
   purge.resolve({data:[{purged_count:0}],error:null});await tick();assert.deepEqual(p.h.events,['recover','purge','claim']);
-  assert.ok(p.events.indexOf('recovery')<p.events.indexOf('purge')&&p.events.indexOf('purge')<p.events.indexOf('ready'));
+  assert.deepEqual(p.h.events.slice(0,3),['recover','purge','claim']);assert.ok(p.events.indexOf('recovery')<p.events.indexOf('ready'));
   p.proc.emit('SIGTERM');assert.deepEqual(await p.result,{exitCode:0,forceExit:false});
 });
 for(const phase of ['recover','purge']) test(`startup ${phase} failure backs off without claims`,async()=>{
@@ -59,8 +59,8 @@ test('normal poll integer jitter is exactly 1000–1200 inclusive',()=>{
 });
 test('successive failures advance tiers, success resets backoff',async()=>{
   let fail=true;const h=fixture({empty:true,claim:(args,normal)=>fail?unavailable:normal()});h.runtime.start();await tick();
-  for(const delay of [900,1800,3600,7200,9000,9000]){assert.equal(h.telemetry.at(-1).delayMs,delay);await h.advance(delay);}
-  fail=false;await h.advance(9000);assert.equal(h.telemetry.at(-1).event,'poll_wait');assert.equal(h.telemetry.at(-1).delayMs,1000);await h.close();
+  for(const delay of [900,1800,3600,7200,9000,9000]){assert.equal(h.scheduledDelays.at(-1),delay);await h.advance(delay);}
+  fail=false;await h.advance(9000);assert.equal(h.scheduledDelays.at(-1),1000);await h.close();
 });
 test('only one runBatch while claim/finalize remains pending; maintenance coalesces',async()=>{
   const pending=deferred();const h=fixture({claim:()=>pending.promise});h.runtime.start();await tick();
@@ -106,18 +106,24 @@ test('shutdown after durable SENDING, before acknowledged begin, cannot invoke p
   const h=fixture({begin:(args,normal)=>{const ack=normal();void h.runtime.stop();return ack;}});h.runtime.start();await h.runtime.done;
   assert.deepEqual(h.events,['recover','purge','claim','begin']);assert.equal(h.finals.length,0);
 });
-test('shutdown during provider aborts worker but submitted transport retains original deadline and one unknown finalization',async()=>{
+test('R2-1 shutdown immediately aborts the submitted signal, preserves deadline and ignores late acceptance',async()=>{
   const pending=deferred();const h=fixture({provider:()=>pending.promise});h.runtime.start();await tick();
-  const stop=h.runtime.stop();await tick();assert.equal(h.finals.length,1);assert.equal(h.finals[0].input_provider_outcome,'outcome_unknown');
-  assert.equal(h.providerSignals[0].aborted,false);await h.advance(9999);assert.equal(h.providerSignals[0].aborted,false);
-  await h.advance(1);assert.equal(h.providerSignals[0].aborted,true);assert.equal((await stop).drained,true);
-  pending.resolve({outcome:'accepted',evidence:'authoritative_acceptance',providerMessageId:'late-secret-id'});await tick();
-  assert.equal(h.events.filter(e=>e==='provider').length,1);assert.equal(h.finals.length,1);assert.equal(h.finals[0].input_non_acceptance_proven,false);
+  const submittedSignal=h.providerSignals[0],originalDeadline=h.providerDeadlines[0];
+  assert.equal(h.events.filter(e=>e==='provider').length,1);assert.equal(submittedSignal.aborted,false);
+  assert.equal(originalDeadline,10000000000n);await h.advance(7000);
+  const stop=h.runtime.stop();assert.equal(submittedSignal.aborted,true);await tick();
+  assert.equal(h.providerSignals[0],submittedSignal);assert.equal(h.providerDeadlines[0],originalDeadline);
+  assert.equal((await stop).drained,true);assert.equal(h.finals.length,1);
+  assert.equal(h.finals[0].input_provider_outcome,'outcome_unknown');assert.equal(h.finals[0].input_non_acceptance_proven,false);
+  pending.resolve({outcome:'accepted',evidence:'authoritative_acceptance',providerMessageId:'late-secret-id'});await tick();await h.advance(30000);
+  assert.equal(h.events.filter(e=>e==='provider').length,1);assert.equal(h.finals.length,1);
+  assert.equal(h.finals[0].input_provider_outcome,'outcome_unknown');assert.equal(h.time.timers.size,0);
 });
 test('provider completes during drain without new deadline or replay',async()=>{
   const pending=deferred();const h=fixture({provider:()=>pending.promise});h.runtime.start();await tick();
   await h.advance(7000);const stop=h.runtime.stop();await tick();await h.advance(1000);pending.resolve({outcome:'outcome_unknown'});await tick();
-  assert.equal((await stop).drained,true);assert.equal(h.providerSignals[0].aborted,false);assert.equal(h.finals.length,1);
+  assert.equal((await stop).drained,true);assert.equal(h.providerSignals[0].aborted,true);assert.equal(h.finals.length,1);
+  assert.equal(h.providerDeadlines[0],10000000000n);
 });
 for(const phase of ['recover','purge','claim','begin','finalize'])test(`hung ${phase}: watchdog only stops; total drain expires without another attempt`,async()=>{
   const pending=deferred();let normal;
@@ -160,7 +166,7 @@ test('fresh closed telemetry discards canaries in every forbidden field and exce
   for(const field of fields){emit({event:'batch',[field]:canary});emit('batch',{[field]:canary},{[field]:canary});}
   const h=fixture({provider:()=>Promise.reject(Object.assign(new Error(canary),Object.fromEntries(fields.map(f=>[f,canary]))))});h.runtime.start();await tick();await h.close();
   assert.ok(!JSON.stringify([...seen,...h.telemetry]).includes(canary));assert.ok(seen.every(e=>Object.isFrozen(e)&&Object.keys(e).sort().join(',')==='component,event'));
-  assert.equal(new Set(seen).size,seen.length);assert.ok(h.telemetry.every(e=>Object.keys(e).every(k=>['component','event','delayMs','reason'].includes(k))));
+  assert.equal(new Set(seen).size,seen.length);assert.ok(h.telemetry.every(e=>Object.keys(e).every(k=>['component','event','delayMs','reason','suppressedCount'].includes(k))));
 });
 
 
@@ -197,4 +203,137 @@ test('empty claim while a peer owns candidates continues normal polling for late
   h.runtime.start();await tick();assert.equal(h.runtime.state,'running');assert.equal(h.events.filter(e=>e==='provider').length,0);
   await h.advance(999);assert.equal(passes,1);await h.advance(1);assert.equal(passes,2);
   assert.equal(h.events.filter(e=>e==='provider').length,1);assert.equal(h.finals.length,1);await h.close();
+});
+
+// Drift: startup recovery at 0, purge completes at 1s; ordinary recovery at
+// 60s leaves its next due time at 65s while purge becomes due at 61s.
+async function driftFixture(options={}) {
+  const pending=deferred();let first=true;
+  const h=fixture({empty:true,...options,purge:(args,normal)=>{
+    if(first){first=false;return pending.promise;}return options.purge?options.purge(args,normal):normal();
+  }});
+  h.runtime.start();await tick();await h.advance(1000);pending.resolve({data:[{purged_count:0}],error:null});await tick();
+  for(let i=0;i<59;i++)await h.advance(1000);
+  assert.equal(h.time.clock.nowNs(),60000000000n);assert.equal(h.events.filter(e=>e==='purge').length,1);
+  assert.equal(h.events.filter(e=>e==='recover').length,13);return h;
+}
+test('R2-2 drifted due purge forces another successful recovery in that same pass',async()=>{
+  const h=await driftFixture();const count=h.events.length;await h.advance(1000);
+  assert.deepEqual(h.events.slice(count),['recover','purge','claim']);
+  assert.equal(h.events.filter(e=>e==='recover').length,14);assert.equal(h.events.filter(e=>e==='purge').length,2);
+  await h.advance(0);assert.equal(h.events.filter(e=>e==='recover').length,14);assert.equal(h.events.filter(e=>e==='purge').length,2);
+  for(const c of h.calls.filter(c=>/recover|purge/.test(c.name)))assert.equal(c.args.input_batch_size,100);await h.close();
+});
+test('R2-2 failed forced recovery retains purge obligation and retries recovery first after backoff',async()=>{
+  let failed=false;const h=await driftFixture({recover:(args,normal)=>failed?unavailable:normal()});failed=true;
+  const count=h.events.length;await h.advance(1000);assert.deepEqual(h.events.slice(count),['recover']);
+  assert.equal(h.scheduledDelays.at(-1),900);await h.advance(899);assert.deepEqual(h.events.slice(count),['recover']);
+  failed=false;await h.advance(1);assert.deepEqual(h.events.slice(count),['recover','recover','purge','claim']);
+  await h.advance(0);assert.deepEqual(h.events.slice(count),['recover','recover','purge','claim']);await h.close();
+});
+for(const disposition of ['violation','stopping'])test(`R2-2 forced recovery ${disposition} admits no purge`,async()=>{
+  let activated=false,h;
+  h=await driftFixture({recover:(args,normal)=>{
+    if(!activated)return normal();
+    if(disposition==='violation')return {data:[{malformed:true}],error:null};
+    void h.runtime.stop();return normal();
+  }});
+  activated=true;const count=h.events.length;await h.advance(1000);
+  assert.deepEqual(h.events.slice(count),['recover']);assert.equal((await h.runtime.done).drained,true);
+  assert.equal(h.events.filter(e=>e==='purge').length,1);
+});
+test('R2-2 forced recovery stays serial while pending',async()=>{
+  const pending=deferred();let hold=false;const h=await driftFixture({recover:(args,normal)=>hold?pending.promise:normal()});
+  hold=true;const count=h.events.length;await h.advance(1000);await h.advance(1000);
+  assert.deepEqual(h.events.slice(count),['recover']);pending.resolve({data:[],error:null});await tick();
+  assert.deepEqual(h.events.slice(count),['recover','purge','claim']);await h.close();
+});
+test('R2-2 full recovery/purge batches do not cause immediate drain or catch-up calls',async()=>{
+  const F=require('./helpers/every8dSettingsEmailOutboxFixtures.cjs');
+  const recovered=Array.from({length:100},(_,i)=>({...F.responses().recover,job_id:`00000000-0000-4000-8000-${String(i+1).padStart(12,'0')}`}));
+  const h=fixture({empty:true,recover:()=>({data:recovered,error:null}),purge:()=>({data:[{purged_count:100}],error:null})});
+  h.runtime.start();await tick();assert.deepEqual(h.events,['recover','purge','claim']);
+  for(let i=0;i<4;i++)await h.advance(1000);
+  assert.equal(h.events.filter(e=>e==='recover').length,1);assert.equal(h.events.filter(e=>e==='purge').length,1);
+  await h.advance(1000);assert.equal(h.events.filter(e=>e==='recover').length,2);assert.equal(h.events.filter(e=>e==='purge').length,1);await h.close();
+});
+test('R2-3 60 seconds idle: 61 unchanged claims, zero batch/poll logs, at most three operational records',async()=>{
+  const h=fixture({empty:true});h.runtime.start();await tick();
+  for(let i=0;i<60;i++){assert.equal(h.scheduledDelays.at(-1),1000);await h.advance(1000);}
+  assert.equal(h.events.filter(e=>e==='claim').length,61);assert.equal(h.events.filter(e=>e==='recover').length,13);
+  assert.equal(h.events.filter(e=>e==='purge').length,2);
+  assert.equal(h.telemetry.filter(e=>e.event==='batch'||e.event==='poll_wait').length,0);
+  assert.deepEqual(h.telemetry.map(e=>e.event),['recovery','ready','recovery']);assert.equal(h.telemetry.length,3);
+  assert.equal(h.telemetry.at(-1).suppressedCount,12);assert.equal(h.time.timers.size,1);await h.close();
+});
+test('R2-3 seven failures/backoffs are suppressed; later records aggregate without changing retry schedule',async()=>{
+  const h=fixture({empty:true,claim:()=>unavailable});h.runtime.start();await tick();
+  for(const delay of [900,1800,3600,7200,9000,9000]){assert.equal(h.scheduledDelays.at(-1),delay);await h.advance(delay);}
+  assert.equal(h.events.filter(e=>e==='claim').length,7);assert.equal(h.time.clock.nowNs(),31500000000n);
+  assert.equal(h.telemetry.filter(e=>e.event==='repository_failure').length,1);assert.equal(h.telemetry.filter(e=>e.event==='backoff_wait').length,1);
+  for(let i=0;i<4;i++){assert.equal(h.scheduledDelays.at(-1),9000);await h.advance(9000);}
+  assert.equal(h.events.filter(e=>e==='claim').length,11);assert.equal(h.time.clock.nowNs(),67500000000n);
+  for(const category of ['repository_failure','backoff_wait']){
+    const records=h.telemetry.filter(e=>e.event===category);assert.equal(records.length,2);assert.equal(records[1].suppressedCount,9);
+  }
+  assert.equal(h.telemetry.filter(e=>e.event==='backoff_wait').at(-1).delayMs,9000);
+  assert.equal(h.events.filter(e=>e==='provider').length,0);assert.equal(h.finals.length,0);await h.close();
+});
+test('R2-3 passive activity/category suppression uses only monotonic time and no timer',()=>{
+  let now=0n;const seen=[];const emit=createEmailWorkerTelemetry(e=>seen.push(e),{nowNs:()=>now,schedule(){assert.fail('telemetry timer');}});
+  emit('batch');emit('purge');emit('recovery');emit('repository_failure');emit('backoff_wait',900);
+  assert.equal(seen.filter(e=>['batch','purge','recovery'].includes(e.event)).length,1);
+  now=59999000000n;emit('batch');emit('repository_failure');emit('backoff_wait',9000);assert.equal(seen.length,3);
+  now=60000000000n;emit('batch');emit('repository_failure');emit('backoff_wait',9000);
+  assert.equal(seen.length,6);assert.equal(seen[3].suppressedCount,3);assert.equal(seen[4].suppressedCount,1);assert.equal(seen[5].suppressedCount,1);
+  assert.ok(seen.every(e=>Object.isFrozen(e)));assert.equal(new Set(seen).size,seen.length);
+});
+test('R2-3 sink exceptions do not change repository calls, backoff, maintenance or shutdown',async()=>{
+  const plain=fixture({empty:true,claim:()=>unavailable}),broken=fixture({empty:true,claim:()=>unavailable,telemetry(){throw Error('PRIVATE_SINK_CANARY');}});
+  plain.runtime.start();broken.runtime.start();await tick();
+  for(const delay of [900,1800,3600,7200,9000,9000,9000,9000,9000,9000]){await plain.advance(delay);await broken.advance(delay);}
+  assert.deepEqual(broken.events,plain.events);assert.deepEqual(broken.scheduledDelays,plain.scheduledDelays);
+  assert.equal(broken.finals.length,plain.finals.length);assert.equal(broken.time.timers.size,plain.time.timers.size);
+  assert.deepEqual(await broken.close(),await plain.close());
+});
+test('R2-3 suppressedCount is allowlisted, safely clamped and rejects secret canaries',()=>{
+  const canary='PRIVATE_SUPPRESSION_CANARY',seen=[];const emit=createEmailWorkerTelemetry(e=>seen.push(e));
+  for(const value of [canary,{recipient:canary},-1,1.5,NaN,Infinity])emit('batch',undefined,undefined,value);
+  assert.ok(seen.every(e=>!('suppressedCount' in e)));emit('batch',undefined,undefined,Number.MAX_SAFE_INTEGER);
+  assert.equal(seen.at(-1).suppressedCount,2147483647);emit('batch',undefined,undefined,0);assert.equal(seen.at(-1).suppressedCount,0);
+  assert.equal(JSON.stringify(seen).includes(canary),false);
+  let now=0n;const aggregate=createEmailWorkerTelemetry(e=>seen.push(e),{nowNs:()=>now});
+  aggregate('repository_failure',canary,canary,canary);aggregate('repository_failure',canary,canary,{cause:canary});
+  now=60000000000n;aggregate('repository_failure');assert.equal(seen.at(-1).suppressedCount,1);
+  assert.ok(seen.every(e=>Object.keys(e).every(k=>['component','event','delayMs','reason','suppressedCount'].includes(k))));
+  assert.equal(JSON.stringify(seen).includes(canary),false);
+});
+for(const settlement of ['accepted','deadline','shutdown'])test(`R2-1 provider input abort listener removed on ${settlement}`,async()=>{
+  const {getEventListeners}=require('node:events');const targets=new Set(),original=AbortSignal.prototype.addEventListener;
+  AbortSignal.prototype.addEventListener=function(type,...args){if(type==='abort')targets.add(this);return original.call(this,type,...args);};
+  const pending=deferred();let h;
+  try{
+    h=fixture(settlement==='accepted'?{}:{provider:()=>pending.promise});h.runtime.start();await tick();
+    if(settlement==='deadline')await h.advance(10000);else if(settlement==='shutdown'){void h.runtime.stop();await tick();assert.equal(h.providerSignals[0].aborted,true);}
+    assert.equal(targets.size,2);assert.ok([...targets].every(signal=>getEventListeners(signal,'abort').length===0));
+    assert.equal(h.events.filter(e=>e==='provider').length,1);assert.equal(h.finals.length,1);
+    if(settlement==='deadline')assert.equal(h.providerSignals[0].aborted,true);
+  }finally{AbortSignal.prototype.addEventListener=original;if(h){await h.advance(10000);await h.close();}}
+});
+test('R2-1 an input signal aborted before listener registration is handled without submission or leak',async()=>{
+  const {getEventListeners}=require('node:events');const targets=new Set(),original=AbortSignal.prototype.addEventListener;
+  let registrations=0,abortedInput=false,h;
+  AbortSignal.prototype.addEventListener=function(type,...args){
+    if(type==='abort'){
+      targets.add(this);registrations++;
+      if(registrations===2){void h.runtime.stop();abortedInput=this.aborted;}
+    }
+    return original.call(this,type,...args);
+  };
+  try{
+    h=fixture();h.runtime.start();await tick();await h.close();
+    assert.equal(abortedInput,true);assert.equal(h.events.filter(e=>e==='provider').length,0);assert.equal(h.finals.length,1);
+    assert.equal(h.finals[0].input_provider_outcome,'outcome_unknown');assert.equal(h.finals[0].input_non_acceptance_proven,false);
+    assert.ok([...targets].every(signal=>getEventListeners(signal,'abort').length===0));
+  }finally{AbortSignal.prototype.addEventListener=original;}
 });

@@ -3,7 +3,7 @@ const {execFileSync,fork} = require('node:child_process');
 const {randomUUID} = require('node:crypto');
 const assert = require('node:assert/strict');
 const {createEvery8dSettingsEmailOutboxRepository} = require('../../dist/services/every8dSettingsEmailOutboxRepository');
-const {createEvery8dSettingsEmailWorkerRuntime} = require('../../dist/workers/every8dSettingsEmailWorkerRuntime');
+const {createEvery8dSettingsEmailWorkerRuntime,emailWorkerClock} = require('../../dist/workers/every8dSettingsEmailWorkerRuntime');
 const {runEvery8dSettingsEmailWorkerProcess} = require('../../dist/workers/every8dSettingsEmailWorkerProcess');
 const {encryptEvery8dSettingsEmailOutboxPayload} = require('../../dist/services/every8dSettingsEmailOutboxCrypto');
 const {parseEvery8dSettingsEmailOutboxKeyring} = require('../../dist/config/every8dSettingsEmailOutbox');
@@ -50,14 +50,47 @@ async function enqueue(repo){
   const result=await repo.enqueue({...context,...envelope});proofStage=result.outcome==='applied'?'fixture_applied':result.outcome==='not_applied'?'fixture_not_applied':result.category==='repository_contract_violation'?'fixture_contract_violation':'fixture_repository_unavailable';assert.equal(result.outcome,'applied');return context.jobId;
 }
 function state(job){return JSON.parse(sql(`select json_build_object('state',state,'attempts',attempt_count,'scrubbed',ciphertext is null) from public.every8d_settings_auth_email_outbox where job_id=${quote(job)}`));}
+// Test-owned observation only: every operation reaches the real repository and
+// returns its exact validated result. No RPC, receipt or authority is replaced.
+function passControl(repo,shouldStop,onComplete){
+  let pending=0,active=0,claims=0,passes=0,passReady=false;
+  const operations=[],observed={};
+  for(const name of ['claim','beginSend','finalize','recover','purge'])observed[name]=async input=>{
+    operations.push(name);active++;
+    try{
+      const result=await repo[name](input);
+      if(name==='claim'){
+        claims++;assert.equal(pending,0);pending=result.outcome==='applied'?result.receipts.length:0;
+        passReady=pending===0;
+      }else if(name==='finalize'||name==='beginSend'&&(result.outcome!=='applied'||result.receipt.state!=='SENDING')){
+        pending--;assert.ok(pending>=0);passReady=pending===0;
+      }
+      return result;
+    }finally{active--;}
+  };
+  return {repository:{enqueue:repo.enqueue,...observed},operations,
+    clock:{nowNs:emailWorkerClock.nowNs,schedule(delay,callback){
+      // After all claimed jobs reach their final repository boundary, the next
+      // wait is scheduled only after runBatch has returned. Hold that future
+      // wait when stopping; signal on a microtask after cancelWait is installed.
+      if(passReady){
+        assert.equal(active,0);passReady=false;passes++;
+        if(shouldStop()){queueMicrotask(onComplete);return ()=>{};}
+      }
+      return emailWorkerClock.schedule(delay,callback);
+    }},
+    assertComplete(singlePass=false){assert.equal(pending,0);assert.equal(active,0);assert.equal(claims,passes);assert.ok(passes>=1);if(singlePass)assert.equal(passes,1);}
+  };
+}
 async function onePass(repo){
-  proofStage="runtime_pass";let sends=0;const operations=[], events=[];
-  const observed={};for(const name of ['claim','beginSend','finalize','recover','purge'])observed[name]=async input=>{operations.push(name);return repo[name](input);};
-  const runtime=createEvery8dSettingsEmailWorkerRuntime({repository:observed,encryptionKeyring:keys,canonicalSender:'settings@example.invalid',
+  proofStage="runtime_pass";let sends=0,batchTelemetry=0;
+  const control=passControl(repo,()=>true,()=>{void runtime.stop();});
+  const runtime=createEvery8dSettingsEmailWorkerRuntime({repository:control.repository,clock:control.clock,encryptionKeyring:keys,canonicalSender:'settings@example.invalid',
     provider:{async send(){sends++;return {outcome:'accepted',evidence:'authoritative_acceptance',providerMessageId:'synthetic-provider-id'};}},
-    telemetry(e){events.push(e.event);if(e.event==='batch')void runtime.stop();}});
-  runtime.start();assert.equal((await runtime.done).drained,true);assert.deepEqual(operations.slice(0,3),['recover','purge','claim']);
-  assert.ok(events.indexOf('ready')>events.indexOf('purge'));return sends;
+    telemetry(e){if(e.event==='batch')batchTelemetry++;throw Error('synthetic proof telemetry sink failure');}});
+  runtime.start();const result=await runtime.done;assert.equal(result.drained,true);assert.equal(result.reason,'signal');
+  control.assertComplete(true);assert.deepEqual(control.operations.slice(0,3),['recover','purge','claim']);
+  assert.equal(batchTelemetry,0,'single pass completes despite absent batch telemetry and a failing sink');return sends;
 }
 function child(modeValue){
   const child=fork(__filename,[container,database,modeValue],{stdio:['ignore','ignore','ignore','ipc']});
@@ -70,18 +103,19 @@ function child(modeValue){
   return {child,ready,submitted,exited};
 }
 async function childMain(){
-  let sends=0;process.send('ready');await new Promise(r=>process.once('message',r));
+  let sends=0,batchTelemetry=0;process.send('ready');await new Promise(r=>process.once('message',r));
   const registry={'test-only':{parseReadiness(){return {createClient(){return {send(){sends++;
     // Test-only submission marker; no request, key, identifier or raw error leaves this process.
     if(mode==='crash'){process.send('submitted');return new Promise(()=>{});}
     return Promise.resolve({outcome:'accepted',evidence:'authoritative_acceptance',providerMessageId:'synthetic-provider-id'});
   }};}};}}};
-  const result=await runEvery8dSettingsEmailWorkerProcess({process,loadEnvironment:environment,registry,createRepository:()=>repository(),
-    telemetry(e){
-      // A bounded SKIP LOCKED claim may legitimately return zero while a peer
-      // holds the candidate set. Keep normal polling; never require one-pass completion.
-      if(e.event==='batch' && (mode!=='compete' || sql("select count(*)=0 from public.every8d_settings_auth_email_outbox where state<>'ACCEPTED'")==='t'))process.emit('SIGTERM');
-    }});
+  const control=passControl(repository(),()=>mode!=='compete'||
+    sql("select count(*)=0 from public.every8d_settings_auth_email_outbox where state<>'ACCEPTED'")==='t',()=>process.emit('SIGTERM'));
+  const result=await runEvery8dSettingsEmailWorkerProcess({process,loadEnvironment:environment,registry,
+    createRepository:()=>control.repository,clock:control.clock,
+    telemetry(e){if(e.event==='batch')batchTelemetry++;throw Error('synthetic proof telemetry sink failure');}});
+  assert.equal(result.exitCode,0);assert.equal(result.forceExit,false);control.assertComplete(mode!=='compete');
+  assert.equal(batchTelemetry,0,'child completion is independent of batch telemetry and sink success');
   process.send({kind:'stats',sends});process.exitCode=result.exitCode;process.disconnect();
 }
 async function main(){

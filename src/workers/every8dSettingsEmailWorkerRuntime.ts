@@ -34,7 +34,7 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
   clock?: Every8dSettingsEmailWorkerClock; random?: () => number; telemetry: EmailWorkerTelemetry;
 }>) {
   const clock = dependencies.clock ?? emailWorkerClock;
-  const emit = createEmailWorkerTelemetry(dependencies.telemetry);
+  const emit = createEmailWorkerTelemetry(dependencies.telemetry, clock);
   let state: "idle" | "running" | "stopping" | "stopped" = "idle";
   let stopReason: EmailWorkerStopReason = "signal";
   let flowActive = false, repositoryActive = 0, providerActive = 0, repositoryFailed = false;
@@ -98,22 +98,27 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
       const deadline = input.deadlineMonotonicNs;
       const remainingMs = Number((deadline - clock.nowNs()) / 1000000n);
       if (remainingMs < 1) throw new EmailWorkerStopping();
-      // Shutdown aborts the engine signal. A submitted transport keeps its ORIGINAL
-      // deadline, never a fresh drain budget; engine cancellation may truthfully
-      // finalize outcome_unknown once while this transport finishes/aborts.
+      // Forward engine cancellation without replacing its original deadline or
+      // treating abort as positive non-acceptance.
       const controller = new AbortController();
+      const inputSignal = input.signal;
       providerActive += 1;
       return new Promise<Every8dSettingsEmailProviderResult>((resolve) => {
         let settled = false, cancelDeadline = () => {};
         const finishProvider = (result: Every8dSettingsEmailProviderResult, abort: boolean) => {
           if (settled) return;
           settled = true; cancelDeadline();
+          inputSignal.removeEventListener("abort", forwardAbort);
           if (abort) controller.abort();
           providerActive -= 1; resolve(result); checkDrain();
         };
         const unknown = Object.freeze({ outcome: "outcome_unknown" } as const);
-        cancelDeadline = clock.schedule(remainingMs, () => finishProvider(unknown, true));
+        const forwardAbort = () => finishProvider(unknown, true);
         try {
+          inputSignal.addEventListener("abort", forwardAbort, { once: true });
+          if (inputSignal.aborted) { forwardAbort(); return; }
+          cancelDeadline = clock.schedule(remainingMs, forwardAbort);
+          if (settled) { cancelDeadline(); return; }
           // No retries and no new invocation after a synchronous stop during setup.
           admit();
           Promise.resolve(dependencies.provider.send(Object.freeze({ canonicalSender: input.canonicalSender,
@@ -141,15 +146,18 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
       while (state === "running") {
         repositoryFailed = false;
         const now = clock.nowNs();
+        const purgeDue = now >= nextPurge;
+        let recoveredThisPass = false;
         // Due times are advanced from completion, so missed intervals coalesce.
-        if (now >= nextRecovery) {
+        if (purgeDue || now >= nextRecovery) {
           const recovered = await repository.recover({ batchSize: 100 });
           if (state !== "running") break;
           if (recovered.outcome === "applied") {
+            recoveredThisPass = true;
             nextRecovery = clock.nowNs() + 5000000000n; emit("recovery");
           }
         }
-        if (!repositoryFailed && state === "running" && clock.nowNs() >= nextPurge) {
+        if (purgeDue && recoveredThisPass && !repositoryFailed && state === "running") {
           const purged = await repository.purge({ batchSize: 100 });
           if (state !== "running") break;
           if (purged.outcome === "applied") {
@@ -165,7 +173,7 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
           const batch = await worker.runBatch(cancellation.signal);
           if (state !== "running") break;
           if (batch.outcome !== "completed") repositoryFailed = true;
-          emit("batch");
+          if (batch.outcome === "completed" && batch.diagnostics.length > 0) emit("batch");
         }
         if (state !== "running") break;
         if (repositoryFailed) {
@@ -179,7 +187,6 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
           if (ranBatch) {
             const delay = emailWorkerDelay(0, dependencies.random ?? Math.random);
             nextPoll = clock.nowNs() + BigInt(delay) * 1000000n;
-            emit("poll_wait", delay);
           }
           // Maintenance may wake the loop early, but must not shorten the poll delay.
           const nextMaintenance = nextRecovery < nextPurge ? nextRecovery : nextPurge;

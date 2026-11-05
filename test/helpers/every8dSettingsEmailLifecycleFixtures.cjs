@@ -17,7 +17,10 @@ function environment() {
     EVERY8D_SETTINGS_AUTH_EMAIL_OUTBOX_ENCRYPTION_KEYS: JSON.stringify({enc:key(7)}) };
 }
 function fixture(options = {}) {
-  const time = fakeClock(), events = [], telemetry = [], finals = [], providerSignals = [];
+  const time = fakeClock(), events = [], telemetry = [], finals = [], providerSignals = [], providerDeadlines = [], scheduledDelays = [];
+  const clock = { ...time.clock, schedule(delay, callback) {
+    scheduledDelays.push(delay); return time.clock.schedule(delay, callback);
+  }};
   const keys = parseEvery8dSettingsEmailOutboxKeyring(JSON.stringify({ enc: Buffer.alloc(32,7).toString('base64url') }));
   const envelope = encryptEvery8dSettingsEmailOutboxPayload(F.context(),
     {recipient:'secret-recipient@example.invalid',displayOtp:'2345-6789'}, {activeKeyVersion:'enc', keys});
@@ -40,12 +43,12 @@ function fixture(options = {}) {
     return options[operation] ? options[operation](args,normal) : normal();
   });
   const provider = {send(input) {
-    events.push('provider'); providerSignals.push(input.signal);
+    events.push('provider'); providerSignals.push(input.signal); providerDeadlines.push(input.deadlineMonotonicNs);
     return options.provider ? options.provider(input) : Promise.resolve({outcome:'accepted',evidence:'authoritative_acceptance',providerMessageId:'synthetic-provider-id'});
   }};
   const runtime = createEvery8dSettingsEmailWorkerRuntime({repository:repo,encryptionKeyring:keys, provider,
-    canonicalSender:'settings@example.invalid',clock:time.clock,random:options.random??(()=>0),telemetry:e=>telemetry.push(e)});
-  return {runtime,time,events,telemetry,finals,calls,providerSignals,repo,provider,keys,
+    canonicalSender:'settings@example.invalid',clock,random:options.random??(()=>0),telemetry:e=>{telemetry.push(e);options.telemetry?.(e);}});
+  return {runtime,time,clock,events,telemetry,finals,calls,providerSignals,providerDeadlines,scheduledDelays,repo,provider,keys,
     async advance(ms) {time.advanceNs(BigInt(ms)*1000000n);await tick();},
     async close() {const p=runtime.stop();await tick();return p;}};
 }
