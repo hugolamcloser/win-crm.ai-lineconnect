@@ -15,6 +15,7 @@ export type ResendSocketConnectors = Readonly<{
 }>;
 
 type ResponseObserver = Readonly<{
+  status(status: number): void;
   headers(status: number): void;
   invalid(status: number): void;
   complete(status: number, body: Buffer): void;
@@ -109,6 +110,8 @@ class ResendResponse {
         if (!match) { this.invalid(); return; }
         this.status = Number(match[1]);
         if (this.status < 200) { this.invalid(); return; }
+        this.observer.status(this.status);
+        if (this.stopped()) return;
       }
     }
     if (this.headerEnd >= 4 && this.headerBytes.readUInt32BE(this.headerEnd - 4) === 0x0d0a0d0a) {
@@ -179,6 +182,7 @@ type ResendExchange<Result> = Readonly<{
   notStarted: Result;
   unknown: Result;
   preEntryFailure(): void;
+  onStatus(status: number): void;
   onHeaders(status: number): Result | undefined;
   onInvalid(status: number): Result;
   onBody(status: number, body: Buffer, expired: () => boolean): Result;
@@ -254,6 +258,9 @@ export function exchangeResendHttp<Result>(
           if (expired()) { fail(); return; }
           try {
             if (!response) response = new ResendResponse({
+              status(status) {
+                if (!expired()) exchange.onStatus(status);
+              },
               headers(status) {
                 if (expired()) { fail(); return; }
                 const result = exchange.onHeaders(status);

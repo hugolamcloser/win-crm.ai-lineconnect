@@ -162,12 +162,13 @@ export function createEvery8dSettingsEmailResendProvider({
         if (signal.aborted || deadline - process.hrtime.bigint() < resendMinimumBudgetNs) return notStarted;
         return exchangeResendHttp<Result>(prepareRequest(admittedKey, input), {
           signal, deadline, unknown, notStarted, preEntryFailure: report,
-          onHeaders(status) {
-            if ((status > 200 && status < 400) || status === 404 || status === 405) {
+          onStatus(status) {
+            if ((status > 200 && status < 400) || status === 401 || status === 403 ||
+                status === 404 || status === 405) {
               report();
-              return unknown;
             }
-            if (status === 401 || status === 403) report();
+          },
+          onHeaders(status) {
             return [200, 400, 401, 403, 409, 422, 429].includes(status) ? undefined : unknown;
           },
           onInvalid(status) {

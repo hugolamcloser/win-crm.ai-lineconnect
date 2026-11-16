@@ -429,6 +429,150 @@ test("decoded chunk body and cumulative metadata are bounded", async (t) => {
   assertClean(h, 1);
 });
 
+const fatalStatusHeaders = [
+  [201, "Missing-Colon\r\n"],
+  [302, "Whitespace : x\r\n"],
+  [401, "Content-Type: application/json\nOther: x\r\n"],
+  [403, " Folded: x\r\n"],
+  [404, "Invalid(Name): x\r\n"],
+  [405, "Missing-Colon\r\n"],
+];
+
+for (const [status, malformedHeader] of fatalStatusHeaders) {
+  test(status + " reports fatal at the status line and keeps unknown for malformed headers", async (t) => {
+    const h = harness(t);
+    const sent = h.send();
+    const socket = h.secure();
+    const statusLine = headers(status, "").slice(0, -2);
+    emitWire(socket, statusLine, "byte");
+    assert.equal(h.fatal.length, 1, "fatal observation must be synchronous");
+    assert.equal(socket.destroyed, 0, "status notification settled before header validation");
+    emitWire(socket, media + malformedHeader + "\r\n");
+    emitWire(socket, fixed(403, '{"name":"restricted_api_key","message":"unused"}'));
+    assertResult(await sent, unknown);
+    assert.equal(socket.writes.length, 1);
+    socket.writes[0].release();
+    assertClean(h, 1);
+  });
+
+  for (const event of ["end", "close"]) {
+    test(status + " retains fatal observation across interrupted headers on " + event, async (t) => {
+      const h = harness(t);
+      const sent = h.send();
+      const socket = h.secure();
+      emitWire(socket, headers(status, media).slice(0, -2), "mixed");
+      assert.equal(h.fatal.length, 1);
+      assert.equal(socket.destroyed, 0);
+      socket.emit(event);
+      emitWire(socket, fixed(200));
+      socket.emit("close");
+      assertResult(await sent, unknown);
+      assert.equal(socket.writes.length, 1);
+      socket.writes[0].release();
+      assertClean(h, 1);
+    });
+  }
+
+  test(status + " synchronous fatal abort stops before reading the rest of the coalesced response", async (t) => {
+    const h = harness(t, { onFatal() { h.controller.abort(); } });
+    const sent = h.send();
+    const socket = h.secure();
+    const wire = fixed(status, '{"name":"missing_api_key","message":"unused"}');
+    const statusEnd = wire.indexOf("\r\n") + 2;
+    let readsAfterStatus = 0;
+    socket.emit("data", new Proxy(wire, {
+      get(target, key) {
+        if (typeof key === "string" && /^[0-9]+$/.test(key) && Number(key) >= statusEnd) readsAfterStatus++;
+        return Reflect.get(target, key, target);
+      },
+    }));
+    emitWire(socket, fixed(401, '{"name":"missing_api_key","message":"unused"}'));
+    socket.emit("end");
+    assertResult(await sent, unknown);
+    assert.ok(h.controller.signal.aborted, "fatal observer did not abort");
+    assert.equal(readsAfterStatus, 0);
+    assert.equal(socket.writes.length, 1);
+    socket.writes[0].release();
+    assertClean(h, 1);
+  });
+}
+
+for (const status of [200, 400, 409, 422, 429, 500]) {
+  for (const completion of ["malformed", "interrupted"]) {
+    test(status + " has no status-only fatality before " + completion + " headers", async (t) => {
+      const h = harness(t);
+      const sent = h.send();
+      const socket = h.secure();
+      emitWire(socket, headers(status, "").slice(0, -2));
+      assert.equal(h.fatal.length, 0);
+      if (completion === "malformed") emitWire(socket, "Missing-Colon\r\n\r\n");
+      else socket.emit("end");
+      assertResult(await sent, unknown);
+      socket.writes[0].release();
+      assertClean(h, status === 200 && completion === "malformed" ? 1 : 0);
+    });
+  }
+}
+
+for (const [label, line] of [
+  ["HTTP/1.0", "HTTP/1.0 401 Unauthorized\r\n"],
+  ["bare LF", "HTTP/1.1 401 Unauthorized\n"],
+  ["line overflow", "HTTP/1.1 401 " + "x".repeat(1024) + "\r\n"],
+  ["unsupported informational", "HTTP/1.1 101 Switching Protocols\r\n"],
+]) {
+  test("no status-only fatality for " + label, (t) =>
+    assertWire(t, line + "\r\n", unknown, 0, { segmentation: "mixed", eof: true }));
+}
+
+for (const elapsed of [false, true]) {
+  test("fatal status completed at " + (elapsed ? "the deadline stays unobserved" : "the last nanosecond is latched"), async (t) => {
+    const h = harness(t);
+    const sent = h.send();
+    const socket = h.secure();
+    emitWire(socket, "HTTP/1.1 401 Unauthorized\r");
+    assert.equal(h.fatal.length, 0);
+    h.advanceTo(h.input.deadlineMonotonicNs - (elapsed ? 0n : 1n), false);
+    emitWire(socket, "\n");
+    assert.equal(h.fatal.length, elapsed ? 0 : 1);
+    socket.emit("end");
+    assertResult(await sent, unknown);
+    socket.writes[0].release();
+    assertClean(h, elapsed ? 0 : 1);
+  });
+}
+
+test("fatal 401 status alone cannot grant non-acceptance before the complete body", async (t) => {
+  const h = harness(t);
+  const sent = h.send();
+  const socket = h.secure();
+  const body = '{"name":"missing_api_key","message":"unused"}';
+  const wire = fixed(401, body);
+  emitWire(socket, wire.subarray(0, -1), "mixed");
+  assert.equal(h.fatal.length, 1);
+  assert.equal(socket.destroyed, 0);
+  emitWire(socket, wire.subarray(-1));
+  assertResult(await sent, notAccepted);
+  socket.writes[0].release();
+  assertClean(h, 1);
+});
+
+test("the deadline still gates status observation when it expires during a coalesced read", async (t) => {
+  const h = harness(t);
+  const sent = h.send();
+  const socket = h.secure();
+  const wire = fixed(401, '{"name":"missing_api_key","message":"unused"}');
+  const statusLf = wire.indexOf("\n");
+  socket.emit("data", new Proxy(wire, {
+    get(target, key) {
+      if (key === String(statusLf)) h.advanceTo(h.input.deadlineMonotonicNs, false);
+      return Reflect.get(target, key, target);
+    },
+  }));
+  assertResult(await sent, unknown);
+  socket.writes[0].release();
+  assertClean(h, 0);
+});
+
 test("fatal headers latch through EOF and late events", async (t) => {
   const h = harness(t, { onFatal() { throw Error(rawErrorCanary); } });
   const sent = h.send();

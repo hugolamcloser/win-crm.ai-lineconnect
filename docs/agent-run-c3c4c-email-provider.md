@@ -82,3 +82,22 @@ Changed paths are the new `src/services/every8dSettingsEmailResendTransport.ts` 
 | Exact file equality | 290 pre-correction paths outside the scope match the reviewed head. All 288 main-base paths match, including 44/44 SQL files. The PR contains seven additions relative to main. |
 
 The first corrected-head automatic CI and exact Node 22 runtime evidence are recorded in the draft PR description to keep the successfully checked commit fixed. A revert of the single correction commit restores the prior draft implementation. No dependency, credential, registration, worker bridge, database change, Railway action, production access, Resend connection, live email, manual CI rerun or merge was used. The next gate is independent C3c-4c-1 R2 rereview.
+
+## Status-level fatal observation correction
+
+Independent re-review of `7b6a60f05091502e37ff077c0ad2874376ddcc6e` reported zero R1 findings and one new R2. The original five R2 findings were independently closed. Before editing, PR #122 was open, draft, unmerged and mergeable with two commits and seven changed paths. Its base and fresh remote main were `ba03020684ac626af7e65ec67ee9cfa1d3cc273b`. The local and remote branch heads matched the reviewed commit and the managed worktree was clean.
+
+The parser used to report status-based provider health only after parsing the full header block. A valid fatal status could therefore lose its notification when a later field was malformed or when the peer closed early. The correction adds a void notification immediately after a valid bounded final status line has been recognized within the original deadline. Only 201–299, 300–399, 401, 403, 404 and 405 have status-only fatality. The existing complete-header, body-framing and provider evidence paths still own delivery results. The parser checks its stopped state after the notification, since the observer can synchronously abort and dispose the parser.
+
+The transport and provider changes are limited to that boundary. The provider test suite adds 44 cases for malformed and interrupted headers, reentrant abort, nonfatal and body-dependent statuses, invalid status lines, the original deadline and complete authentication evidence. The 25 targeted regressions of the reported defect failed against the reviewed head before implementation. The coalesced reentrant tests observe zero byte reads after the status when the fatal observer aborts, one request write, one fatal notification with zero arguments and resource cleanup. The prior five R2 proof designs remain in place.
+
+| Final local check | Result |
+| --- | --- |
+| `npm run typecheck`, `npm test`, `npm run build` | PASS on Node v22.23.5. All 2,044 npm tests passed with zero failures, skips or cancellations. |
+| Focused Resend config and provider suites | 22 and 266 PASS |
+| Focused C3c-4a engine and C3c-4b lifecycle suites | 68 and 66 PASS |
+| Disposable PG17 worker and lifecycle | 8/8 and 6/6 PASS |
+| Full C3c-3 and pinned prerequisites | 107/107 obligations, 213 scenarios, 47 races, 11/11 prerequisite regressions PASS |
+| Git blob equality | All 290 paths outside the correction scope match the reviewed head. All 288 main-base paths, including 44/44 SQL files, match byte-for-byte. The PR still changes seven files. |
+
+The final automatic CI run and exact-head results are recorded in the draft PR description so the checked commit stays fixed. The production registry remains empty and both worker integration bridges remain outside this slice. No dependency, credentials, live email, external Resend network, database change, production access, Railway action or merge. Revert the single correction commit to restore the reviewed head. The next gate is independent C3c-4c-1 final rereview.
