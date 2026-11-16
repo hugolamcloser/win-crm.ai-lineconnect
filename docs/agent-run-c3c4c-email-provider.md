@@ -52,3 +52,33 @@ The draft PR carries the automatic implementation-head CI evidence, including it
 The production provider registry is empty. C3c-4c-2 activation, credential pre-gating and lifecycle bridging are outside this slice. Database authority, worker/config/lifecycle, flags, package files, CI wiring and production Railway configuration remain at their existing state. Zero real credentials, provider requests, live mail, production access, migrations, deployment or merge were used. Live-provider and production smoke tests are outside the approved proof.
 
 Revert the focused commit to remove the adapter, parser, tests and documents. No database, deployment, credentials or environment rollback is required. The draft branch and managed worktree are retained.
+
+## C3c-4c-1 R2 correction
+
+The user authorized one bounded correction cycle on draft PR #122. Before editing, GitHub reported OPEN, DRAFT, UNMERGED and MERGEABLE, one commit and six changed paths. Remote main and the PR base were `ba03020684ac626af7e65ec67ee9cfa1d3cc273b`. The clean branch and PR head were `7a444208b8758c469a3f3effd21e33f2f3be2ff0`. The existing managed worktree and original commit were retained.
+
+The independent implementation review returned zero R1 findings and five R2 findings. The independent transport-contract review approved the connected TCP socket followed by a TLS wrap on that socket and a bounded HTTP/1.1 subset. The correction follows both review gates:
+
+| Finding | Correction and proof |
+| --- | --- |
+| R2-1, zeroing bytes while Node can still own them | Transfer one request buffer to the exact TLS write callback. Held-callback tests cover early acceptance, abort, deadline and socket error before release. |
+| R2-2, Authorization and Idempotency-Key exposed through Node HTTP surfaces | Connect through net and wrap with tls on the connected socket. Native ordinary HTTPS exposes both positive-control canaries. The revised path emits no HTTP client diagnostic or HttpClient performance entry, publishes only the plain TCP socket through net.client.socket, and delivers exact synthetic bytes to the TLS peer. |
+| R2-3, reconstructed headers do not prove the received limit | Count up to 16,384 actual wire octets through the terminating CRLFCRLF before normalization. Test 16,384 and 16,385 with large leading and trailing OWS and split reads. |
+| R2-4, unsupported transfer coding and trailers can influence evidence | Require one explicit Content-Length or single chunked coding with bounded metadata and an empty trailer section. Test segmentation, EOF, conflicting/unsupported framing and surplus discard. |
+| R2-5, statusCode rounds to apparently exact integer | Validate the entire bounded JSON structure at depth up to 64. Compare the original statusCode token to the three ASCII HTTP status digits. Tests cover rounded fractional forms, alternate lexical forms and decoded duplicate keys. |
+
+Changed paths are the new `src/services/every8dSettingsEmailResendTransport.ts` and updates to `src/services/every8dSettingsEmailResendProvider.ts`, `test/every8dSettingsEmailResendProvider.test.cjs`, `docs/every8d-c3c4c-resend-provider-contract.md` and this log. The main risks are request buffer ownership, native diagnostic confidentiality and ambiguous responses accidentally strengthening durable outcomes. The production registry remains empty, so the revised transport has no worker call site. The first native run exposed the test harness's literal-loopback bind dependency on dns.lookup. The test permits a synthesized literal response only and still blocks external DNS and connections. The local Windows sandbox also denied loopback, so the passing native proof ran with loopback available and the same test network guard.
+
+### Corrected-state proof
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck`, `npm test`, `npm run build` | PASS on Node v22.23.5, 2,000 tests with zero failures, skips or cancellations |
+| Focused Resend config and provider tests | 22 and 222 PASS |
+| Focused C3c-4a engine and C3c-4b lifecycle tests | 68 and 66 PASS |
+| Native TLS loopback on Node v22.23.5 | Trusted certificate with and without ALPN passes. Wrong hostname, untrusted and expired certificates fail before an HTTP write. Abort/deadline at TCP entry and during a TLS stall produce unknown. Exact one TCP connection, TLS wrap and HTTP write on the success path. |
+| Disposable PG17 worker and lifecycle | 8/8 and 6/6 PASS |
+| Full C3c-3 proof and pinned prerequisite regressions | 107/107 obligations across 213 scenarios and 47 races. All 11 pinned regressions PASS. |
+| Exact file equality | 290 pre-correction paths outside the scope match the reviewed head. All 288 main-base paths match, including 44/44 SQL files. The PR contains seven additions relative to main. |
+
+The first corrected-head automatic CI and exact Node 22 runtime evidence are recorded in the draft PR description to keep the successfully checked commit fixed. A revert of the single correction commit restores the prior draft implementation. No dependency, credential, registration, worker bridge, database change, Railway action, production access, Resend connection, live email, manual CI rerun or merge was used. The next gate is independent C3c-4c-1 R2 rereview.

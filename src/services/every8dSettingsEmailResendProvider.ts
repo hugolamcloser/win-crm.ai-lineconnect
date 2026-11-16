@@ -1,16 +1,12 @@
-import { addAbortListener } from "node:events";
-import type { ClientRequest, IncomingMessage } from "node:http";
-import { request, type RequestOptions } from "node:https";
 import { parseEvery8dSettingsEmailResendApiKey } from "../config/every8dSettingsEmailResend";
 import type {
   Every8dSettingsEmailProvider,
   Every8dSettingsEmailProviderInput,
   Every8dSettingsEmailProviderResult as Result,
 } from "../types/every8dSettingsEmailProvider";
+import { exchangeResendHttp, resendHost, resendMinimumBudgetNs, type ResendSocketConnectors }
+  from "./every8dSettingsEmailResendTransport";
 
-const maxHeaders = 16 * 1024;
-const maxBody = 16_384;
-const nsPerMs = 1_000_000n;
 const unknown = Object.freeze({ outcome: "outcome_unknown" } as const);
 const notStarted = Object.freeze({
   outcome: "not_accepted_retryable", evidence: Object.freeze({ kind: "transport_not_started" }),
@@ -19,102 +15,120 @@ const notAccepted = Object.freeze({
   outcome: "not_accepted_retryable", evidence: Object.freeze({ kind: "authoritative_non_acceptance" }),
 } as const);
 
-type RequestTransport = (options: RequestOptions, onResponse: (res: IncomingMessage) => void) => ClientRequest;
-
-function prepareRequest(apiKey: string, input: Every8dSettingsEmailProviderInput) {
+function prepareRequest(apiKey: string, input: Every8dSettingsEmailProviderInput): Buffer {
   const { canonicalSender, recipient, subject, body, idempotencyKey } = input;
   if ([canonicalSender, recipient, subject, body, idempotencyKey].some((field) => typeof field !== "string") ||
       !idempotencyKey || Buffer.byteLength(idempotencyKey, "utf8") > 256 || /[^\x21-\x7e]/.test(idempotencyKey)) {
     throw new Error("Invalid Resend email request.");
   }
-  const payload = Buffer.from(JSON.stringify({ from: canonicalSender, to: [recipient], subject, text: body }));
-  const options: RequestOptions = {
-    protocol: "https:", hostname: "api.resend.com", path: "/emails", method: "POST",
-    agent: false, rejectUnauthorized: true, maxHeaderSize: maxHeaders,
-  };
-  // Keep sensitive headers out of Node's connection options and diagnostics.
-  const headers = {
-    Authorization: "Bearer " + apiKey,
-    "Content-Type": "application/json",
-    Accept: "application/json",
-    "Accept-Encoding": "identity",
-    "Idempotency-Key": idempotencyKey,
-    "Content-Length": payload.byteLength,
-  };
-  return { options, headers, payload };
+  const json = JSON.stringify({ from: canonicalSender, to: [recipient], subject, text: body });
+  const headers = [
+    "POST /emails HTTP/1.1",
+    "Host: " + resendHost,
+    "Authorization: Bearer " + apiKey,
+    "Content-Type: application/json",
+    "Accept: application/json",
+    "Accept-Encoding: identity",
+    "Idempotency-Key: " + idempotencyKey,
+    "Content-Length: " + Buffer.byteLength(json, "utf8"),
+    "Connection: close",
+    "", "",
+  ];
+  return Buffer.from(headers.join("\r\n") + json, "utf8");
 }
 
-function responseLength(rawHeaders: string[]): number | undefined {
-  const headers = new Map<string, string>();
-  let size = 2;
-  for (let i = 0; i < rawHeaders.length; i += 2) {
-    const name = rawHeaders[i].toLowerCase();
-    const value = rawHeaders[i + 1];
-    size += Buffer.byteLength(rawHeaders[i], "latin1") + Buffer.byteLength(value, "latin1") + 4;
-    if (size > maxHeaders) return undefined;
-    if (name === "content-type" || name === "content-encoding" || name === "content-length") {
-      if (headers.has(name)) return undefined;
-      headers.set(name, value);
-    }
-  }
-  const mediaType = headers.get("content-type");
-  const encoding = headers.get("content-encoding");
-  if (!mediaType || !/^application\/json(?:[ \t]*;[ \t]*charset[ \t]*=[ \t]*(?:utf-8|"utf-8"))?[ \t]*$/i.test(mediaType) ||
-      (encoding !== undefined && encoding !== "identity")) return undefined;
-  const length = headers.get("content-length");
-  if (length === undefined) return -1;
-  if (!length || /[^0-9]/.test(length) || Number(length) > maxBody) return undefined;
-  return Number(length);
-}
+type JsonEvidence = { kind: "string" | "number" | "other"; text: string };
+const other: JsonEvidence = { kind: "other", text: "" };
+const relevantKeys = new Set(["id", "name", "message", "statusCode"]);
 
-function parseEvidence(bytes: Buffer, status: number): Record<string, unknown> | undefined {
+// Validate every token and container while retaining only top-level evidence.
+// A single validated string token can use the built-in escape decoder.
+function parseEvidence(bytes: Buffer, status: number) {
   const json = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-  const object: unknown = JSON.parse(json);
-  if (typeof object !== "object" || object === null || Array.isArray(object)) return undefined;
+  const tokenPattern = /[ \t\r\n]*("(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9A-Fa-f]{4}))*"|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?|true|false|null|[{}\[\]:,])/y;
+  const members = new Map<string, JsonEvidence>();
+  let count = 0;
+  let duplicate = false;
+  let position = 0;
+  const invalid = () => { throw new Error("Invalid Resend evidence."); };
 
-  // JSON.parse validates the grammar but collapses duplicate keys. Count decoded
-  // evidence keys at depth one, including escaped spellings of the same key.
-  const evidenceKeys = status === 200 ? ["id"] : ["name", "message", "statusCode"];
-  const seen = new Set<string>();
-  let depth = 0;
-  let previous = "";
-  for (const [token] of json.matchAll(/"(?:[^"\\]|\\[\s\S])*"|[{}\[\]:]/g)) {
-    if (token === ":" && depth === 1) {
-      const key: string = JSON.parse(previous);
-      if (evidenceKeys.includes(key)) {
-        if (seen.has(key)) return undefined;
-        seen.add(key);
-      }
-    }
-    if (token === "{" || token === "[") depth++;
-    if (token === "}" || token === "]") depth--;
-    previous = token;
+  function next(): string | undefined {
+    tokenPattern.lastIndex = position;
+    const token = tokenPattern.exec(json);
+    if (token) position = tokenPattern.lastIndex;
+    return token?.[1];
   }
-  return object as Record<string, unknown>;
+
+  function readValue(token: string | undefined, depth: number): JsonEvidence {
+    if (token === undefined) return invalid();
+    if (token === "{" || token === "[") {
+      readContainer(token, depth);
+      return other;
+    }
+    if (token.startsWith('"')) return { kind: "string", text: JSON.parse(token) as string };
+    if (/^[-0-9]/.test(token)) return { kind: "number", text: token };
+    if (token === "true" || token === "false" || token === "null") return other;
+    return invalid();
+  }
+
+  function readContainer(open: "{" | "[", depth: number): void {
+    if (depth > 64) invalid();
+    const close = open === "{" ? "}" : "]";
+    let token = next();
+    if (token === close) return;
+    for (;;) {
+      if (open === "{") {
+        if (!token?.startsWith('"')) return invalid();
+        const key = JSON.parse(token) as string;
+        if (next() !== ":") invalid();
+        const value = readValue(next(), depth + 1);
+        if (depth === 1) {
+          count++;
+          if (relevantKeys.has(key) && (status === 200 ? key === "id" : key !== "id")) {
+            if (members.has(key)) duplicate = true;
+            members.set(key, value);
+          }
+        }
+      } else {
+        readValue(token, depth + 1);
+      }
+      const delimiter = next();
+      if (delimiter === close) return;
+      if (delimiter !== ",") invalid();
+      token = next();
+    }
+  }
+
+  if (next() !== "{") return undefined;
+  readContainer("{", 1);
+  if (duplicate || /[^ \t\r\n]/.test(json.slice(position))) return undefined;
+  return { count, members };
 }
 
 function classify(status: number, bytes: Buffer): { result: Result; fatal: boolean } {
-  let object: Record<string, unknown> | undefined;
+  let object: ReturnType<typeof parseEvidence>;
   try { object = parseEvidence(bytes, status); } catch { /* Invalid UTF-8 or JSON. */ }
 
   if (status === 200) {
-    const id = object?.id;
-    if (object && Object.keys(object).length === 1 && Object.hasOwn(object, "id") && typeof id === "string" &&
-        id.length >= 1 && id.length <= 255 && !/[^\x21-\x7e]/.test(id)) {
+    const id = object?.members.get("id");
+    if (object?.count === 1 && id?.kind === "string" && id.text.length >= 1 &&
+        id.text.length <= 255 && !/[^\x21-\x7e]/.test(id.text)) {
       return { result: Object.freeze({
-        outcome: "accepted", evidence: "authoritative_acceptance", providerMessageId: id,
+        outcome: "accepted", evidence: "authoritative_acceptance", providerMessageId: id.text,
       }), fatal: false };
     }
     return { result: unknown, fatal: true };
   }
 
-  if (!object || !Object.hasOwn(object, "name") || !Object.hasOwn(object, "message") ||
-      typeof object.name !== "string" || typeof object.message !== "string" ||
-      (Object.hasOwn(object, "statusCode") && (!Number.isInteger(object.statusCode) || object.statusCode !== status))) {
+  const nameToken = object?.members.get("name");
+  const message = object?.members.get("message");
+  const declaredStatus = object?.members.get("statusCode");
+  if (nameToken?.kind !== "string" || message?.kind !== "string" ||
+      (declaredStatus && (declaredStatus.kind !== "number" || declaredStatus.text !== String(status)))) {
     return { result: unknown, fatal: false };
   }
 
-  const { name } = object;
+  const name = nameToken.text;
   if ((status === 401 && ["missing_api_key", "validation_error"].includes(name)) ||
       (status === 403 && ["invalid_permission", "restricted_api_key", "suspended_api_key"].includes(name))) {
     return { result: notAccepted, fatal: true };
@@ -126,146 +140,51 @@ function classify(status: number, bytes: Buffer): { result: Result; fatal: boole
   return { result: unknown, fatal };
 }
 
-function dispatch(
-  { options, headers, payload }: ReturnType<typeof prepareRequest>,
-  signal: AbortSignal,
-  deadline: bigint,
-  transport: RequestTransport,
-  reportProviderFatal: () => void,
-): Promise<Result> {
-  return new Promise((resolve) => {
-    let enteredTransport = false;
-    let settled = false;
-    let reportedFatal = false;
-    let outgoing: ClientRequest | undefined;
-    let incoming: IncomingMessage | undefined;
-    let responseEnded = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let abortListener: ReturnType<typeof addAbortListener> | undefined;
-    let requestBody: Buffer | undefined = payload;
-    let responseBody: Buffer | undefined;
-
-    const reportFatal = () => {
-      if (reportedFatal) return;
-      reportedFatal = true;
-      try { reportProviderFatal(); } catch { /* The observer supplies no delivery evidence. */ }
-    };
-    const releaseBody = () => {
-      requestBody?.fill(0);
-      requestBody = undefined;
-    };
-    const finish = (result: Result, fatal = false) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      abortListener?.[Symbol.dispose]();
-      if (!responseEnded) {
-        incoming?.destroy();
-        outgoing?.destroy();
-      }
-      incoming = undefined;
-      outgoing = undefined;
-      releaseBody();
-      responseBody?.fill(0);
-      responseBody = undefined;
-      if (fatal) reportFatal();
-      resolve(result);
-    };
-    const cancel = () => finish(enteredTransport ? unknown : notStarted);
-    const expired = () => signal.aborted || process.hrtime.bigint() >= deadline;
-    const failTransport = () => finish(unknown);
-    const armDeadline = () => {
-      const remaining = deadline - process.hrtime.bigint();
-      if (remaining <= 0n) { cancel(); return; }
-      const delay = (remaining + nsPerMs - 1n) / nsPerMs;
-      timer = setTimeout(armDeadline, Number(delay > 2_147_483_647n ? 2_147_483_647n : delay));
-    };
-
-    const onResponse = (res: IncomingMessage) => {
-      res.on("error", failTransport);
-      if (settled) { res.destroy(); return; }
-      incoming = res;
-      res.once("close", failTransport);
-      if (expired()) { cancel(); return; }
-      const status = res.statusCode ?? 0;
-      if ((status > 200 && status < 400) || status === 404 || status === 405) {
-        finish(unknown, true);
-        return;
-      }
-      // These statuses are fatal independently of the body. Keep reading bounded
-      // evidence because only specific complete error objects prove non-acceptance.
-      if (status === 401 || status === 403) reportFatal();
-      if (settled) return;
-      if (![200, 400, 401, 403, 409, 422, 429].includes(status)) {
-        finish(unknown);
-        return;
-      }
-
-      const length = responseLength(res.rawHeaders);
-      if (length === undefined) { finish(unknown, status === 200); return; }
-      responseBody = Buffer.alloc(maxBody);
-      let bytesRead = 0;
-      res.on("data", (chunk: Buffer) => {
-        if (!responseBody) return;
-        if (expired()) { cancel(); return; }
-        const nextLength = bytesRead + chunk.byteLength;
-        if (nextLength > maxBody || (length !== -1 && nextLength > length)) {
-          finish(unknown, status === 200);
-          return;
-        }
-        chunk.copy(responseBody, bytesRead);
-        bytesRead = nextLength;
-      });
-      res.once("end", () => {
-        if (!responseBody) return;
-        if (expired()) { cancel(); return; }
-        if (!res.complete) { failTransport(); return; }
-        responseEnded = true;
-        if (length !== -1 && length !== bytesRead) { finish(unknown, status === 200); return; }
-        const { result, fatal } = classify(status, responseBody.subarray(0, bytesRead));
-        if (expired()) { cancel(); return; }
-        finish(result, fatal);
-      });
-    };
-
-    try {
-      abortListener = addAbortListener(signal, cancel);
-      armDeadline();
-      if (settled || signal.aborted || deadline - process.hrtime.bigint() < nsPerMs) { cancel(); return; }
-      enteredTransport = true;
-      const active = transport(options, onResponse);
-      active.on("error", failTransport);
-      active.once("close", failTransport);
-      if (settled) { active.destroy(); return; }
-      outgoing = active;
-      // Read all header fields up to the byte limit, including duplicates.
-      active.maxHeadersCount = 0;
-      if (expired()) { cancel(); return; }
-      for (const [name, value] of Object.entries(headers)) active.setHeader(name, value);
-      if (expired()) { cancel(); return; }
-      active.end(requestBody, releaseBody);
-    } catch {
-      finish(enteredTransport ? unknown : notStarted, !enteredTransport);
-    }
-  });
-}
-
 export function createEvery8dSettingsEmailResendProvider({
   apiKey,
   reportProviderFatal,
-  requestForTest = request,
-}: Readonly<{ apiKey: string; reportProviderFatal(): void; requestForTest?: RequestTransport }>): Every8dSettingsEmailProvider {
+  socketsForTest,
+}: Readonly<{ apiKey: string; reportProviderFatal(): void; socketsForTest?: ResendSocketConnectors }>): Every8dSettingsEmailProvider {
   const admittedKey = parseEvery8dSettingsEmailResendApiKey(apiKey);
   if (admittedKey === undefined) throw new Error("Invalid Resend email configuration.");
 
   return Object.freeze({
     async send(input: Every8dSettingsEmailProviderInput): Promise<Result> {
-      try {
-        const { signal, deadlineMonotonicNs } = input;
-        if (signal.aborted || deadlineMonotonicNs - process.hrtime.bigint() < nsPerMs) return notStarted;
-        return dispatch(prepareRequest(admittedKey, input), signal, deadlineMonotonicNs, requestForTest, reportProviderFatal);
-      } catch {
+      let reported = false;
+      const report = () => {
+        if (reported) return;
+        reported = true;
         try { reportProviderFatal(); } catch { /* The observer supplies no delivery evidence. */ }
+      };
+
+      try {
+        const { signal, deadlineMonotonicNs: deadline } = input;
+        if (signal.aborted || deadline - process.hrtime.bigint() < resendMinimumBudgetNs) return notStarted;
+        return exchangeResendHttp<Result>(prepareRequest(admittedKey, input), {
+          signal, deadline, unknown, notStarted, preEntryFailure: report,
+          onHeaders(status) {
+            if ((status > 200 && status < 400) || status === 404 || status === 405) {
+              report();
+              return unknown;
+            }
+            if (status === 401 || status === 403) report();
+            return [200, 400, 401, 403, 409, 422, 429].includes(status) ? undefined : unknown;
+          },
+          onInvalid(status) {
+            if (status === 200) report();
+            return unknown;
+          },
+          onBody(status, bytes, expired) {
+            const { result, fatal } = classify(status, bytes);
+            if (expired()) return unknown;
+            // A reentrant fatal observer can abort this send. The transport's
+            // single settlement then keeps the conservative result.
+            if (fatal) report();
+            return result;
+          },
+        }, socketsForTest);
+      } catch {
+        report();
         return notStarted;
       }
     },
