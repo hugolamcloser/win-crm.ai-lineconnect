@@ -37,7 +37,8 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
   const emit = createEmailWorkerTelemetry(dependencies.telemetry, clock);
   let state: "idle" | "running" | "stopping" | "stopped" = "idle";
   let stopReason: EmailWorkerStopReason = "signal";
-  let flowActive = false, repositoryActive = 0, providerActive = 0, repositoryFailed = false;
+  let flowActive = false, repositoryActive = 0, repositoryFailed = false;
+  const providerControllers = new Set<AbortController>();
   let cancelWait = () => {}, cancelDrain = () => {};
   const cancellation = new AbortController();
   let resolveDone!: (result: EmailWorkerExit) => void;
@@ -46,11 +47,14 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
     if (state !== "stopping") return;
     state = "stopped";
     cancelWait(); cancelDrain();
+    if (!drained && stopReason === "provider_fatal") {
+      for (const controller of providerControllers) controller.abort();
+    }
     emit(drained ? "drained" : "drain_expired", undefined, stopReason);
     resolveDone(Object.freeze({ reason: stopReason, drained }));
   }
   function checkDrain(): void {
-    if (!flowActive && repositoryActive === 0 && providerActive === 0) finish(true);
+    if (!flowActive && repositoryActive === 0 && providerControllers.size === 0) finish(true);
   }
   function stop(reason: EmailWorkerStopReason = "signal"): Promise<EmailWorkerExit> {
     if (state === "stopping" || state === "stopped") return done;
@@ -58,7 +62,8 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
     emit("stopping", undefined, reason);
     cancelDrain = clock.schedule(emailWorkerTiming.drainMs, () => finish(false));
     cancelWait();
-    cancellation.abort();
+    // Let the admitted provider results reach the engine during a fatal drain.
+    if (reason !== "provider_fatal") cancellation.abort();
     checkDrain();
     return done;
   }
@@ -102,7 +107,7 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
       // treating abort as positive non-acceptance.
       const controller = new AbortController();
       const inputSignal = input.signal;
-      providerActive += 1;
+      providerControllers.add(controller);
       return new Promise<Every8dSettingsEmailProviderResult>((resolve) => {
         let settled = false, cancelDeadline = () => {};
         const finishProvider = (result: Every8dSettingsEmailProviderResult, abort: boolean) => {
@@ -110,7 +115,7 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
           settled = true; cancelDeadline();
           inputSignal.removeEventListener("abort", forwardAbort);
           if (abort) controller.abort();
-          providerActive -= 1; resolve(result); checkDrain();
+          providerControllers.delete(controller); resolve(result); checkDrain();
         };
         const unknown = Object.freeze({ outcome: "outcome_unknown" } as const);
         const forwardAbort = () => finishProvider(unknown, true);

@@ -26,6 +26,11 @@ export async function runEvery8dSettingsEmailWorkerProcess(dependencies: Readonl
     if (reason === "process_failure") failure = true;
     void runtime?.stop(reason);
   }
+  function reportProviderFatal(): void {
+    // A fatal notification still changes the exit status during an existing stop.
+    failure = true;
+    stop("provider_fatal");
+  }
   const signal = () => stop("signal"), fatal = () => stop("process_failure");
   const handlers = [["SIGTERM", signal], ["SIGINT", signal], ["uncaughtException", fatal], ["unhandledRejection", fatal]] as const;
   for (const [event, handler] of handlers) dependencies.process.on(event, handler);
@@ -37,7 +42,7 @@ export async function runEvery8dSettingsEmailWorkerProcess(dependencies: Readonl
     if (stopping) return Object.freeze({ exitCode: failure ? 1 : 0, forceExit: false });
     const ready = config.registration.parseReadiness(source);
     if (stopping) return Object.freeze({ exitCode: failure ? 1 : 0, forceExit: false });
-    const provider = ready.createClient();
+    const provider = ready.createClient(reportProviderFatal);
     if (stopping) return Object.freeze({ exitCode: failure ? 1 : 0, forceExit: false });
     const repository = dependencies.createRepository(config.auth);
     if (stopping) return Object.freeze({ exitCode: failure ? 1 : 0, forceExit: false });

@@ -5,15 +5,24 @@ const {fixture,environment,tick,deferred,EventEmitter,assert} = require('./helpe
 const {emailWorkerDelay,EmailWorkerStopping} = require('../dist/workers/every8dSettingsEmailWorkerRuntime');
 const {runEvery8dSettingsEmailWorkerProcess:run} = require('../dist/workers/every8dSettingsEmailWorkerProcess');
 const {createEmailWorkerTelemetry} = require('../dist/workers/every8dSettingsEmailWorkerTelemetry');
+const F = require('./helpers/every8dSettingsEmailOutboxFixtures.cjs');
+const { encryptEvery8dSettingsEmailOutboxPayload } = require('../dist/services/every8dSettingsEmailOutboxCrypto');
+const resendKey = 'EVERY8D_SETTINGS_AUTH_EMAIL_RESEND_API_KEY';
+const resendEnvironment = () => ({ ...environment(), EVERY8D_SETTINGS_AUTH_EMAIL_PROVIDER: 'resend' });
 const unavailable = {data:null,error:{}};
 function processHarness(options={}) {
   const events=[], proc=new EventEmitter(), h=fixture({empty:true,...options});
+  let reportFatal;
   const result=run({process:proc,loadEnvironment(){
     assert.ok(['SIGINT','SIGTERM','uncaughtException','unhandledRejection'].every(e=>proc.listenerCount(e)===1));
     events.push('environment');return options.env??environment();
-  },registry:options.registry??{'test-only':{parseReadiness(){events.push('readiness'); options.onReady?.(proc);return {createClient(){events.push('factory');return h.provider;}};} }},
-    createRepository(){events.push('repository');return h.repo;},clock:h.time.clock,random:()=>0,telemetry(e){events.push(e.event);h.telemetry.push(e);options.onTelemetry?.(e,proc);}});
-  return {result,proc,h,events};
+  },registry:options.registry??{'test-only':{parseReadiness(){events.push('readiness'); options.onReady?.(proc);return {createClient(reportProviderFatal){events.push('factory');reportFatal=reportProviderFatal;options.onFactory?.(reportFatal,proc);return h.provider;}};} }},
+    createRepository(){events.push('repository');return h.repo;},clock: { ...h.clock, schedule(delay, callback) {
+      const cancel = h.clock.schedule(delay, callback);
+      options.onSchedule?.(delay, reportFatal);
+      return cancel;
+    } },random:()=>0,telemetry(e){events.push(e.event);h.telemetry.push(e);options.onTelemetry?.(e,proc);}});
+  return {result,proc,h,events,reportFatal};
 }
 
 test('disabled executable has no operational imports, timers, factory, repository or network',()=>{
@@ -30,8 +39,8 @@ test('startup handles signals first; disabled is zero operational construction',
   assert.deepEqual(await p.result,{exitCode:0,forceExit:false});assert.deepEqual(p.events,['environment','disabled']);assert.deepEqual(p.h.events,[]);
   assert.equal(p.h.time.timers.size,0);assert.equal(p.proc.eventNames().length,0);
 });
-test('empty production registry fails before readiness, factory, repository and timers',async()=>{
-  const p=processHarness({registry:{}});assert.equal((await p.result).exitCode,1);
+test('unknown production provider fails before readiness, factory, repository and timers',async()=>{
+  const p=processHarness({registry:require('../dist/services/every8dSettingsEmailProviderRegistry').every8dSettingsEmailProviderRegistry});assert.equal((await p.result).exitCode,1);
   assert.deepEqual(p.events,['environment','startup_failed']);assert.equal(p.h.time.timers.size,0);
 });
 test('startup ordering and barriers; no polling until recovery THEN purge succeed',async()=>{
@@ -170,10 +179,10 @@ test('fresh closed telemetry discards canaries in every forbidden field and exce
 });
 
 
-test('operational executable fails closed with empty registry before operational imports or network',()=>{
+test('operational Resend executable with no key fails before construction, runtime imports or network',()=>{
   const main=path.resolve('dist/workers/every8dSettingsEmailWorkerMain.js');
-  const code=`const Module=require('module');const load=Module._load;Module._load=function(id,...args){if(/EmailWorkerRuntime|EmailOutboxRepository|supabase/.test(id))throw Error('operational import forbidden');return load.call(this,id,...args)};global.fetch=()=>{throw Error('network forbidden')};global.setTimeout=()=>{throw Error('timer forbidden')};process.argv=[process.execPath,${JSON.stringify(main)}];Module.runMain(${JSON.stringify(main)});`;
-  const child=spawnSync(process.execPath,['-e',code],{encoding:'utf8',env:{PATH:process.env.PATH,SYSTEMROOT:process.env.SYSTEMROOT,NODE_ENV:'test',...environment()}});
+  const code=`const Module=require('module');const load=Module._load;let attempts=0;const forbidden=()=>{attempts++;throw Error('operational resource forbidden')};Module._load=function(id,...args){if(/EmailResendProvider|EmailWorkerRuntime|EmailOutboxRepository|supabase/.test(id))forbidden();return load.call(this,id,...args)};global.fetch=forbidden;global.setTimeout=forbidden;process.on('exit',()=>{if(attempts!==0)process.exitCode=91});process.argv=[process.execPath,${JSON.stringify(main)}];Module.runMain(${JSON.stringify(main)});`;
+  const child=spawnSync(process.execPath,['-e',code],{encoding:'utf8',env:{PATH:process.env.PATH,SYSTEMROOT:process.env.SYSTEMROOT,NODE_ENV:'test',DOTENV_CONFIG_PATH:path.resolve('.temp/nonexistent-env'),...resendEnvironment()}});
   assert.ok(child.status===1 && child.stderr==='' && child.stdout.trim()==='{"component":"settings_email_worker","event":"startup_failed"}', 'safe fail-closed executable');
 });
 test('shutdown at ready closes claim admission before first poll',async()=>{
@@ -337,3 +346,247 @@ test('R2-1 an input signal aborted before listener registration is handled witho
     assert.ok([...targets].every(signal=>getEventListeners(signal,'abort').length===0));
   }finally{AbortSignal.prototype.addEventListener=original;}
 });
+
+const accepted = { outcome: 'accepted', evidence: 'authoritative_acceptance', providerMessageId: 'synthetic-bridge-id' };
+const nonAcceptance = { outcome: 'not_accepted_retryable', evidence: { kind: 'authoritative_non_acceptance' } };
+const unknown = { outcome: 'outcome_unknown' };
+const stopEvents = (h) => h.telemetry.filter(({ event }) => ['stopping', 'drained', 'drain_expired'].includes(event));
+const stopRecord = (event, reason = 'provider_fatal') => ({ component: 'settings_email_worker', event, reason });
+
+test('operational Resend startup rejects missing or malformed credentials before any construction', async () => {
+  const registry = require('../dist/services/every8dSettingsEmailProviderRegistry').every8dSettingsEmailProviderRegistry;
+  for (const value of [undefined, ' synthetic-invalid-key']) {
+    const p = processHarness({ registry, env: { ...resendEnvironment(), [resendKey]: value } });
+    assert.deepEqual(await p.result, { exitCode: 1, forceExit: false });
+    assert.deepEqual(p.events, ['environment', 'startup_failed']);
+    assert.equal(p.h.time.timers.size, 0);
+  }
+});
+
+test('valid Resend starts the normal process with the production registry and no send', async () => {
+  const registry = require('../dist/services/every8dSettingsEmailProviderRegistry').every8dSettingsEmailProviderRegistry;
+  const p = processHarness({
+    registry, env: { ...resendEnvironment(), [resendKey]: 'synthetic-resend-test-only' },
+    onTelemetry(event, proc) { if (event.event === 'ready') proc.emit('SIGTERM'); }
+  });
+  assert.deepEqual(await p.result, { exitCode: 0, forceExit: false });
+  assert.deepEqual(p.events, ['environment', 'repository', 'recovery', 'ready', 'stopping', 'drained']);
+  assert.deepEqual(p.h.events, ['recover', 'purge']);
+  assert.equal(p.h.time.timers.size, 0);
+});
+
+test('factory fatal latches failure and prevents repository and runtime startup', async () => {
+  const p = processHarness({ onFactory(report, proc) { report(); proc.emit('SIGTERM'); report(); } });
+  assert.deepEqual(await p.result, { exitCode: 1, forceExit: false });
+  assert.deepEqual(p.events, ['environment', 'readiness', 'factory']);
+  assert.deepEqual(p.h.events, []);
+  assert.equal(p.h.time.timers.size, 0);
+  assert.equal(p.proc.eventNames().length, 0);
+});
+
+for (const result of [accepted, nonAcceptance, unknown]) {
+  test('fatal before result preserves ' + result.outcome + ' and finalizes once during drain', async () => {
+    const pending = deferred();
+    let p;
+    p = processHarness({ empty: false, provider(input) {
+      p.reportFatal();
+      assert.deepEqual(stopEvents(p.h), [stopRecord('stopping')]);
+      assert.equal(input.signal.aborted, false);
+      assert.equal(p.h.finals.length, 0);
+      return pending.promise;
+    }, finalize(args, normal) {
+      if (result !== nonAcceptance) return normal();
+      return { data: [{ ...F.responses().finalize, state: 'RETRY_WAIT', terminal_disposition: null,
+        terminal_at: null, available_at: '2026-10-26T00:00:06.000001Z', provider_message_id: null,
+        challenge_recording: 'not_applicable' }], error: null };
+    }, onTelemetry(event, proc) {
+      if (event.event === 'stopping') { p.reportFatal(); proc.emit('SIGTERM'); }
+    } });
+    let exited = false;
+    p.result.then(() => { exited = true; });
+    await tick();
+    await p.h.advance(9000);
+    assert.equal(exited, false);
+    assert.equal(p.h.providerDeadlines[0], 10000000000n);
+    assert.equal(p.h.providerSignals[0].aborted, false);
+    pending.resolve(result);
+    assert.deepEqual(await p.result, { exitCode: 1, forceExit: false });
+    assert.deepEqual(p.h.events, ['recover', 'purge', 'claim', 'begin', 'provider', 'finalize']);
+    assert.equal(p.h.finals[0].input_provider_outcome, result.outcome);
+    assert.equal(p.h.finals[0].input_non_acceptance_proven, result === nonAcceptance);
+    assert.equal(p.h.finals[0].input_provider_message_id, result.providerMessageId ?? null);
+    assert.deepEqual(stopEvents(p.h), [stopRecord('stopping'), stopRecord('drained')]);
+    assert.equal(p.h.scheduledDelays.filter(delay => delay === 20000).length, 1);
+    assert.equal(p.h.time.timers.size, 0);
+  });
+}
+
+for (const phase of ['recover', 'ready', 'claim', 'begin', 'final provider check']) {
+  test('fatal closes later admission at ' + phase, async () => {
+    let reportFatal, providerTimers = 0;
+    const interrupt = (args, normal) => { reportFatal(); return normal(); };
+    const p = processHarness({
+      empty: false, [phase]: interrupt,
+      onFactory(report) { reportFatal = report; },
+      onTelemetry(event) { if (phase === 'ready' && event.event === 'ready') reportFatal(); },
+      onSchedule(delay, report) {
+        // The runtime's deadline timer is the second 10s timer after the engine's timer.
+        if (phase === 'final provider check' && delay === 10000 && ++providerTimers === 2) report();
+      }
+    });
+    assert.deepEqual(await p.result, { exitCode: 1, forceExit: false });
+    const expected = ['recover', 'purge', 'claim', 'begin'].slice(0,
+      { recover: 1, ready: 2, claim: 3, begin: 4, 'final provider check': 4 }[phase]);
+    // A durable begin acknowledgement can reach the engine after closure. The existing
+    // wrapper/engine treats that blocked invocation conservatively as unknown.
+    if (phase === 'begin' || phase === 'final provider check') {
+      expected.push('finalize');
+      assert.equal(p.h.finals[0].input_provider_outcome, 'outcome_unknown');
+      assert.equal(p.h.finals[0].input_non_acceptance_proven, false);
+    }
+    assert.deepEqual(p.h.events, expected);
+    assert.deepEqual(stopEvents(p.h), [stopRecord('stopping'), stopRecord('drained')]);
+    await p.h.advance(60000);
+    assert.deepEqual(p.h.events, expected);
+  });
+}
+
+test('ten admitted sends retain their deadlines and finalize once while a new poll is blocked', async () => {
+  const jobs = Array.from({ length: 10 }, (_, i) =>
+    '00000000-0000-4000-8000-' + String(i + 1).padStart(12, '0'));
+  const pending = jobs.map(() => deferred());
+  const triggerFatal = deferred();
+  const submitted = new Set();
+  let claimCount = 0, p;
+  p = processHarness({
+    claim(args) {
+      assert.equal(args.input_batch_size, 10);
+      claimCount++;
+      const candidates = claimCount === 1 ? jobs : ['00000000-0000-4000-8000-000000000011'];
+      return { data: candidates.map(jobId => {
+        const envelope = encryptEvery8dSettingsEmailOutboxPayload({ ...F.context(), jobId },
+          { recipient: 'synthetic@example.invalid', displayOtp: '2345-6789' },
+          { activeKeyVersion: 'enc', keys: p.h.keys });
+        return F.claimRow(envelope, { job_id: jobId });
+      }), error: null };
+    },
+    begin(args) {
+      return { data: [{ ...F.responses().beginSend, job_id: args.input_job_id }], error: null };
+    },
+    provider(input) {
+      const index = submitted.size;
+      submitted.add(input.idempotencyKey);
+      return index === 0 ? triggerFatal.promise.then(() => {
+        p.reportFatal();
+        return pending[index].promise;
+      }) : pending[index].promise;
+    },
+    finalize(args) {
+      return { data: [{ ...F.responses().finalize, job_id: args.input_job_id,
+        provider_message_id: args.input_provider_message_id }], error: null };
+    }
+  });
+  await tick();
+  assert.equal(submitted.size, 10);
+  assert.equal(p.h.providerSignals.length, 10);
+  assert.equal(p.h.finals.length, 0);
+  triggerFatal.resolve();
+  await tick();
+  assert.deepEqual(stopEvents(p.h), [stopRecord('stopping')]);
+  assert.ok(p.h.providerSignals.every(signal => !signal.aborted));
+  assert.deepEqual(p.h.providerDeadlines, Array(10).fill(10000000000n));
+  await p.h.advance(9000);
+  for (const response of pending) response.resolve(accepted);
+  assert.deepEqual(await p.result, { exitCode: 1, forceExit: false });
+  await p.h.advance(60000);
+  assert.equal(claimCount, 1);
+  assert.equal(p.h.providerSignals.length, 10);
+  assert.equal(p.h.finals.length, 10);
+  assert.deepEqual(p.h.finals.map(args => args.input_job_id).sort(), jobs);
+  assert.ok(p.h.finals.every(args => args.input_provider_outcome === 'accepted'));
+  assert.ok(p.h.providerSignals.every(signal => !signal.aborted));
+  assert.deepEqual(stopEvents(p.h), [stopRecord('stopping'), stopRecord('drained')]);
+});
+
+test('provider deadline still aborts a pending send before the fatal drain expires', async () => {
+  const pending = deferred();
+  const p = processHarness({ empty: false, provider: () => pending.promise });
+  await tick();
+  p.reportFatal();
+  await p.h.advance(9999);
+  assert.equal(p.h.providerSignals[0].aborted, false);
+  assert.equal(p.h.finals.length, 0);
+  await p.h.advance(1);
+  assert.equal(p.h.providerSignals[0].aborted, true);
+  assert.deepEqual(await p.result, { exitCode: 1, forceExit: false });
+  pending.resolve(accepted);
+  await tick();
+  assert.equal(p.h.finals.length, 1);
+  assert.equal(p.h.finals[0].input_provider_outcome, 'outcome_unknown');
+  assert.deepEqual(stopEvents(p.h), [stopRecord('stopping'), stopRecord('drained')]);
+  assert.equal(p.h.time.timers.size, 0);
+});
+
+test('fatal drain expiry aborts remaining transports and prevents post-expiry finalization', async () => {
+  const pending = deferred();
+  const p = processHarness({ empty: false, provider: () => pending.promise });
+  await tick();
+  p.reportFatal();
+  const signal = p.h.providerSignals[0];
+  let aborts = 0;
+  signal.addEventListener('abort', () => { aborts++; p.reportFatal(); }, { once: true });
+  // Delay dispatch of the provider deadline callbacks to exercise the drain's own
+  // transport cleanup. The provider still received the original 10s deadline.
+  assert.equal(p.h.providerDeadlines[0], 10000000000n);
+  p.h.time.elapseNs(19999000000n);
+  p.reportFatal();
+  p.proc.emit('SIGINT');
+  assert.equal(signal.aborted, false);
+  const drain = [...p.h.time.timers].find(timer => timer.at === 20000000000n);
+  assert.ok(drain);
+  assert.equal(p.h.scheduledDelays.filter(delay => delay === 20000).length, 1);
+  p.h.time.elapseNs(1000000n);
+  drain.callback();
+  assert.equal(signal.aborted, true);
+  assert.equal(aborts, 1);
+  assert.deepEqual(await p.result, { exitCode: 1, forceExit: true });
+  pending.resolve(accepted);
+  await p.h.advance(0);
+  assert.deepEqual(p.h.events, ['recover', 'purge', 'claim', 'begin', 'provider']);
+  assert.deepEqual(stopEvents(p.h), [stopRecord('stopping'), stopRecord('drain_expired')]);
+  assert.equal(p.h.time.timers.size, 0);
+});
+
+for (const reason of ['signal', 'process_failure', 'repository_contract_violation']) {
+  test(reason + ' first keeps ordinary abort while a later provider fatal latches failure', async () => {
+    const pending = deferred();
+    const finalization = deferred();
+    let p;
+    p = processHarness({
+      empty: false, provider: () => pending.promise,
+      finalize(args, normal) {
+        if (reason === 'repository_contract_violation') return { data: [{ malformed: true }], error: null };
+        return finalization.promise.then(normal);
+      },
+      onTelemetry(event) {
+        if (event.event === 'stopping' && reason === 'repository_contract_violation') p.reportFatal();
+      }
+    });
+    await tick();
+    if (reason === 'repository_contract_violation') {
+      pending.resolve(accepted);
+    } else {
+      const event = reason === 'signal' ? 'SIGTERM' : 'unhandledRejection';
+      p.proc.emit(event);
+      assert.equal(p.h.providerSignals[0].aborted, true);
+      p.reportFatal();
+      pending.resolve(accepted);
+      finalization.resolve();
+    }
+    assert.deepEqual(await p.result, { exitCode: 1, forceExit: false });
+    assert.equal(p.h.finals.length, 1);
+    assert.equal(p.h.finals[0].input_provider_outcome, reason === 'repository_contract_violation' ? 'accepted' : 'outcome_unknown');
+    assert.deepEqual(stopEvents(p.h), [stopRecord('stopping', reason), stopRecord('drained', reason)]);
+    assert.equal(p.h.scheduledDelays.filter(delay => delay === 20000).length, 1);
+  });
+}

@@ -1,6 +1,6 @@
-# C3c-4c-1 Resend provider contract
+# C3c-4c Resend provider contract
 
-C3c-4c-1 adds the source and network-free proof for provider ID `resend`. The production registry is empty and the worker has no call site for the credential parser or factory. **C3c-4c-1 does not make live email possible.** C3c-4c-2 owns the proposed disabled-config pre-gate parser call, static registration and provider-fatal lifecycle bridge. The C3c-4a worker engine, C3c-4b lifecycle and C3c-3 database authority remain frozen, including the outbox, fences, leases, attempt limits, retry timing, renderer, crypto and idempotency generation.
+C3c-4c-1 supplies the reviewed adapter, transport and network-free proof for provider ID `resend`. C3c-4c-2 connects those modules to the settings email worker in source. The C3c-4a engine and C3c-3 database authority still govern delivery evidence, outbox state, fences, leases, attempt limits, retry timing and idempotency.
 
 ## Credential and request
 
@@ -73,3 +73,15 @@ The adapter invokes `reportProviderFatal()` synchronously when it establishes a 
 The callback carries no identity, payload, reason or evidence. The result carries no fatal field. Late events cannot replace a selected result or report fatal again. This slice emits no definitive message refusal, uses no Retry-After scheduling and performs no internal retry.
 
 Configuration errors are fixed and value-free. Adapter diagnostics exclude the key, Authorization, message content and identifiers, idempotency key, provider response, raw exceptions and request objects. A validated provider message ID crosses only the acceptance-result interface. Tests trap external network entry and use synthetic values. Native Node 22 loopback exercises the TLS peer, ordinary HTTPS as a positive diagnostic control, absence of HTTP client diagnostic/performance events from the revised path, and observation of the retained plain TCP socket through cleanup.
+
+## Worker integration in C3c-4c-2
+
+The worker configuration validates the shape of a supplied `EVERY8D_SETTINGS_AUTH_EMAIL_RESEND_API_KEY` before applying the disabled gate, regardless of provider selection. A malformed value produces the fixed worker configuration error. A missing or valid supplied value permits an otherwise valid disabled worker configuration, including a dormant unknown provider ID. Worker configuration never retains the Resend key.
+
+The production source registry has one frozen own registration, `resend`. Operational startup reads the environment, admits the worker configuration, parses readiness, constructs the client and then constructs the repository and runtime before starting the loop. Readiness requires an admitted key held privately for client construction. Readiness and construction do no I/O and schedule no work. The client opens a connection only when a send reaches the adapter.
+
+The process-owned fatal callback latches a nonzero exit and synchronously closes claim, begin-send, maintenance and new provider admission when it initiates shutdown. The first stop mode wins. Ordinary stops immediately cancel the batch. A first `provider_fatal` stop preserves in-flight provider signals and original deadlines so completed results can reach finalization during the existing 20-second drain. Repeated notifications and later signals leave the drain deadline in place. A fatal notification during an ordinary stop still latches failure. A fatal notification during client construction ends startup before repository or runtime construction.
+
+Drain expiry aborts remaining provider transport controllers and requests a forced process exit. The callback supplies zero delivery evidence, and the unchanged engine processes actual results and repository receipts. Telemetry allowlists only the fixed `provider_fatal` reason on the existing lifecycle events.
+
+**Static source registration and production activation are separate.** Live email remains unavailable without an operational environment, its required flags and credentials, and a worker deployment. This slice uses synthetic credentials and local proofs and makes no deployment or external Resend request.

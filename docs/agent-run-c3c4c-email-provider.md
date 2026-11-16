@@ -101,3 +101,32 @@ The transport and provider changes are limited to that boundary. The provider te
 | Git blob equality | All 290 paths outside the correction scope match the reviewed head. All 288 main-base paths, including 44/44 SQL files, match byte-for-byte. The PR still changes seven files. |
 
 The final automatic CI run and exact-head results are recorded in the draft PR description so the checked commit stays fixed. The production registry remains empty and both worker integration bridges remain outside this slice. No dependency, credentials, live email, external Resend network, database change, production access, Railway action or merge. Revert the single correction commit to restore the reviewed head. The next gate is independent C3c-4c-1 final rereview.
+
+## C3c-4c-2 source integration
+
+On 2026-11-16 (Asia/Kuala_Lumpur), fetched `origin/main` for `hugolamcloser/win-crm.ai-lineconnect` and verified exact base `9889a292e47cf9514950ce62fc39309d220ddd54`, the squash merge of PR #122. [CI #144, attempt 1](https://github.com/hugolamcloser/win-crm.ai-lineconnect/actions/runs/43858820827/attempts/1) was a push on that SHA and all three required jobs passed. Created a new managed worktree and branch `codex/c3c4c2-resend-integration-bridge` at that SHA. The C3c-4c-1 worktree was retained separately.
+
+| Source file | Integration |
+| --- | --- |
+| `src/config/every8dSettingsEmailWorker.ts` | Pure validation of the optional supplied Resend key before the disabled gate. A malformed value raises the fixed worker configuration error. The worker config carries no Resend credential. |
+| `src/services/every8dSettingsEmailProviderRegistry.ts` | The sole static frozen source registration is `resend`. Local readiness requires the key when Resend is selected and holds it privately for network-free client construction. |
+| `src/workers/every8dSettingsEmailWorkerProcess.ts` | The zero-argument callback latches process failure before checking whether the first stop already owns shutdown. A fatal during provider construction prevents further startup. |
+| `src/workers/every8dSettingsEmailWorkerRuntime.ts` | A first provider-fatal stop immediately closes admission and drains with the original send deadlines. Ordinary stops still abort the batch immediately. The existing 20-second drain aborts remaining tracked controllers if it expires. |
+| `src/workers/every8dSettingsEmailWorkerTelemetry.ts` | Fixed `provider_fatal` stop reason on existing lifecycle events. |
+
+The principal integration risk is replacing a result that arrives after the callback with cancellation-derived unknown. The fatal drain keeps admitted signals active until their original deadlines, permits finalization and preserves the first stop mode. The callback carries no delivery evidence. Tests cover accepted, authoritative non-acceptance and unknown outcomes, ten active submissions, subsequent admission refusal, deadline and drain bounds, and process exit 1 after both clean and expired fatal drains. Registry and startup tests trap construction-time I/O and use synthetic credentials.
+
+### C3c-4c-2 validation
+
+| Local check | Result |
+| --- | --- |
+| `npm run typecheck`, `npm test`, `npm run build` | PASS on Node v24.14.0. All 2,065 tests passed with zero failures, skips or cancellations. |
+| Focused worker config, registry and worker lifecycle | 26, 4 and 83 PASS |
+| Focused Resend config, Resend provider and C3c-4a engine | 22, 266 and 68 PASS. All 469 focused tests also passed on Node v22.23.5. |
+| Disposable PG17 worker and lifecycle | 8/8 and 6/6 PASS |
+| Full C3c-3 proof and pinned prerequisite regressions | PG 17.11, 107/107 obligations PASS across 213 scenarios and 47 races, with 11/11 pinned prerequisite regressions PASS. |
+| Protected files | All 285 paths outside the 10-file integration scope match the base, including 44/44 SQL files. |
+
+The C3c-4a engine, Resend credential parser, provider and transport, package files, CI workflow and database authority stay frozen. The PG17 proof uses a disposable local container with networking disabled. Generated proof output stays in ignored scratch space.
+
+Static source registration leaves live email unavailable without the runtime flags, real credentials and deployment. The work uses synthetic keys and local tests. It includes no external Resend test, live email, production credential, database migration, Railway change or deployment. Reverting the integration commit restores the prior configuration, registry and lifecycle. No infrastructure rollback is needed. Automatic CI evidence belongs with the draft PR on the checked implementation SHA. The next gate is independent C3c-4c-2 implementation review.

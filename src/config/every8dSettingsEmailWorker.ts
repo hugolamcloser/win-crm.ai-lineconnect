@@ -1,4 +1,5 @@
 import { readEvery8dSettingsAuthConfig } from "./every8dSettingsAuth";
+import { parseEvery8dSettingsEmailResendApiKey } from "./every8dSettingsEmailResend";
 import type { Every8dSettingsAuthConfig } from "./every8dSettingsAuth";
 import type { Every8dSettingsEmailOutboxEncryptionConfig } from "./every8dSettingsEmailOutbox";
 import { normalizeEvery8dSettingsEmail } from "../services/every8dSettingsAuthPrimitives";
@@ -68,6 +69,11 @@ export function readEvery8dSettingsEmailWorkerConfig(
   const auth = readEvery8dSettingsAuthConfig(source);
   const providerId = parseProviderId(source.EVERY8D_SETTINGS_AUTH_EMAIL_PROVIDER);
   const canonicalSender = parseCanonicalSender(source.EVERY8D_SETTINGS_AUTH_EMAIL_FROM);
+  try {
+    parseEvery8dSettingsEmailResendApiKey(source.EVERY8D_SETTINGS_AUTH_EMAIL_RESEND_API_KEY);
+  } catch {
+    return invalidConfiguration();
+  }
   const operational = auth.enabled && auth.httpEnabled && auth.emailDispatchEnabled;
 
   if (!operational) {
