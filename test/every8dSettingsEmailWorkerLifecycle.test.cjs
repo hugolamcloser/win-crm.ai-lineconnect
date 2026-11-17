@@ -557,6 +557,81 @@ test('fatal drain expiry aborts remaining transports and prevents post-expiry fi
   assert.equal(p.h.time.timers.size, 0);
 });
 
+for (const lateCompletion of ['resolve', 'reject']) {
+  test('fatal drain releases provider ownership before runtime.done despite late ' + lateCompletion, async () => {
+    const { getEventListeners } = require('node:events');
+    const targets = [];
+    const add = AbortSignal.prototype.addEventListener;
+    const pending = deferred();
+    const h = fixture({ provider: () => pending.promise });
+    AbortSignal.prototype.addEventListener = function (type, ...args) {
+      if (type === 'abort') targets.push(this);
+      return add.call(this, type, ...args);
+    };
+    try {
+      h.runtime.start();
+      await tick();
+    } finally {
+      AbortSignal.prototype.addEventListener = add;
+    }
+    assert.equal(targets.length, 2);
+    const [batchSignal, inputSignal] = targets;
+    const [forwardAbort] = getEventListeners(inputSignal, 'abort');
+    const originalBatchListeners = getEventListeners(batchSignal, 'abort');
+    assert.equal(originalBatchListeners.length, 1);
+    assert.equal(typeof forwardAbort, 'function');
+
+    const sendDeadline = 10000000000n;
+    assert.equal(h.providerDeadlines[0], sendDeadline);
+    const deadlines = [...h.time.timers];
+    assert.deepEqual(deadlines.map(timer => timer.at), [sendDeadline, sendDeadline]);
+    // The frozen engine installs its own deadline before entering the runtime wrapper.
+    const [engineDeadline, providerDeadline] = deadlines;
+    const [signal] = h.providerSignals;
+    let aborts = 0;
+    signal.addEventListener('abort', () => {
+      aborts++;
+      assert.equal(h.runtime.state, 'stopped');
+      void h.runtime.stop('provider_fatal');
+    }, { once: true });
+
+    const done = h.runtime.stop('provider_fatal');
+    h.time.elapseNs(20000000000n);
+    const drain = [...h.time.timers].find(timer => timer.at === 20000000000n);
+    assert.ok(drain);
+    drain.callback();
+    const expected = { reason: 'provider_fatal', drained: false };
+    assert.deepEqual(await done, expected);
+    assert.equal(signal.aborted, true);
+    assert.equal(aborts, 1);
+    assert.deepEqual([...h.time.timers], [engineDeadline]);
+    assert.deepEqual(getEventListeners(inputSignal, 'abort'), []);
+    assert.equal(h.finals.length, 0);
+    const telemetry = [...h.telemetry];
+    assert.deepEqual(stopEvents(h), [stopRecord('stopping'), stopRecord('drain_expired')]);
+
+    // Exercise already-queued callbacks and the late promise while the engine deadline is still withheld.
+    providerDeadline.callback();
+    inputSignal.dispatchEvent(new Event('abort'));
+    forwardAbort();
+    if (lateCompletion === 'resolve') pending.resolve(accepted);
+    else pending.reject(new Error('synthetic late provider failure'));
+    await tick();
+    assert.equal(h.runtime.stop('signal'), done);
+    assert.deepEqual(await h.runtime.done, expected);
+    assert.deepEqual(h.telemetry, telemetry);
+    assert.equal(aborts, 1);
+    assert.equal(h.finals.length, 0);
+    // The engine's cancellation listener stays registered while the wrapper remains abandoned.
+    assert.deepEqual(getEventListeners(batchSignal, 'abort'), originalBatchListeners);
+    assert.deepEqual([...h.time.timers], [engineDeadline]);
+
+    await h.advance(0);
+    assert.equal(h.finals.length, 0);
+    assert.equal(h.time.timers.size, 0);
+  });
+}
+
 for (const reason of ['signal', 'process_failure', 'repository_contract_violation']) {
   test(reason + ' first keeps ordinary abort while a later provider fatal latches failure', async () => {
     const pending = deferred();

@@ -21,6 +21,7 @@ export const every8dSettingsEmailProviderRegistry: Every8dSettingsEmailProviderR
         if (apiKey === undefined) throw new Error("Invalid Resend email configuration.");
         return Object.freeze({
           createClient(reportProviderFatal: () => void) {
+            if (typeof reportProviderFatal !== "function") throw new Error("Invalid Resend email configuration.");
             // Keep transport modules out of config admission and readiness.
             const { createEvery8dSettingsEmailResendProvider } = require("./every8dSettingsEmailResendProvider") as
               typeof import("./every8dSettingsEmailResendProvider");

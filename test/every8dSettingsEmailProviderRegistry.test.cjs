@@ -64,11 +64,11 @@ test("isolated config import and all disabled gates allocate no runtime/network 
   `], { cwd: require("node:path").resolve(__dirname, ".."), stdio: "pipe", timeout: 10000 });
 });
 
-test("Resend readiness reads only the key and client construction stays local", () => {
+test("Resend readiness rejects invalid callbacks before import and valid construction stays local", () => {
   execFileSync(process.execPath, ["-e", `
     const assert = require('node:assert/strict');
     const Module = require('node:module');
-    let attempts = 0, factoryCalls = 0, fatalCalls = 0;
+    let attempts = 0, providerLoads = 0, factoryCalls = 0, fatalCalls = 0;
     const forbidden = () => { attempts++; throw Error('unexpected I/O or timer'); };
     for (const [id, methods] of [
       ['net', ['connect', 'createConnection']],
@@ -85,16 +85,20 @@ test("Resend readiness reads only the key and client construction stays local", 
     for (const name of ['fetch', 'setTimeout', 'setImmediate', 'setInterval']) globalThis[name] = forbidden;
     const keyName = 'EVERY8D_SETTINGS_AUTH_EMAIL_RESEND_API_KEY';
     const syntheticKey = 'synthetic-resend-test-only';
-    const fatal = () => { fatalCalls++; };
+    const fatal = async (_unused) => { fatalCalls++; };
     const load = Module._load;
     Module._load = function(id, ...args) {
+      if (id !== './every8dSettingsEmailResendProvider') return load.call(this, id, ...args);
+      providerLoads++;
       const loaded = load.call(this, id, ...args);
-      if (id !== './every8dSettingsEmailResendProvider') return loaded;
       return { createEvery8dSettingsEmailResendProvider(options) {
         factoryCalls++;
         assert.ok(options.apiKey === syntheticKey, 'factory receives the admitted synthetic key');
         assert.equal(options.reportProviderFatal, fatal);
-        return loaded.createEvery8dSettingsEmailResendProvider(options);
+        const client = loaded.createEvery8dSettingsEmailResendProvider(options);
+        assert.equal(Object.isFrozen(client), true);
+        assert.equal(typeof client.send, 'function');
+        return Object.freeze({ send: forbidden });
       } };
     };
     const {lookupEvery8dSettingsEmailProvider: lookup} = require('./dist/services/every8dSettingsEmailProviderRegistry');
@@ -110,8 +114,15 @@ test("Resend readiness reads only the key and client construction stays local", 
     assert.deepEqual(reads, [keyName]);
     assert.equal(Object.isFrozen(readiness), true);
     assert.deepEqual(Reflect.ownKeys(readiness), ['createClient']);
+    const invalidConfig = { name: 'Error', message: 'Invalid Resend email configuration.' };
+    assert.throws(() => readiness.createClient(), invalidConfig);
+    for (const value of [undefined, null, false, 0, '', {}, []]) {
+      assert.throws(() => readiness.createClient(value), invalidConfig);
+    }
+    assert.equal(providerLoads, 0);
     assert.equal(factoryCalls, 0);
     const provider = readiness.createClient(fatal);
+    assert.equal(providerLoads, 1);
     assert.equal(Object.isFrozen(provider), true);
     assert.equal(typeof provider.send, 'function');
     assert.equal(factoryCalls, 1);
