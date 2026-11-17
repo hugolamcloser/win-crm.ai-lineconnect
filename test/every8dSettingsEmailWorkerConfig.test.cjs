@@ -214,3 +214,47 @@ test("configuration errors never echo provider or sender input", () => {
     });
   }
 });
+
+const resendKey = "EVERY8D_SETTINGS_AUTH_EMAIL_RESEND_API_KEY";
+const validResendKey = "synthetic-resend-test-only";
+
+test("disabled Resend credential is optional and the admitted key stays dormant", () => {
+  for (const id of ["resend", "unknown", undefined]) {
+    for (const key of [undefined, validResendKey]) {
+      const result = read(environment({ [flags[2]]: "false", [provider]: id, [resendKey]: key }), forbiddenRegistry);
+      assert.deepEqual(Reflect.ownKeys(result), ["status", "auth", "providerId", "canonicalSender"]);
+      assert.equal(result.status, "disabled");
+      assert.equal(result.providerId, id);
+      assert.ok(!require("node:util").inspect(result, { depth: null }).includes(validResendKey));
+    }
+  }
+});
+
+test("supplied malformed Resend credentials use only the generic worker error before either gate", () => {
+  const canary = "SYNTHETIC_INVALID_KEY_CANARY";
+  for (const id of ["resend", "unknown"]) {
+    for (const dispatch of ["false", "true"]) {
+      for (const key of ["", " " + canary, canary + "\n", canary.repeat(12), null]) {
+        assert.throws(() => read(environment({ [flags[2]]: dispatch, [provider]: id, [resendKey]: key }), forbiddenRegistry),
+          (error) => {
+            assert.ok(error instanceof WorkerError);
+            assert.equal(error.message, "EVERY8D settings email worker configuration is incomplete or invalid");
+            assert.deepEqual(Reflect.ownKeys(error).sort(), ["message", "name", "stack"]);
+            assert.ok(!require("node:util").inspect(error, { showHidden: true }).includes(canary));
+            return true;
+          });
+      }
+    }
+  }
+});
+
+test("operational Resend config admits selection without exposing credentials or parsing readiness", () => {
+  for (const key of [undefined, validResendKey]) {
+    const result = read(environment({ [provider]: "resend", [resendKey]: key }));
+    assert.equal(result.status, "operational");
+    assert.equal(result.providerId, "resend");
+    assert.deepEqual(Reflect.ownKeys(result),
+      ["status", "auth", "providerId", "canonicalSender", "emailOutboxEncryption", "registration"]);
+    assert.ok(!require("node:util").inspect(result, { depth: null }).includes(validResendKey));
+  }
+});

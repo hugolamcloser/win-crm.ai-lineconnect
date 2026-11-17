@@ -4,10 +4,13 @@ const { execFileSync } = require("node:child_process");
 const { every8dSettingsEmailProviderRegistry: registry,
   lookupEvery8dSettingsEmailProvider: lookup } = require("../dist/services/every8dSettingsEmailProviderRegistry");
 
-test("production registry is empty, frozen, and has no environment-selectable fake", () => {
-  assert.deepEqual(Reflect.ownKeys(registry), []);
+test("production registry statically owns only the frozen resend registration", () => {
+  assert.deepEqual(Reflect.ownKeys(registry), ["resend"]);
+  assert.equal(Object.hasOwn(registry, "resend"), true);
+  assert.equal(lookup("resend"), registry.resend);
+  assert.equal(Object.isFrozen(registry.resend), true);
   assert.equal(Object.isFrozen(registry), true);
-  for (const id of ["fake", "test", "test-only", "constructor", "__proto__", "tostring", "unknown"]) {
+  for (const id of ["fake", "test", "test-only", "constructor", "__proto__", "tostring", "unknown", "Resend", "resend "]) {
     assert.equal(lookup(id), undefined);
   }
   assert.equal(Reflect.set(registry, "fake", {}), false);
@@ -58,5 +61,72 @@ test("isolated config import and all disabled gates allocate no runtime/network 
       env.EVERY8D_SETTINGS_AUTH_EMAIL_FROM=' Sender@example.test';
       assert.throws(() => read(env, registry));
     }
+  `], { cwd: require("node:path").resolve(__dirname, ".."), stdio: "pipe", timeout: 10000 });
+});
+
+test("Resend readiness rejects invalid callbacks before import and valid construction stays local", () => {
+  execFileSync(process.execPath, ["-e", `
+    const assert = require('node:assert/strict');
+    const Module = require('node:module');
+    let attempts = 0, providerLoads = 0, factoryCalls = 0, fatalCalls = 0;
+    const forbidden = () => { attempts++; throw Error('unexpected I/O or timer'); };
+    for (const [id, methods] of [
+      ['net', ['connect', 'createConnection']],
+      ['tls', ['connect']],
+      ['dns', ['lookup', 'resolve']],
+      ['dns/promises', ['lookup', 'resolve']],
+      ['http', ['request', 'get']],
+      ['https', ['request', 'get']],
+      ['timers', ['setTimeout', 'setImmediate', 'setInterval']],
+      ['timers/promises', ['setTimeout', 'setImmediate', 'setInterval']]
+    ]) {
+      for (const method of methods) require('node:' + id)[method] = forbidden;
+    }
+    for (const name of ['fetch', 'setTimeout', 'setImmediate', 'setInterval']) globalThis[name] = forbidden;
+    const keyName = 'EVERY8D_SETTINGS_AUTH_EMAIL_RESEND_API_KEY';
+    const syntheticKey = 'synthetic-resend-test-only';
+    const fatal = async (_unused) => { fatalCalls++; };
+    const load = Module._load;
+    Module._load = function(id, ...args) {
+      if (id !== './every8dSettingsEmailResendProvider') return load.call(this, id, ...args);
+      providerLoads++;
+      const loaded = load.call(this, id, ...args);
+      return { createEvery8dSettingsEmailResendProvider(options) {
+        factoryCalls++;
+        assert.ok(options.apiKey === syntheticKey, 'factory receives the admitted synthetic key');
+        assert.equal(options.reportProviderFatal, fatal);
+        const client = loaded.createEvery8dSettingsEmailResendProvider(options);
+        assert.equal(Object.isFrozen(client), true);
+        assert.equal(typeof client.send, 'function');
+        return Object.freeze({ send: forbidden });
+      } };
+    };
+    const {lookupEvery8dSettingsEmailProvider: lookup} = require('./dist/services/every8dSettingsEmailProviderRegistry');
+    const registration = lookup('resend');
+    for (const value of [undefined, ' malformed', '']) {
+      assert.throws(() => registration.parseReadiness({ [keyName]: value }),
+        { message: 'Invalid Resend email configuration.' });
+    }
+    const reads = [];
+    const readiness = registration.parseReadiness(new Proxy({}, {
+      get(_target, name) { reads.push(name); return syntheticKey; }
+    }));
+    assert.deepEqual(reads, [keyName]);
+    assert.equal(Object.isFrozen(readiness), true);
+    assert.deepEqual(Reflect.ownKeys(readiness), ['createClient']);
+    const invalidConfig = { name: 'Error', message: 'Invalid Resend email configuration.' };
+    assert.throws(() => readiness.createClient(), invalidConfig);
+    for (const value of [undefined, null, false, 0, '', {}, []]) {
+      assert.throws(() => readiness.createClient(value), invalidConfig);
+    }
+    assert.equal(providerLoads, 0);
+    assert.equal(factoryCalls, 0);
+    const provider = readiness.createClient(fatal);
+    assert.equal(providerLoads, 1);
+    assert.equal(Object.isFrozen(provider), true);
+    assert.equal(typeof provider.send, 'function');
+    assert.equal(factoryCalls, 1);
+    assert.equal(fatalCalls, 0);
+    assert.equal(attempts, 0);
   `], { cwd: require("node:path").resolve(__dirname, ".."), stdio: "pipe", timeout: 10000 });
 });

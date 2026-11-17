@@ -3,12 +3,12 @@ export type EmailWorkerEvent = "disabled" | "startup_failed" | "ready" | "batch"
   "recovery" | "purge" | "repository_failure" | "repository_contract_violation" |
   "repository_stall" | "poll_wait" | "backoff_wait" | "stopping" | "drained" | "drain_expired";
 export type EmailWorkerStopReason = "signal" | "process_failure" | "repository_stall" |
-  "repository_contract_violation" | "internal_failure";
+  "repository_contract_violation" | "internal_failure" | "provider_fatal";
 const events: readonly string[] = ["disabled", "startup_failed", "ready", "batch", "recovery", "purge",
   "repository_failure", "repository_contract_violation", "repository_stall", "poll_wait", "backoff_wait",
   "stopping", "drained", "drain_expired"];
 const reasons: readonly string[] = ["signal", "process_failure", "repository_stall",
-  "repository_contract_violation", "internal_failure"];
+  "repository_contract_violation", "internal_failure", "provider_fatal"];
 export type EmailWorkerTelemetry = (event: Readonly<{
   component: "settings_email_worker"; event: EmailWorkerEvent; delayMs?: number; reason?: EmailWorkerStopReason;
   suppressedCount?: number;

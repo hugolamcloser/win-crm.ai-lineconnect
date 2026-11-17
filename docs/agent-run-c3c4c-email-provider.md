@@ -101,3 +101,53 @@ The transport and provider changes are limited to that boundary. The provider te
 | Git blob equality | All 290 paths outside the correction scope match the reviewed head. All 288 main-base paths, including 44/44 SQL files, match byte-for-byte. The PR still changes seven files. |
 
 The final automatic CI run and exact-head results are recorded in the draft PR description so the checked commit stays fixed. The production registry remains empty and both worker integration bridges remain outside this slice. No dependency, credentials, live email, external Resend network, database change, production access, Railway action or merge. Revert the single correction commit to restore the reviewed head. The next gate is independent C3c-4c-1 final rereview.
+
+## C3c-4c-2 source integration
+
+On 2026-11-16 (Asia/Kuala_Lumpur), fetched `origin/main` for `hugolamcloser/win-crm.ai-lineconnect` and verified exact base `9889a292e47cf9514950ce62fc39309d220ddd54`, the squash merge of PR #122. [CI #144, attempt 1](https://github.com/hugolamcloser/win-crm.ai-lineconnect/actions/runs/43858820827/attempts/1) was a push on that SHA and all three required jobs passed. Created a new managed worktree and branch `codex/c3c4c2-resend-integration-bridge` at that SHA. The C3c-4c-1 worktree was retained separately.
+
+| Source file | Integration |
+| --- | --- |
+| `src/config/every8dSettingsEmailWorker.ts` | Pure validation of the optional supplied Resend key before the disabled gate. A malformed value raises the fixed worker configuration error. The worker config carries no Resend credential. |
+| `src/services/every8dSettingsEmailProviderRegistry.ts` | The sole static frozen source registration is `resend`. Local readiness requires the key when Resend is selected and holds it privately for network-free client construction. |
+| `src/workers/every8dSettingsEmailWorkerProcess.ts` | The zero-argument callback latches process failure before checking whether the first stop already owns shutdown. A fatal during provider construction prevents further startup. |
+| `src/workers/every8dSettingsEmailWorkerRuntime.ts` | A first provider-fatal stop immediately closes admission and drains with the original send deadlines. Ordinary stops still abort the batch immediately. The existing 20-second drain aborts remaining tracked controllers if it expires. |
+| `src/workers/every8dSettingsEmailWorkerTelemetry.ts` | Fixed `provider_fatal` stop reason on existing lifecycle events. |
+
+The principal integration risk is replacing a result that arrives after the callback with cancellation-derived unknown. The fatal drain keeps admitted signals active until their original deadlines, permits finalization and preserves the first stop mode. The callback carries no delivery evidence. Tests cover accepted, authoritative non-acceptance and unknown outcomes, ten active submissions, subsequent admission refusal, deadline and drain bounds, and process exit 1 after both clean and expired fatal drains. Registry and startup tests trap construction-time I/O and use synthetic credentials.
+
+### C3c-4c-2 validation
+
+| Local check | Result |
+| --- | --- |
+| `npm run typecheck`, `npm test`, `npm run build` | PASS on Node v24.14.0. All 2,065 tests passed with zero failures, skips or cancellations. |
+| Focused worker config, registry and worker lifecycle | 26, 4 and 83 PASS |
+| Focused Resend config, Resend provider and C3c-4a engine | 22, 266 and 68 PASS. All 469 focused tests also passed on Node v22.23.5. |
+| Disposable PG17 worker and lifecycle | 8/8 and 6/6 PASS |
+| Full C3c-3 proof and pinned prerequisite regressions | PG 17.11, 107/107 obligations PASS across 213 scenarios and 47 races, with 11/11 pinned prerequisite regressions PASS. |
+| Protected files | All 285 paths outside the 10-file integration scope match the base, including 44/44 SQL files. |
+
+The C3c-4a engine, Resend credential parser, provider and transport, package files, CI workflow and database authority stay frozen. The PG17 proof uses a disposable local container with networking disabled. Generated proof output stays in ignored scratch space.
+
+Static source registration leaves live email unavailable without the runtime flags, real credentials and deployment. The work uses synthetic keys and local tests. It includes no external Resend test, live email, production credential, database migration, Railway change or deployment. Reverting the integration commit restores the prior configuration, registry and lifecycle. No infrastructure rollback is needed. Automatic CI evidence belongs with the draft PR on the checked implementation SHA. The next gate is independent C3c-4c-2 implementation review.
+
+## C3c-4c-2 R2 correction
+
+On 2026-11-17 (Asia/Kuala_Lumpur), verified draft PR #123 was open, unmerged and mergeable with one commit and ten changed files. The fetched main and PR base matched `9889a292e47cf9514950ce62fc39309d220ddd54`. The clean local branch and PR head matched `9a61c8777ea738ff520dae45e14d3c326ebd6f84`. All three required jobs passed on that head in [CI #145, attempt 1](https://github.com/hugolamcloser/win-crm.ai-lineconnect/actions/runs/43878819716/attempts/1).
+
+| Finding | Correction and regression proof |
+| --- | --- |
+| R2-1, forced drain retained provider ownership | Normal settlement and forced expiry share an idempotent release. Forced expiry transitions to stopped before canceling runtime-owned provider deadlines, detaching input listeners, deleting tracking, and aborting transports. It abandons wrappers without a result. Tests withhold the original timers, inspect runtime ownership at completion, manually invoke queued callbacks, and exercise late fulfillment and rejection. The engine's original deadline and cancellation registration are still observable after forced runtime completion, demonstrating that no wrapper result was forwarded. |
+| R2-2, construction accepted invalid fatal callbacks | The readiness factory rejects non-functions with the fixed configuration error before the lazy provider import. A CommonJS test traps provider imports and attempts to send, use I/O or schedule a timer, and verifies that the valid callable is passed unchanged. |
+
+All three targeted regressions failed against the reviewed head and passed after correction. The primary risk was weakening the original deadline or signal-first cancellation. Both continue through the existing normal settlement path. This correction modifies only the two affected source files, their test files, and the two existing C3c-4c documents.
+
+| Local check | Result |
+| --- | --- |
+| npm typecheck, test and build | PASS. 2,067 tests passed on Node v24.14.0 with zero failures, skips or cancellations. |
+| Focused registry, lifecycle and worker config | 4, 85 and 26 PASS on Node v22.23.5. |
+| Focused Resend config, provider and C3c-4a engine | 22, 266 and 68 PASS on Node v22.23.5. |
+| Disposable PostgreSQL proof | PG17 worker 8/8, lifecycle 6/6, full C3c-3 107/107 obligations across 213 scenarios and 47 races, and 11/11 pinned prerequisite regressions. |
+| Protected file comparison | Six authorized correction paths and ten PR paths. All 44 SQL files match both the reviewed head and main. |
+
+The correction uses synthetic keys and local proofs. The frozen C3c-4a engine, C3c-4c-1 parser, provider and transport, and database authority retain their exact Git blobs. Revert the single correction commit to restore the reviewed head. No infrastructure rollback is needed. Automatic CI evidence is recorded in the draft PR description to preserve the checked commit. The next gate is independent C3c-4c-2 R2 rereview.

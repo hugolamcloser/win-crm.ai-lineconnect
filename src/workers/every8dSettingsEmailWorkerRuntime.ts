@@ -37,7 +37,8 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
   const emit = createEmailWorkerTelemetry(dependencies.telemetry, clock);
   let state: "idle" | "running" | "stopping" | "stopped" = "idle";
   let stopReason: EmailWorkerStopReason = "signal";
-  let flowActive = false, repositoryActive = 0, providerActive = 0, repositoryFailed = false;
+  let flowActive = false, repositoryActive = 0, repositoryFailed = false;
+  const abandonProviderOperations = new Set<() => void>();
   let cancelWait = () => {}, cancelDrain = () => {};
   const cancellation = new AbortController();
   let resolveDone!: (result: EmailWorkerExit) => void;
@@ -46,11 +47,15 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
     if (state !== "stopping") return;
     state = "stopped";
     cancelWait(); cancelDrain();
+    if (!drained && stopReason === "provider_fatal") {
+      // Release runtime ownership without delivering a result to the engine.
+      for (const abandon of abandonProviderOperations) abandon();
+    }
     emit(drained ? "drained" : "drain_expired", undefined, stopReason);
     resolveDone(Object.freeze({ reason: stopReason, drained }));
   }
   function checkDrain(): void {
-    if (!flowActive && repositoryActive === 0 && providerActive === 0) finish(true);
+    if (!flowActive && repositoryActive === 0 && abandonProviderOperations.size === 0) finish(true);
   }
   function stop(reason: EmailWorkerStopReason = "signal"): Promise<EmailWorkerExit> {
     if (state === "stopping" || state === "stopped") return done;
@@ -58,7 +63,8 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
     emit("stopping", undefined, reason);
     cancelDrain = clock.schedule(emailWorkerTiming.drainMs, () => finish(false));
     cancelWait();
-    cancellation.abort();
+    // Let the admitted provider results reach the engine during a fatal drain.
+    if (reason !== "provider_fatal") cancellation.abort();
     checkDrain();
     return done;
   }
@@ -102,18 +108,27 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
       // treating abort as positive non-acceptance.
       const controller = new AbortController();
       const inputSignal = input.signal;
-      providerActive += 1;
+      let request: typeof input | undefined = input;
       return new Promise<Every8dSettingsEmailProviderResult>((resolve) => {
         let settled = false, cancelDeadline = () => {};
-        const finishProvider = (result: Every8dSettingsEmailProviderResult, abort: boolean) => {
-          if (settled) return;
-          settled = true; cancelDeadline();
+        const releaseProvider = (abort: boolean): boolean => {
+          if (settled) return false;
+          settled = true;
+          cancelDeadline();
           inputSignal.removeEventListener("abort", forwardAbort);
+          abandonProviderOperations.delete(abandonProvider);
           if (abort) controller.abort();
-          providerActive -= 1; resolve(result); checkDrain();
+          return true;
+        };
+        const abandonProvider = () => { releaseProvider(true); };
+        const finishProvider = (result: Every8dSettingsEmailProviderResult, abort: boolean) => {
+          if (!releaseProvider(abort)) return;
+          resolve(result);
+          checkDrain();
         };
         const unknown = Object.freeze({ outcome: "outcome_unknown" } as const);
         const forwardAbort = () => finishProvider(unknown, true);
+        abandonProviderOperations.add(abandonProvider);
         try {
           inputSignal.addEventListener("abort", forwardAbort, { once: true });
           if (inputSignal.aborted) { forwardAbort(); return; }
@@ -121,12 +136,16 @@ export function createEvery8dSettingsEmailWorkerRuntime(dependencies: Readonly<{
           if (settled) { cancelDeadline(); return; }
           // No retries and no new invocation after a synchronous stop during setup.
           admit();
-          Promise.resolve(dependencies.provider.send(Object.freeze({ canonicalSender: input.canonicalSender,
-            recipient: input.recipient, subject: input.subject, body: input.body, idempotencyKey: input.idempotencyKey,
-            signal: controller.signal, deadlineMonotonicNs: deadline }))).then(
-            (result) => finishProvider(clock.nowNs() >= deadline ? unknown : result, clock.nowNs() >= deadline),
+          const { canonicalSender, recipient, subject, body, idempotencyKey } = request!;
+          Promise.resolve(dependencies.provider.send(Object.freeze({ canonicalSender, recipient, subject, body,
+            idempotencyKey, signal: controller.signal, deadlineMonotonicNs: deadline }))).then(
+            (result) => {
+              if (settled) return;
+              finishProvider(clock.nowNs() >= deadline ? unknown : result, clock.nowNs() >= deadline);
+            },
             () => finishProvider(unknown, true));
         } catch { finishProvider(unknown, true); }
+        finally { request = undefined; } // Late callbacks and cleanup do not retain the send input.
       });
     }
   });
