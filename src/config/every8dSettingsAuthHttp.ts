@@ -1,5 +1,3 @@
-import { domainToASCII, domainToUnicode } from "node:url";
-
 export class Every8dSettingsAuthHttpConfigurationError extends Error {
   constructor() {
     super("Invalid EVERY8D settings auth HTTP configuration");
@@ -23,10 +21,7 @@ function parseFlag(value: string | undefined): boolean {
 
 function isCanonicalDnsLabel(label: string): boolean {
   if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return false;
-  if (!label.startsWith("xn--")) return true;
-
-  const unicode = domainToUnicode(label);
-  return unicode !== "" && unicode !== label && domainToASCII(unicode) === label;
+  return !label.startsWith("xn--");
 }
 
 export function parseEvery8dSettingsAuthPublicOrigin(value: string): string {

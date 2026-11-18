@@ -4,7 +4,6 @@ const http = require("node:http");
 const net = require("node:net");
 const { setTimeout: delay } = require("node:timers/promises");
 const { test } = require("node:test");
-const { domainToASCII, domainToUnicode } = require("node:url");
 const express = require("express");
 const {
   parseEvery8dSettingsAuthPublicOrigin, readEvery8dSettingsAuthHttpConfig
@@ -164,7 +163,7 @@ function checkError(bytes, status, code, { head = false, closing = true } = {}) 
 test("strict public origin and operational AND gate", () => {
   for (const [input, output] of [
     [origin, origin], [origin + "/", origin], ["https://localhost:1", "https://localhost:1"],
-    ["https://xn--bcher-kva.example:65535", "https://xn--bcher-kva.example:65535"],
+    ["https://ascii-host.example:65535", "https://ascii-host.example:65535"],
     ["https://192.0.2.10:8443", "https://192.0.2.10:8443"], ["https://[2001:db8::1]/", "https://[2001:db8::1]"]
   ]) assert.equal(parseEvery8dSettingsAuthPublicOrigin(input), output);
   for (const input of [
@@ -683,20 +682,14 @@ test("local error containment and telemetry exclude request and error sentinels"
     output.some(bytes => bytes.includes(sentinel))), false);
 });
 
-test("canonical IDNA A-label roundtrip applies to every supplied origin, including disabled config", () => {
-  assert.equal(domainToASCII(domainToUnicode("xn--bcher-kva")), "xn--bcher-kva");
-  assert.equal(parseEvery8dSettingsAuthPublicOrigin("https://xn--bcher-kva.example/"),
-    "https://xn--bcher-kva.example");
-
-  assert.equal(domainToUnicode("xn---bga"), "œ");
-  assert.equal(domainToASCII(domainToUnicode("xn---bga")), "xn--bga");
-  assert.equal(new URL("https://xn---bga.example").origin, "https://xn---bga.example");
-  assert.equal(domainToUnicode("xn--a"), "");
-
-  for (const label of ["xn---bga", "xn--a"]) {
-    const value = "https://example." + label;
+test("ASCII-only public origins reject every xn-- label, including while disabled", () => {
+  assert.equal(parseEvery8dSettingsAuthPublicOrigin("https://ascii.xn-safe.example/"),
+    "https://ascii.xn-safe.example");
+  for (const label of ["xn--bcher-kva", "xn---bga", "xn--a", "xn----9fa", "xn--e28h", "xn--ab-0ea"]) {
+    const value = "https://example." + label + ".test";
     const error = { name: "Every8dSettingsAuthHttpConfigurationError" };
     assert.throws(() => parseEvery8dSettingsAuthPublicOrigin(value), error);
+    assert.throws(() => parseEvery8dSettingsAuthPublicOrigin("https://" + label + ".test"), error);
     for (const flag of ["EVERY8D_SETTINGS_AUTH_CHALLENGES_ENABLED", "EVERY8D_SETTINGS_AUTH_HTTP_ENABLED"]) {
       const disabled = { ...enabledEnv, [flag]: "false", EVERY8D_SETTINGS_AUTH_PUBLIC_BASE_URL: value };
       assert.throws(() => readEvery8dSettingsAuthHttpConfig(disabled), error);
@@ -734,12 +727,20 @@ test("Node delivers empty-authority and literal-fragment targets with ownership-
     "https:///settings/authentic",
     "/settings/authentic#fragment",
     "https://outside/settings/authentic#fragment",
-    "https:///settings/authentic#fragment"
+    "https:///settings/authentic#fragment",
+    "/ordinary#../settings/auth",
+    "/settings/authentic#../settings/auth",
+    "/settings/authentic#/settings/auth",
+    "https:///settings/authentic#%2e%2e/settings/%61uth",
+    "https://outside/settings/authentic#fragment/../../settings/auth"
   ];
   for (const target of neighbors) {
+    const before = h.seen.length;
     const wire = response(await exchange(t, h.server, request("GET", target, [close])));
     assert.equal(wire.status, 200);
     assert.equal(wire.body.toString(), "ordinary");
+    assert.equal(h.seen.length, before + 1);
+    assert.equal(h.seen.at(-1).req.originalUrl, target);
   }
   assert.deepEqual(h.downstream, neighbors);
   assert.deepEqual(h.calls, []);
@@ -890,3 +891,138 @@ test("sync and async dispatch fallbacks rebuild fixed headers and keep the close
     assert.deepEqual(h.globalErrors, []);
   }
 });
+
+for (const outcome of ["sync throw", "async rejection", "connection close", "reusable success"]) {
+  test("resumed GET owns the response lifecycle through " + outcome, async t => {
+    const releasePost = deferred();
+    const settleGet = deferred();
+    let getReaders = 0;
+    const h = await serve(t, {
+      before(req) {
+        if (req.method !== "GET") return;
+        const on = req.on;
+        req.on = function (name, listener) {
+          if (name === "data") getReaders++;
+          return on.call(this, name, listener);
+        };
+      },
+      dispatch({ req, res, envelope }) {
+        if (req.method === "POST") {
+          return releasePost.promise.then(() => endEvery8dSettingsAuthResponse(res, "POST", 204));
+        }
+        assert.equal(envelope, undefined);
+        assert.equal(req.readableEnded, false);
+        if (outcome === "sync throw") throw new Error("synthetic GET failure");
+        if (outcome === "async rejection") {
+          return settleGet.promise.then(() => { throw new Error("synthetic GET rejection"); });
+        }
+        if (outcome === "connection close") res.setHeader("Connection", "close");
+        endEvery8dSettingsAuthResponse(res, "GET", 204);
+        return settleGet.promise;
+      }
+    });
+
+    const client = await connect(t, h.server);
+    client.socket.write(Buffer.concat([
+      keptPost(), followUp("/settings/auth/session"), followUp("/ordinary", true)
+    ]));
+    await waitFor(() => h.seen.length === 3 && h.calls.length === 1);
+    assert.deepEqual(h.downstream, []);
+    releasePost.resolve();
+    await waitFor(() => h.calls.length === 2);
+    if (outcome === "reusable success") {
+      await waitFor(() => h.seen[1].res.writableFinished && wireStatuses(client.received()).length === 2);
+    }
+    assert.deepEqual(h.downstream, []);
+    settleGet.resolve();
+    const wire = (await client.finished).toString();
+    assert.equal(getReaders, 0);
+    assert.deepEqual(h.calls, ["POST " + login, "GET /settings/auth/session"]);
+    assert.deepEqual(h.globalErrors, []);
+    if (outcome === "reusable success") {
+      assert.deepEqual(wireStatuses(wire), [204, 204, 200]);
+      assert.deepEqual(h.downstream, ["/ordinary"]);
+    } else {
+      assert.deepEqual(wireStatuses(wire), [204, outcome === "connection close" ? 204 : 503]);
+      assert.match(wire, /Connection: close\r\n/i);
+      assert.deepEqual(h.downstream, []);
+      await waitFor(() => h.seen[1].req.socket.destroyed);
+    }
+  });
+}
+
+test("initial bodyless GET blocks a pipelined follower before asynchronous failure", async t => {
+  const rejectGet = deferred();
+  const h = await serve(t, {
+    before(req) {
+      const on = req.on;
+      req.on = function (name, listener) {
+        assert.notEqual(name, "data", "A bodyless GET must not attach a body reader");
+        return on.call(this, name, listener);
+      };
+    },
+    async dispatch({ req, envelope }) {
+      assert.equal(req.readableEnded, false);
+      assert.equal(envelope, undefined);
+      await rejectGet.promise;
+      throw new Error("synthetic initial GET rejection");
+    }
+  });
+  const client = await connect(t, h.server);
+  client.socket.write(Buffer.concat([
+    request("GET", "/settings/auth/session", ["Content-Length: 0"]), followUp("/ordinary")
+  ]));
+  await waitFor(() => h.seen.length === 2);
+  assert.deepEqual(h.calls, ["GET /settings/auth/session"]);
+  assert.deepEqual(h.downstream, []);
+  rejectGet.resolve();
+  checkError(await client.finished, 503, "temporarily_unavailable");
+  assert.deepEqual(h.downstream, []);
+  assert.deepEqual(h.globalErrors, []);
+});
+
+for (const finished of [true, false]) {
+  test("committed fixed error closes the captured connection " + (finished ? "after" : "before") + " finish", async t => {
+    const attemptError = deferred();
+    const errorAttempted = deferred();
+    const completeDispatch = deferred();
+    let dispatchReturned = false;
+    const h = await serve(t, {
+      async dispatch({ req, res }) {
+        if (finished) {
+          endEvery8dSettingsAuthResponse(res, req.method, 204);
+        } else {
+          res.writeHead(200, { "Content-Length": 10 });
+          res.write("prefix");
+        }
+        await attemptError.promise;
+        endEvery8dSettingsAuthError(res, req.method, "temporarily_unavailable");
+        errorAttempted.resolve();
+        await completeDispatch.promise;
+        dispatchReturned = true;
+      }
+    });
+    const client = await connect(t, h.server);
+    client.socket.write(Buffer.concat([keptPost(), followUp("/ordinary")]));
+    await waitFor(() => h.seen.length === 2 && client.received().includes(finished ? "\r\n\r\n" : "prefix"));
+    const { req, res } = h.seen[0];
+    assert.equal(res.headersSent, true);
+    assert.equal(res.writableFinished, finished);
+    assert.equal(res.socket, finished ? null : req.socket);
+    assert.equal(req.socket.destroyed, false);
+    assert.deepEqual(h.downstream, []);
+
+    attemptError.resolve();
+    await errorAttempted.promise;
+    const wire = await client.finished;
+    await waitFor(() => req.socket.destroyed);
+    assert.equal(dispatchReturned, false);
+    assert.deepEqual(wireStatuses(wire.toString()), [finished ? 204 : 200]);
+    assert.equal(response(wire).body.toString(), finished ? "" : "prefix");
+    assert.deepEqual(h.downstream, []);
+    completeDispatch.resolve();
+    await waitFor(() => dispatchReturned);
+    assert.deepEqual(h.downstream, []);
+    assert.deepEqual(h.globalErrors, []);
+  });
+}

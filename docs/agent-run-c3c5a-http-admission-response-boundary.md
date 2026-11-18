@@ -71,3 +71,16 @@ PR #124 was pinned to base `109ebfc879936918e81eb94d6654853cc7bdfae9`, reviewed 
 | R2-5 | Represented success and 204 clear incompatible staged headers and preserve intentional cookies. Synchronous and asynchronous fallback errors clear provisional headers and retain the required connection close. |
 
 Typecheck and build passed. The repository suite passed 2,089 tests, and the focused suite passed 22 tests, including six new correction proofs. The correction covers the two HTTP modules, focused test, and this run log. The boundary is still unmounted and the JSON parser file is unchanged. Production and browser smoke tests are outside this slice. One reviewer correction cycle was used. The corrected head requires independent re-review after automatic CI.
+
+## Second review correction and public-origin scope decision
+
+PR #124 remained at base `109ebfc879936918e81eb94d6654853cc7bdfae9`, reviewed head `9d469412cf28ff83f3d85bb0bcd48c51bfd028f8`, and tree `3419fafb243364ce8ae31704f552bcbeb4fe4e9f`. CI #149, run 44224318510, attempt 1 passed all three jobs. The worktree was clean before editing.
+
+| Finding | Correction and proof on Node v22.23.4 |
+| --- | --- |
+| Fragment ownership | Only the path prefix before a literal hash enters namespace classification. Protected controls remain local. Neighbors with traversal and encoded path spellings in their fragments, including an empty-authority target, reach downstream. Encoded percent-23 remains path data. |
+| GET queue ownership | Each admitted bodyless GET acquires the connection gate before dispatch. A synchronous throw, asynchronous rejection, or non-reusable response blocks the follower. Reusable success releases it after response finish and execution complete. The initial-GET pipeline uses the same gate. |
+| Public-origin A-label scope | The authorized contract amendment limits hostnames to canonical ASCII DNS labels and canonical IP forms. Any DNS label starting with `xn--` fails even while disabled. The six review fixtures fail, and canonical ASCII and IP controls pass. Future IDN support requires separate contract and runtime review. |
+| Committed error closure | A private response hook closes the captured socket and latches the gate. Tests exercised a committed response both before finish and after socket detachment, with one wire response and zero downstream follower calls. Success and unsent error sanitation still pass. |
+
+Typecheck and build passed on Node v22.23.4. The full suite passed 2,096 tests and the focused suite passed 29 tests, with zero failures and skips. The correction covers the two HTTP modules, focused test, this log, and the public base URL row of the settings-auth contract. The boundary remains unmounted. The JSON parser and durable services are unchanged. Production and browser smoke tests are outside this slice. The next gate is independent re-review of the corrected head after automatic CI.

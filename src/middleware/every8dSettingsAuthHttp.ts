@@ -10,6 +10,8 @@ import type { Every8dSettingsAuthJsonEnvelope } from "./every8dSettingsAuthJson"
 
 const namespace = "/settings/auth";
 const unmatched = "/settings/auth/*";
+const closeCommittedError = Symbol("closeCommittedError");
+type BoundaryResponse = ServerResponse & { [closeCommittedError]?: () => void };
 
 export type Every8dSettingsAuthRequestTarget =
   | Readonly<{ form: "OTHER_FORM" }>
@@ -66,11 +68,9 @@ function ownsAuthPath(path: string): boolean {
 export function ownsEvery8dSettingsAuthTarget(target: Every8dSettingsAuthRequestTarget): boolean {
   if (target.form === "OTHER_FORM") return false;
   const path = target.rawPath;
-  if (ownsAuthPath(path)) return true;
-
-  // A literal fragment can hide a protected pathname from downstream parsers.
+  // Match the pathname visible downstream without normalizing any fragment text.
   const fragment = path.indexOf("#");
-  return fragment >= 0 && ownsAuthPath(path.slice(0, fragment));
+  return ownsAuthPath(fragment >= 0 ? path.slice(0, fragment) : path);
 }
 
 export const every8dSettingsAuthRoutes = Object.freeze({
@@ -161,8 +161,10 @@ export function endEvery8dSettingsAuthResponse(
 }
 
 export function endEvery8dSettingsAuthError(res: ServerResponse, method: string, error: PublicError): void {
-  if (res.headersSent) {
-    res.destroy();
+  if (res.headersSent || res.writableEnded || res.destroyed) {
+    const close = (res as BoundaryResponse)[closeCommittedError];
+    if (close) close();
+    else res.destroy();
     return;
   }
   resetFixedErrorHeaders(res);
@@ -432,17 +434,23 @@ export function createEvery8dSettingsAuthHttpBoundary(
         route = matchEvery8dSettingsAuthDispatch(method, target);
         if (!route) return reject("invalid_request", unread);
 
-        let envelope: Every8dSettingsAuthJsonEnvelope | undefined;
-        if (method === "GET") {
-          if (unread) return reject("invalid_request", true);
-        } else {
+        const post = method === "POST";
+        if (post) {
           const origins = rawFields(headers, "origin");
           if (origins.length !== 1 || origins[0] !== config.publicOrigin) {
             return reject("request_rejected", unread);
           }
           if (!admitsPostMedia(headers)) return reject("unsupported_media_type", unread);
-          owner = true;
-          connectionGate.phase = "pending";
+        } else if (unread) {
+          return reject("invalid_request", true);
+        }
+
+        owner = true;
+        connectionGate.phase = "pending";
+        (res as BoundaryResponse)[closeCommittedError] = terminate;
+
+        let envelope: Every8dSettingsAuthJsonEnvelope | undefined;
+        if (post) {
           req.once("aborted", abortOwner);
           req.once("error", abortOwner);
           const body = await readBody(req, framing.length);
@@ -456,7 +464,7 @@ export function createEvery8dSettingsAuthHttpBoundary(
         }
         setEvery8dSettingsAuthSecurityHeaders(res);
         await options.dispatch({ route, req, res, envelope });
-        if (!res.writableEnded && connectionGate.phase !== "closing") fail();
+        if (!res.writableEnded && states.get(socket)?.phase === "pending") fail();
       };
 
       void admit().then(() => {

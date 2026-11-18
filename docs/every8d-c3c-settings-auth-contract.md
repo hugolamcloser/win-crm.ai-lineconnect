@@ -615,7 +615,7 @@ Additional future variables and validation:
 
 | Exact variable | Contract |
 | --- | --- |
-| `EVERY8D_SETTINGS_AUTH_PUBLIC_BASE_URL` | Canonical HTTPS origin; no userinfo, query, or fragment; root path only |
+| `EVERY8D_SETTINGS_AUTH_PUBLIC_BASE_URL` | Canonical HTTPS origin with a canonical ASCII DNS hostname, canonical IPv4 address, or canonical bracketed IPv6 address. Root path only, with no userinfo, query, or fragment. The C3c-5 hostname policy fails closed on internationalized hostnames and rejects every DNS label beginning with `xn--`. Future IDN support requires separate contract and runtime review. |
 | `EVERY8D_SETTINGS_AUTH_EMAIL_PROVIDER` | Exact lowercase adapter ID, at most 32 characters; must exist in the approved adapter registry when operational |
 | `EVERY8D_SETTINGS_AUTH_EMAIL_FROM` | One canonical mailbox; no display name or header injection |
 | `EVERY8D_SETTINGS_AUTH_EMAIL_OUTBOX_ENCRYPTION_ACTIVE_KEY_VERSION` | Active encryption key version present in the separate keyring |
