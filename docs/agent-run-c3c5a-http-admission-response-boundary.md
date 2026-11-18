@@ -57,3 +57,17 @@ The new boundary has no production import or mount and uses no database or provi
 ## Budget and stop-rule status
 
 Two implementation correction loops addressed the framing test and made late duplicate response error notifications harmless after gate settlement. No reviewer correction loop ran. The next gate after automatic PR CI is independent C3c-5a implementation review.
+
+## Independent review correction, 2026-11-18
+
+PR #124 was pinned to base `109ebfc879936918e81eb94d6654853cc7bdfae9`, reviewed head `39f3c42d5a1e1bccc11cebed9e14b2054d682bb2` and tree `d40a8cb4cd5970654d0472715112855e7704902b`. The fetched refs and PR metadata matched. CI #148, run 44093919196, attempt 1 passed all three jobs at the reviewed head.
+
+| Finding | Correction and proof on Node v22.23.4 |
+| --- | --- |
+| R2-1 | Empty HTTP(S) authority and literal fragment shadows are ownership-only. Raw loopback requests show native delivery, local 404 and zero dispatch or downstream calls for protected spellings. Genuine neighbors reach downstream. |
+| R2-2 | Exact GETs dispatch without reading a body for absent length or length zero. Positive length, chunked framing, and an incomplete body receive a local 400 with connection close. A declared oversize receives 413. None starts a data reader or reaches a follower. |
+| R2-3 | Delivered framing errors take precedence after saturation. The test matrix covers exact enabled and disabled routes, claimed aliases and absolute forms, with queried valid-framing controls. |
+| R2-4 | Built-in IDNA conversion preserves canonical `xn--bcher-kva`. The noncanonical fixture `xn---bga` decodes to `œ` and re-encodes to `xn--bga`. The invalid fixture `xn--a` decodes to an empty string. Both malformed fixtures fail even when either feature flag disables the boundary. |
+| R2-5 | Represented success and 204 clear incompatible staged headers and preserve intentional cookies. Synchronous and asynchronous fallback errors clear provisional headers and retain the required connection close. |
+
+Typecheck and build passed. The repository suite passed 2,089 tests, and the focused suite passed 22 tests, including six new correction proofs. The correction covers the two HTTP modules, focused test, and this run log. The boundary is still unmounted and the JSON parser file is unchanged. Production and browser smoke tests are outside this slice. One reviewer correction cycle was used. The corrected head requires independent re-review after automatic CI.

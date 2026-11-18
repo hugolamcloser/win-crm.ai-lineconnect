@@ -1,3 +1,5 @@
+import { domainToASCII, domainToUnicode } from "node:url";
+
 export class Every8dSettingsAuthHttpConfigurationError extends Error {
   constructor() {
     super("Invalid EVERY8D settings auth HTTP configuration");
@@ -19,6 +21,14 @@ function parseFlag(value: string | undefined): boolean {
   return invalidConfiguration();
 }
 
+function isCanonicalDnsLabel(label: string): boolean {
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) return false;
+  if (!label.startsWith("xn--")) return true;
+
+  const unicode = domainToUnicode(label);
+  return unicode !== "" && unicode !== label && domainToASCII(unicode) === label;
+}
+
 export function parseEvery8dSettingsAuthPublicOrigin(value: string): string {
   if (typeof value !== "string" || /[^\x21-\x7e]/.test(value)) return invalidConfiguration();
   const origin = value.endsWith("/") ? value.slice(0, -1) : value;
@@ -27,9 +37,9 @@ export function parseEvery8dSettingsAuthPublicOrigin(value: string): string {
 
   const [, host, port] = authority;
   if (port !== undefined && (port === "443" || Number(port) > 65535)) return invalidConfiguration();
-  if (!host.startsWith("[") && (host.length > 253 || host.split(".").some(
-    label => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)
-  ))) return invalidConfiguration();
+  if (!host.startsWith("[") && (host.length > 253 || !host.split(".").every(isCanonicalDnsLabel))) {
+    return invalidConfiguration();
+  }
 
   // Exact equality also rejects shorthand IPv4, uncompressed IPv6 and URL repair.
   const parsed = URL.canParse(origin) ? new URL(origin) : undefined;

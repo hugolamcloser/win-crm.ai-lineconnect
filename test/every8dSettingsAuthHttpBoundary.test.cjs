@@ -4,6 +4,7 @@ const http = require("node:http");
 const net = require("node:net");
 const { setTimeout: delay } = require("node:timers/promises");
 const { test } = require("node:test");
+const { domainToASCII, domainToUnicode } = require("node:url");
 const express = require("express");
 const {
   parseEvery8dSettingsAuthPublicOrigin, readEvery8dSettingsAuthHttpConfig
@@ -227,7 +228,7 @@ test("request target forms preserve original spelling and classify only one seco
   assert.deepEqual(classify("/settings/auth%3F?"), {
     form: "ORIGIN_FORM", rawPath: "/settings/auth%3F", queryDelimiterPresent: true
   });
-  for (const target of ["*", "host:443", "ftp://host/settings/auth", "https:///settings/auth", "http://?host"]) {
+  for (const target of ["*", "host:443", "ftp://host/settings/auth", "http://?host"]) {
     assert.deepEqual(classify(target), { form: "OTHER_FORM" });
   }
   assert.deepEqual(Object.keys(every8dSettingsAuthRoutes), [
@@ -680,4 +681,212 @@ test("local error containment and telemetry exclude request and error sentinels"
   }
   assert.equal(sentinels.some(sentinel => JSON.stringify(h.telemetry).includes(sentinel) ||
     output.some(bytes => bytes.includes(sentinel))), false);
+});
+
+test("canonical IDNA A-label roundtrip applies to every supplied origin, including disabled config", () => {
+  assert.equal(domainToASCII(domainToUnicode("xn--bcher-kva")), "xn--bcher-kva");
+  assert.equal(parseEvery8dSettingsAuthPublicOrigin("https://xn--bcher-kva.example/"),
+    "https://xn--bcher-kva.example");
+
+  assert.equal(domainToUnicode("xn---bga"), "œ");
+  assert.equal(domainToASCII(domainToUnicode("xn---bga")), "xn--bga");
+  assert.equal(new URL("https://xn---bga.example").origin, "https://xn---bga.example");
+  assert.equal(domainToUnicode("xn--a"), "");
+
+  for (const label of ["xn---bga", "xn--a"]) {
+    const value = "https://example." + label;
+    const error = { name: "Every8dSettingsAuthHttpConfigurationError" };
+    assert.throws(() => parseEvery8dSettingsAuthPublicOrigin(value), error);
+    for (const flag of ["EVERY8D_SETTINGS_AUTH_CHALLENGES_ENABLED", "EVERY8D_SETTINGS_AUTH_HTTP_ENABLED"]) {
+      const disabled = { ...enabledEnv, [flag]: "false", EVERY8D_SETTINGS_AUTH_PUBLIC_BASE_URL: value };
+      assert.throws(() => readEvery8dSettingsAuthHttpConfig(disabled), error);
+      delete disabled.EVERY8D_SETTINGS_AUTH_PUBLIC_BASE_URL;
+      assert.equal(readEvery8dSettingsAuthHttpConfig(disabled).operational, false);
+    }
+  }
+});
+
+test("Node delivers empty-authority and literal-fragment targets with ownership-only rejection", async t => {
+  const h = await serve(t);
+  const malformed = classify("hTtPs:///settings/auth");
+  assert.equal(malformed.form, "MALFORMED_HTTP_ABSOLUTE_FORM");
+  assert.equal(malformed.rawPath, "/settings/auth");
+  assert.equal(match("GET", malformed), undefined);
+  assert.equal(owns(classify("/settings/auth%23fragment")), false);
+  assert.equal(owns(classify("/ordinary#fragment#settings/auth")), false);
+
+  const protectedTargets = [
+    "https:///settings/auth", "http:///settings/%61uth",
+    "/settings/auth#fragment", "/settings/%61uth#fragment",
+    "https://outside/settings/auth#fragment", "https:///settings/auth#fragment"
+  ];
+  for (const target of protectedTargets) {
+    const before = h.seen.length;
+    checkError(await exchange(t, h.server, request("GET", target, [close])), 404, "not_available");
+    assert.equal(h.seen.length, before + 1);
+    assert.equal(h.seen.at(-1).req.originalUrl, target);
+  }
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.downstream, []);
+  assert.equal(h.telemetry.length, protectedTargets.length);
+
+  const neighbors = [
+    "https:///settings/authentic",
+    "/settings/authentic#fragment",
+    "https://outside/settings/authentic#fragment",
+    "https:///settings/authentic#fragment"
+  ];
+  for (const target of neighbors) {
+    const wire = response(await exchange(t, h.server, request("GET", target, [close])));
+    assert.equal(wire.status, 200);
+    assert.equal(wire.body.toString(), "ordinary");
+  }
+  assert.deepEqual(h.downstream, neighbors);
+  assert.deepEqual(h.calls, []);
+  assert.deepEqual(h.globalErrors, []);
+});
+
+test("exact GETs dispatch bodylessly and reject body framing without a reader or follower", async t => {
+  let readers = 0;
+  const h = await serve(t, {
+    before(req) {
+      const on = req.on;
+      req.on = function (name, listener) {
+        if (name === "data") readers++;
+        return on.call(this, name, listener);
+      };
+    },
+    dispatch({ req, res, envelope }) {
+      assert.equal(req.readableEnded, false);
+      assert.equal(envelope, undefined);
+      endEvery8dSettingsAuthResponse(res, req.method, 204);
+    }
+  });
+  const route = "/settings/auth/csrf";
+  for (const headers of [[close], [close, "Content-Length: 0"]]) {
+    const before = h.calls.length;
+    assert.equal(response(await exchange(t, h.server, request("GET", route, headers))).status, 204);
+    assert.equal(h.calls.length, before + 1);
+  }
+  checkError(await exchange(t, h.server, request("HEAD", route, [close])), 404, "not_available", { head: true });
+  checkError(await exchange(t, h.server, request("OPTIONS", route, [close])), 404, "not_available");
+
+  for (const [framing, bytes] of [
+    ["Content-Length: 4", "test"],
+    ["Transfer-Encoding: chunked", "0\r\n\r\n"]
+  ]) {
+    const pipelined = Buffer.concat([request("GET", route, [framing], bytes), followUp("/ordinary")]);
+    checkError(await exchange(t, h.server, pipelined), 400, "invalid_request");
+  }
+  const incomplete = await connect(t, h.server);
+  incomplete.socket.write(request("GET", route, ["Content-Length: 10"], "x"));
+  checkError(await incomplete.finished, 400, "invalid_request");
+  checkError(await exchange(t, h.server, request("GET", route, [
+    "Content-Length: 8193"
+  ])), 413, "payload_too_large");
+  assert.equal(readers, 0);
+  assert.deepEqual(h.calls, ["GET " + route, "GET " + route]);
+  assert.deepEqual(h.downstream, []);
+  assert.deepEqual(h.globalErrors, []);
+});
+
+test("claimed framing errors precede exactness, query, absolute-form and disabled decisions", async t => {
+  const enabled = await serve(t);
+  const disabled = await serve(t, { config: readEvery8dSettingsAuthHttpConfig({}) });
+  for (const [h, target] of [
+    [enabled, "/settings/auth"], [disabled, "/settings/auth"], [enabled, "/SETTINGS/AUTH"],
+    [enabled, "https://outside/settings/auth"], [enabled, "/settings/auth?"],
+    [enabled, "https:///settings/auth#fragment"]
+  ]) {
+    checkError(await exchange(t, h.server, request("GET", target, ["Content-Length: 00"])), 400, "invalid_request");
+  }
+  checkError(await exchange(t, disabled.server, request("GET", "/settings/auth?query", [
+    "Content-Length: 8193"
+  ])), 413, "payload_too_large");
+  checkError(await exchange(t, enabled.server, request("GET", "https://outside/settings/auth?query", [
+    close, "Content-Length: 0"
+  ])), 404, "not_available");
+  checkError(await exchange(t, enabled.server, request("GET", "/settings/auth?query", [
+    close, "Content-Length: 0"
+  ])), 400, "invalid_request");
+  for (const h of [enabled, disabled]) {
+    assert.deepEqual(h.calls, []);
+    assert.deepEqual(h.downstream, []);
+    assert.deepEqual(h.globalErrors, []);
+  }
+});
+
+const stagedRepresentationHeaders = {
+  "content-type": "text/plain",
+  "content-length": "999",
+  "transfer-encoding": "chunked",
+  "content-encoding": "gzip",
+  "content-range": "bytes 0-1/2",
+  trailer: "X-Synthetic-Trailer",
+  location: "/synthetic",
+  etag: '"synthetic"',
+  "last-modified": "Thu, 01 Jan 1970 00:00:00 GMT"
+};
+const successfulCookie = "review-synthetic=ok; Path=/";
+
+function stageResponseHeaders(res) {
+  for (const [name, value] of Object.entries(stagedRepresentationHeaders)) res.setHeader(name, value);
+  res.setHeader("Set-Cookie", successfulCookie);
+}
+
+test("represented success and 204 replace stale headers and preserve intentional cookies", async t => {
+  const encoded = Buffer.from("<p>café</p>");
+  const h = await serve(t, {
+    dispatch({ route, req, res }) {
+      stageResponseHeaders(res);
+      if (route === "GET /settings/auth") {
+        endEvery8dSettingsAuthResponse(res, req.method, 200, { type: "text/html", bytes: encoded });
+      } else {
+        endEvery8dSettingsAuthResponse(res, req.method, 204);
+      }
+    }
+  });
+  const represented = response(await exchange(t, h.server, request("GET", "/settings/auth", [close])));
+  const empty = response(await exchange(t, h.server, request("GET", "/settings/auth/session", [close])));
+  assert.equal(represented.status, 200);
+  assert.equal(represented.headers["content-type"], "text/html; charset=utf-8");
+  assert.equal(represented.headers["content-length"], String(encoded.length));
+  assert.deepEqual(represented.body, encoded);
+  assert.equal(empty.status, 204);
+  assert.equal(empty.body.length, 0);
+  for (const name of Object.keys(stagedRepresentationHeaders)) {
+    assert.equal(empty.headers[name], undefined);
+    if (name !== "content-type" && name !== "content-length") {
+      assert.equal(represented.headers[name], undefined);
+    }
+  }
+  for (const wire of [represented, empty]) assert.equal(wire.headers["set-cookie"], successfulCookie);
+  assert.deepEqual(h.globalErrors, []);
+});
+
+test("sync and async dispatch fallbacks rebuild fixed headers and keep the close decision", async t => {
+  for (const asynchronous of [false, true]) {
+    const h = await serve(t, {
+      dispatch({ res }) {
+        stageResponseHeaders(res);
+        res.setHeader("X-Provisional", "synthetic");
+        res.setHeader("Vary", "Accept");
+        res.setHeader("Connection", "keep-alive");
+        const failure = new Error("synthetic-handler-failure");
+        if (asynchronous) return Promise.reject(failure);
+        throw failure;
+      }
+    });
+    const client = await connect(t, h.server);
+    client.socket.write(Buffer.concat([keptPost(), followUp("/ordinary")]));
+    const reply = await client.finished;
+    checkError(reply, 503, "temporarily_unavailable");
+    const { headers } = response(reply);
+    for (const name of ["set-cookie", "x-provisional", "vary", ...Object.keys(stagedRepresentationHeaders)]) {
+      if (name !== "content-type" && name !== "content-length") assert.equal(headers[name], undefined);
+    }
+    assert.deepEqual(h.calls, ["POST " + login]);
+    assert.deepEqual(h.downstream, []);
+    assert.deepEqual(h.globalErrors, []);
+  }
 });

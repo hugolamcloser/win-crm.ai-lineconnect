@@ -14,7 +14,7 @@ const unmatched = "/settings/auth/*";
 export type Every8dSettingsAuthRequestTarget =
   | Readonly<{ form: "OTHER_FORM" }>
   | Readonly<{
-      form: "ORIGIN_FORM" | "ABSOLUTE_FORM_HTTP" | "ABSOLUTE_FORM_HTTPS";
+      form: "ORIGIN_FORM" | "ABSOLUTE_FORM_HTTP" | "ABSOLUTE_FORM_HTTPS" | "MALFORMED_HTTP_ABSOLUTE_FORM";
       rawPath: string;
       queryDelimiterPresent: boolean;
     }>;
@@ -36,9 +36,10 @@ export function classifyEvery8dSettingsAuthRequestTarget(target: string): Every8
   if (!https && !scheme.startsWith("http://")) return { form: "OTHER_FORM" };
   const start = https ? 8 : 7;
   const pathStart = beforeQuery.indexOf("/", start);
-  if (beforeQuery.length <= start || pathStart === start) return { form: "OTHER_FORM" };
+  if (beforeQuery.length <= start) return { form: "OTHER_FORM" };
   return {
-    form: https ? "ABSOLUTE_FORM_HTTPS" : "ABSOLUTE_FORM_HTTP",
+    form: pathStart === start ? "MALFORMED_HTTP_ABSOLUTE_FORM" :
+      https ? "ABSOLUTE_FORM_HTTPS" : "ABSOLUTE_FORM_HTTP",
     rawPath: pathStart < 0 ? "/" : beforeQuery.slice(pathStart),
     queryDelimiterPresent
   };
@@ -48,9 +49,7 @@ function isProtectedPath(path: string): boolean {
   return path === namespace || path.startsWith(namespace + "/");
 }
 
-export function ownsEvery8dSettingsAuthTarget(target: Every8dSettingsAuthRequestTarget): boolean {
-  if (target.form === "OTHER_FORM") return false;
-  const path = target.rawPath;
+function ownsAuthPath(path: string): boolean {
   if (isProtectedPath(path) || isProtectedPath(asciiLower(path))) return true;
 
   const decoded = path.replace(/%([0-9a-fA-F]{2})/g, (_, hex: string) =>
@@ -62,6 +61,16 @@ export function ownsEvery8dSettingsAuthTarget(target: Every8dSettingsAuthRequest
     else if (segment !== ".") normalized.push(segment);
   }
   return isProtectedPath("/" + normalized.join("/"));
+}
+
+export function ownsEvery8dSettingsAuthTarget(target: Every8dSettingsAuthRequestTarget): boolean {
+  if (target.form === "OTHER_FORM") return false;
+  const path = target.rawPath;
+  if (ownsAuthPath(path)) return true;
+
+  // A literal fragment can hide a protected pathname from downstream parsers.
+  const fragment = path.indexOf("#");
+  return fragment >= 0 && ownsAuthPath(path.slice(0, fragment));
 }
 
 export const every8dSettingsAuthRoutes = Object.freeze({
@@ -115,14 +124,31 @@ export function setEvery8dSettingsAuthSecurityHeaders(res: ServerResponse): void
   res.setHeader("X-Content-Type-Options", "nosniff");
 }
 
+const representationHeaders = [
+  "Content-Type", "Content-Length", "Transfer-Encoding", "Content-Encoding",
+  "Content-Range", "Trailer", "ETag", "Last-Modified", "Location"
+] as const;
+
+function hasConnectionClose(res: ServerResponse): boolean {
+  return String(res.getHeader("Connection") ?? "").split(",")
+    .some(token => asciiLower(token.trim()) === "close");
+}
+
+function resetFixedErrorHeaders(res: ServerResponse): void {
+  const closing = hasConnectionClose(res);
+  for (const header of res.getHeaderNames()) res.removeHeader(header);
+  if (closing) res.setHeader("Connection", "close");
+}
+
 export function endEvery8dSettingsAuthResponse(
   res: ServerResponse, method: string, status: number, representation?: Representation
 ): void {
   res.statusCode = status;
   setEvery8dSettingsAuthSecurityHeaders(res);
+  if (status === 204 || representation) {
+    for (const header of representationHeaders) res.removeHeader(header);
+  }
   if (status === 204) {
-    res.removeHeader("Content-Length");
-    res.removeHeader("Transfer-Encoding");
     res.end();
     return;
   }
@@ -135,6 +161,11 @@ export function endEvery8dSettingsAuthResponse(
 }
 
 export function endEvery8dSettingsAuthError(res: ServerResponse, method: string, error: PublicError): void {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  resetFixedErrorHeaders(res);
   endEvery8dSettingsAuthResponse(res, method, errorStatuses[error], {
     type: "application/json",
     bytes: Buffer.from(JSON.stringify({ error }))
@@ -288,10 +319,9 @@ function canReuse(socket: Socket, res: ServerResponse): boolean {
     shouldKeepAlive: boolean;
     maxRequestsOnConnectionReached?: boolean;
   };
-  const connection = res.getHeader("Connection");
   return !socket.destroyed && socket.writable && !socket.writableEnded &&
     response.shouldKeepAlive && !response.maxRequestsOnConnectionReached &&
-    !String(connection ?? "").split(",").some(token => asciiLower(token.trim()) === "close");
+    !hasConnectionClose(res);
 }
 
 /** Intended to run first when mounted. C3c-5a uses it only in an isolated harness. */
@@ -395,36 +425,38 @@ export function createEvery8dSettingsAuthHttpBoundary(
         if (headers.length >= 2000) return reject("invalid_request", true);
 
         const framing = admitFraming(headers);
-        const unread = "error" in framing || framing.length !== 0;
+        if ("error" in framing) return reject(framing.error, true);
+        const unread = framing.length !== 0;
         const exact = matchRoute(method, target);
         if (!exact || !config.operational) return reject("not_available", unread);
         route = matchEvery8dSettingsAuthDispatch(method, target);
         if (!route) return reject("invalid_request", unread);
 
-        if ("error" in framing) return reject(framing.error, true);
-        if (method === "POST") {
+        let envelope: Every8dSettingsAuthJsonEnvelope | undefined;
+        if (method === "GET") {
+          if (unread) return reject("invalid_request", true);
+        } else {
           const origins = rawFields(headers, "origin");
           if (origins.length !== 1 || origins[0] !== config.publicOrigin) {
             return reject("request_rejected", unread);
           }
           if (!admitsPostMedia(headers)) return reject("unsupported_media_type", unread);
+          owner = true;
+          connectionGate.phase = "pending";
+          req.once("aborted", abortOwner);
+          req.once("error", abortOwner);
+          const body = await readBody(req, framing.length);
+          if (connectionGate.phase !== "pending" || socket.destroyed) return;
+          if (body === "incomplete") return terminate();
+          if (body === "overflow") return reject("payload_too_large", true);
+
+          const fields = every8dSettingsAuthRoutes[route];
+          envelope = fields === null ? undefined : parseEvery8dSettingsAuthJsonEnvelope(body, fields);
+          if (fields !== null && !envelope) return reject("invalid_request", false);
         }
-
-        owner = true;
-        connectionGate.phase = "pending";
-        req.once("aborted", abortOwner);
-        req.once("error", abortOwner);
-        const body = await readBody(req, framing.length);
-        if (connectionGate.phase !== "pending" || socket.destroyed) return;
-        if (body === "incomplete") return terminate();
-        if (body === "overflow") return reject("payload_too_large", true);
-
-        const fields = every8dSettingsAuthRoutes[route];
-        const envelope = fields === null ? undefined : parseEvery8dSettingsAuthJsonEnvelope(body, fields);
-        if (fields !== null && !envelope) return reject("invalid_request", false);
         setEvery8dSettingsAuthSecurityHeaders(res);
         await options.dispatch({ route, req, res, envelope });
-        if (!res.writableEnded && connectionGate.phase === "pending") fail();
+        if (!res.writableEnded && connectionGate.phase !== "closing") fail();
       };
 
       void admit().then(() => {
